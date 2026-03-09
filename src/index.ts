@@ -10,6 +10,7 @@ import { workflowTools } from './tools/workflows.js';
 import { conversationTools } from './tools/conversations.js';
 import { workflowAnalysisTools } from './tools/workflow-analysis.js';
 import { startScheduledSync } from './extractor/scheduler.js';
+import { handleWebhook } from './webhooks/handler.js';
 
 function createMcpServer() {
   const server = new McpServer({
@@ -62,6 +63,30 @@ async function startHttpServer(port: number) {
     if (url.pathname === '/' || url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', name: 'hl-workflow-intelligence-mcp', version: '1.0.0' }));
+      return;
+    }
+
+    // Webhook endpoints for GoHighLevel real-time sync
+    if (url.pathname.startsWith('/webhooks/highlevel/') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          const handled = await handleWebhook(url.pathname, payload);
+          if (handled) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok' }));
+          } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unknown webhook endpoint' }));
+          }
+        } catch (err) {
+          console.error('[Webhook] Parse error:', err);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', warning: 'payload parse error' }));
+        }
+      });
       return;
     }
 

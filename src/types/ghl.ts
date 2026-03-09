@@ -106,6 +106,29 @@ export interface GHLMessage {
   dateAdded?: string;
 }
 
+export interface GHLCalendar {
+  id: string;
+  locationId?: string;
+  name: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+export interface GHLAppointment {
+  id: string;
+  contactId?: string;
+  calendarId?: string;
+  locationId?: string;
+  title?: string;
+  status?: string;
+  startTime?: string;
+  endTime?: string;
+  assignedUserId?: string;
+  dateAdded?: string;
+  dateUpdated?: string;
+  [key: string]: unknown;
+}
+
 export interface GHLApiResponse<T> {
   [key: string]: T[] | T | number | string | undefined;
 }

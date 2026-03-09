@@ -5,6 +5,8 @@ import type {
   GHLWorkflow,
   GHLConversation,
   GHLMessage,
+  GHLCalendar,
+  GHLAppointment,
 } from '../types/ghl.js';
 
 const DEFAULT_BASE_URL = 'https://services.leadconnectorhq.com';
@@ -64,12 +66,14 @@ export class GHLClient {
     limit?: number;
     offset?: number;
     query?: string;
+    updatedAfter?: string;
   }): Promise<{ contacts: GHLContact[]; total: number }> {
     const reqParams: Record<string, string> = {};
     if (this.locationId) reqParams.locationId = this.locationId;
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.offset) reqParams.startAfterId = String(params.offset);
     if (params?.query) reqParams.query = params.query;
+    if (params?.updatedAfter) reqParams.updatedAfter = params.updatedAfter;
 
     const res = await this.request<{ contacts: GHLContact[]; total: number }>(
       '/contacts/',
@@ -123,6 +127,7 @@ export class GHLClient {
     status?: string;
     limit?: number;
     offset?: number;
+    updatedAfter?: string;
   }): Promise<{ opportunities: GHLOpportunity[]; total: number }> {
     const reqParams: Record<string, string> = {};
     if (this.locationId) reqParams.locationId = this.locationId;
@@ -131,6 +136,7 @@ export class GHLClient {
     if (params?.status) reqParams.status = params.status;
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.offset) reqParams.startAfterId = String(params.offset);
+    if (params?.updatedAfter) reqParams.updatedAfter = params.updatedAfter;
 
     return this.request('/opportunities/search', { method: 'GET', params: reqParams });
   }
@@ -215,5 +221,30 @@ export class GHLClient {
       { method: 'POST', body: data }
     );
     return res.message;
+  }
+
+  // ---- Calendars & Appointments ----
+
+  async getCalendars(): Promise<GHLCalendar[]> {
+    const params: Record<string, string> = {};
+    if (this.locationId) params.locationId = this.locationId;
+    const res = await this.request<{ calendars: GHLCalendar[] }>('/calendars/', { params });
+    return res.calendars;
+  }
+
+  async getAppointments(params?: {
+    calendarId?: string;
+    startTime?: string;
+    endTime?: string;
+    updatedAfter?: string;
+    limit?: number;
+  }): Promise<{ events: GHLAppointment[] }> {
+    const reqParams: Record<string, string> = {};
+    if (this.locationId) reqParams.locationId = this.locationId;
+    if (params?.calendarId) reqParams.calendarId = params.calendarId;
+    if (params?.startTime) reqParams.startTime = params.startTime;
+    if (params?.endTime) reqParams.endTime = params.endTime;
+    if (params?.limit) reqParams.limit = String(params.limit);
+    return this.request('/calendars/events', { params: reqParams });
   }
 }
