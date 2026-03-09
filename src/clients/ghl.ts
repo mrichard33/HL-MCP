@@ -338,6 +338,51 @@ export class GHLClient {
     return response.json() as Promise<Record<string, unknown>>;
   }
 
+  /**
+   * Fetch workflow triggers from the internal GHL backend API.
+   * Returns the trigger configuration for a specific workflow.
+   * Falls back to empty array if Firebase auth is not configured.
+   */
+  async getWorkflowTriggers(workflowId: string): Promise<Record<string, unknown>[]> {
+    if (!this.hasFirebaseAuth) {
+      return [];
+    }
+
+    try {
+      const idToken = await this.getFirebaseToken();
+      const url = `${BACKEND_BASE_URL}/workflow/${this.locationId}/trigger?workflowId=${workflowId}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          channel: 'APP',
+          'token-id': idToken,
+        },
+      });
+
+      if (!response.ok) {
+        console.warn(`[GHL] Trigger API failed for workflow ${workflowId} (${response.status})`);
+        return [];
+      }
+
+      const data = await response.json();
+
+      // Response may be an array directly or wrapped in an object
+      if (Array.isArray(data)) return data;
+      if (data && typeof data === 'object') {
+        // Check common wrapper keys
+        if (Array.isArray(data.triggers)) return data.triggers;
+        if (Array.isArray(data.data)) return data.data;
+      }
+
+      return [data];
+    } catch (err) {
+      console.warn(`[GHL] Failed to fetch triggers for workflow ${workflowId}: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  }
+
   // ---- Conversations ----
 
   async getConversations(params?: {

@@ -72,6 +72,26 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           const parsed = parseNodeGraph(fullJson);
           parsedConnections = parsed.connections;
 
+          // Fetch triggers from the dedicated backend trigger endpoint
+          const backendTriggers = await ghl.getWorkflowTriggers(workflowSummary.id);
+
+          // Merge trigger sources: prefer backend triggers, fall back to parsed/summary
+          let mergedTriggers: GHLWorkflow['triggers'];
+          if (backendTriggers.length > 0) {
+            mergedTriggers = backendTriggers.map(t => ({
+              id: (t.id || t._id) as string | undefined,
+              type: (t.type || t.triggerType || t.event) as string | undefined,
+              name: (t.name || t.triggerName || t.type) as string | undefined,
+              value: (t.value || t.triggerValue) as string | undefined,
+              filters: Array.isArray(t.filters) ? t.filters as Record<string, unknown>[] : undefined,
+              ...t,
+            }));
+          } else {
+            mergedTriggers = parsed.triggers.length > 0
+              ? parsed.triggers
+              : (fullJson.triggers as GHLWorkflow['triggers']) || workflowSummary.triggers || [];
+          }
+
           // Build a GHLWorkflow from parsed data
           workflowDetail = {
             id: workflowSummary.id,
@@ -80,7 +100,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
             status: (fullJson.status as string) || workflowSummary.status,
             version: (fullJson.version as number) || workflowSummary.version,
             steps: parsed.steps.length > 0 ? parsed.steps : (fullJson.steps as GHLWorkflowStep[]) || workflowSummary.steps || [],
-            triggers: parsed.triggers.length > 0 ? parsed.triggers : (fullJson.triggers as GHLWorkflow['triggers']) || workflowSummary.triggers || [],
+            triggers: mergedTriggers,
             actions: parsed.actions.length > 0 ? parsed.actions : (fullJson.actions as GHLWorkflow['actions']) || workflowSummary.actions || [],
           };
         } catch {
