@@ -172,7 +172,10 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
 
 // ---- Appointment Sync (every 15 min) ----
 
-export async function syncAppointments(): Promise<{ synced: number; errors: string[] }> {
+export async function syncAppointments(options?: {
+  startTime?: string;
+  endTime?: string;
+}): Promise<{ synced: number; errors: string[] }> {
   const ghl = new GHLClient();
   const supabase = getSupabaseClient();
   const errors: string[] = [];
@@ -180,8 +183,9 @@ export async function syncAppointments(): Promise<{ synced: number; errors: stri
 
   try {
     // Fetch appointments across ALL calendars (calendarId is required by GHL API)
-    const startTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const endTime = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Default: 24h back to 30d forward (for scheduled sync); callers can override for initial population
+    const startTime = options?.startTime ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const endTime = options?.endTime ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const events = await ghl.getAllAppointments({ startTime, endTime });
 
     const now = new Date().toISOString();

@@ -131,17 +131,17 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
     }
   }
 
-  // 5. Check scheduled sync
+  // 5. Check scheduled sync (enabled by default, only disabled with explicit "false")
   let syncCheck: DiagnosticResult;
-  if (process.env.ENABLE_SCHEDULED_SYNC === 'true') {
-    syncCheck = { status: 'ok', message: 'Scheduled sync is enabled' };
-  } else {
-    syncCheck = { status: 'warning', message: 'Scheduled sync is disabled' };
+  if (process.env.ENABLE_SCHEDULED_SYNC === 'false') {
+    syncCheck = { status: 'warning', message: 'Scheduled sync is explicitly disabled' };
     hasWarning = true;
     recommendations.push(
-      'ENABLE_SCHEDULED_SYNC is not set to "true". Without it, data only syncs when you manually call sync tools. ' +
-      'Set ENABLE_SCHEDULED_SYNC=true in Railway env vars to enable automatic sync every 10-15 minutes.',
+      'ENABLE_SCHEDULED_SYNC is set to "false". Data only syncs when you manually call sync tools. ' +
+      'Remove this env var or set it to "true" to enable automatic sync every 10-15 minutes.',
     );
+  } else {
+    syncCheck = { status: 'ok', message: 'Scheduled sync is enabled (runs every 15 minutes)' };
   }
 
   // 6. Firebase auth check
@@ -161,8 +161,9 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
     if (autoSyncTables.length > 0) {
       recommendations.push(
         `Empty tables that should be auto-populated: ${autoSyncTables.join(', ')}. ` +
-        'Ensure ENABLE_SCHEDULED_SYNC=true and GHL credentials are valid. ' +
-        'Data will appear within 10-25 seconds of server start.',
+        'Scheduled sync is enabled by default. Ensure GHL credentials are valid. ' +
+        'Data will appear within 10-25 seconds of server start. ' +
+        'You can also run "npm run populate" for a one-time full historical backfill.',
       );
     }
   }
