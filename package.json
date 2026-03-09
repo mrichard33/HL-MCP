@@ -13,7 +13,8 @@
     "dev": "tsx src/index.ts",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "populate": "tsx scripts/populate-supabase.ts"
+    "populate": "tsx scripts/populate-supabase.ts",
+    "start:full": "tsx scripts/populate-supabase.ts; node dist/index.js"
   },
   "keywords": [
     "mcp",

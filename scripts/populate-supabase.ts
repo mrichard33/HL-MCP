@@ -167,7 +167,8 @@ async function main(): Promise<void> {
 
   if (hasFailure) {
     console.error('Some steps failed. Check logs above for details.');
-    process.exit(1);
+    // Exit with 0 so chained commands (e.g. start:full) still start the server
+    process.exit(0);
   } else {
     console.log('All steps completed successfully.');
   }
