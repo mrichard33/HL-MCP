@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
+import { extractAndSyncWorkflows } from '../extractor/workflow-extractor.js';
 
 export const workflowTools = {
   list_workflows: {
@@ -22,26 +23,20 @@ export const workflowTools = {
   },
 
   sync_workflows: {
-    description: 'Sync workflows from GoHighLevel to Supabase cache.',
+    description: 'Full sync of workflows from GoHighLevel to Supabase — fetches complete workflow JSON with all steps, triggers, actions, and connections.',
     inputSchema: z.object({}),
     handler: async () => {
-      const ghl = new GHLClient();
-      const supabase = getSupabaseClient();
-
-      const workflows = await ghl.getWorkflows();
-      const rows = workflows.map((w) => ({
-        ghl_workflow_id: w.id,
-        ghl_location_id: w.locationId,
-        name: w.name,
-        status: w.status,
-        version: w.version || 1,
-        synced_at: new Date().toISOString(),
-      }));
-
-      const { error } = await supabase.from('workflows').upsert(rows, { onConflict: 'ghl_workflow_id' });
-      if (error) throw new Error(`Supabase error: ${error.message}`);
-
-      return { synced: rows.length, status: 'completed' };
+      const result = await extractAndSyncWorkflows();
+      return {
+        workflows_synced: result.workflows_synced,
+        steps_synced: result.steps_synced,
+        triggers_synced: result.triggers_synced,
+        actions_synced: result.actions_synced,
+        connections_synced: result.connections_synced,
+        snapshots_created: result.snapshots_created,
+        errors: result.errors,
+        status: result.errors.length === 0 ? 'completed' : 'completed_with_errors',
+      };
     },
   },
 

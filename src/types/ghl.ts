@@ -142,3 +142,23 @@ export interface GHLPaginatedResponse<T> {
     prevPage?: number;
   };
 }
+
+/** Cursor-based pagination meta returned by GHL API v2 */
+export interface GHLPaginationMeta {
+  total?: number;
+  startAfter?: string;
+  startAfterId?: string;
+  nextPage?: string;
+  nextPageUrl?: string;
+}
+
+/** Firebase token exchange response */
+export interface FirebaseTokenResponse {
+  access_token: string;
+  expires_in: string;
+  token_type: string;
+  refresh_token: string;
+  id_token: string;
+  user_id: string;
+  project_id: string;
+}

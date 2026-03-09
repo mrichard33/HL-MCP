@@ -68,8 +68,8 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
   const syncLogId = await logSyncStart('contacts');
 
   try {
-    const lastSynced = await getLastSynced('contacts');
-    const { contacts } = await ghl.getContacts({ limit: 100, updatedAfter: lastSynced });
+    // Fetch ALL contacts with pagination (no updatedAfter — not supported by GHL API v2)
+    const contacts = await ghl.getAllContacts();
 
     const now = new Date().toISOString();
     for (const c of contacts) {
@@ -103,7 +103,7 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
 
     await updateLastSynced('contacts');
     await logSyncComplete(syncLogId, contacts.length);
-    console.error(`[EntitySync] Contacts synced: ${contacts.length} (since ${lastSynced})`);
+    console.error(`[EntitySync] Contacts synced: ${contacts.length}`);
     return { synced: contacts.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -123,8 +123,8 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
   const syncLogId = await logSyncStart('opportunities');
 
   try {
-    const lastSynced = await getLastSynced('opportunities');
-    const { opportunities } = await ghl.getOpportunities({ limit: 100, updatedAfter: lastSynced });
+    // Fetch ALL opportunities with pagination (locationId always included now)
+    const opportunities = await ghl.getAllOpportunities();
 
     const now = new Date().toISOString();
     for (const o of opportunities) {
@@ -159,7 +159,7 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
 
     await updateLastSynced('opportunities');
     await logSyncComplete(syncLogId, opportunities.length);
-    console.error(`[EntitySync] Opportunities synced: ${opportunities.length} (since ${lastSynced})`);
+    console.error(`[EntitySync] Opportunities synced: ${opportunities.length}`);
     return { synced: opportunities.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -179,12 +179,10 @@ export async function syncAppointments(): Promise<{ synced: number; errors: stri
   const syncLogId = await logSyncStart('appointments');
 
   try {
-    const lastSynced = await getLastSynced('appointments');
-
-    // Fetch appointments from now - 24h to now + 30 days to cover recent and upcoming
+    // Fetch appointments across ALL calendars (calendarId is required by GHL API)
     const startTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const endTime = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    const { events } = await ghl.getAppointments({ startTime, endTime });
+    const events = await ghl.getAllAppointments({ startTime, endTime });
 
     const now = new Date().toISOString();
     let synced = 0;
@@ -221,7 +219,7 @@ export async function syncAppointments(): Promise<{ synced: number; errors: stri
 
     await updateLastSynced('appointments');
     await logSyncComplete(syncLogId, synced);
-    console.error(`[EntitySync] Appointments synced: ${synced} (since ${lastSynced})`);
+    console.error(`[EntitySync] Appointments synced: ${synced}`);
     return { synced, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -229,6 +227,127 @@ export async function syncAppointments(): Promise<{ synced: number; errors: stri
     await logSyncFailed(syncLogId, msg);
     console.error(`[EntitySync] Appointment sync failed: ${msg}`);
     return { synced: 0, errors };
+  }
+}
+
+// ---- Pipeline Sync (every 30 min) ----
+
+export async function syncPipelines(): Promise<{ synced: number; errors: string[] }> {
+  const ghl = new GHLClient();
+  const supabase = getSupabaseClient();
+  const errors: string[] = [];
+  const syncLogId = await logSyncStart('pipelines');
+
+  try {
+    const pipelines = await ghl.getPipelines();
+    const now = new Date().toISOString();
+
+    const rows = pipelines.map((p) => ({
+      ghl_pipeline_id: p.id,
+      ghl_location_id: p.locationId || null,
+      name: p.name,
+      stages: p.stages,
+      synced_at: now,
+    }));
+
+    const { error } = await supabase.from('pipelines').upsert(rows, { onConflict: 'ghl_pipeline_id' });
+    if (error) throw new Error(`Supabase error: ${error.message}`);
+
+    await updateLastSynced('pipelines');
+    await logSyncComplete(syncLogId, rows.length);
+    console.error(`[EntitySync] Pipelines synced: ${rows.length}`);
+    return { synced: rows.length, errors };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Fatal: ${msg}`);
+    await logSyncFailed(syncLogId, msg);
+    console.error(`[EntitySync] Pipeline sync failed: ${msg}`);
+    return { synced: 0, errors };
+  }
+}
+
+// ---- Conversation & Message Sync (every 15 min) ----
+
+export async function syncConversationsAndMessages(): Promise<{ synced_conversations: number; synced_messages: number; errors: string[] }> {
+  const ghl = new GHLClient();
+  const supabase = getSupabaseClient();
+  const errors: string[] = [];
+  const syncLogId = await logSyncStart('conversations');
+
+  let syncedConversations = 0;
+  let syncedMessages = 0;
+
+  try {
+    const conversations = await ghl.getAllConversations();
+    const now = new Date().toISOString();
+
+    for (const conv of conversations) {
+      try {
+        await supabase.from('conversations').upsert(
+          {
+            ghl_conversation_id: conv.id,
+            ghl_contact_id: conv.contactId,
+            ghl_location_id: conv.locationId || null,
+            type: conv.type || 'sms',
+            last_message_at: conv.lastMessageDate || null,
+            unread_count: conv.unreadCount || 0,
+            synced_at: now,
+          },
+          { onConflict: 'ghl_conversation_id' },
+        );
+        syncedConversations++;
+
+        // Fetch and sync messages for this conversation
+        try {
+          const { messages } = await ghl.getMessages(conv.id);
+          for (const msg of messages || []) {
+            try {
+              await supabase.from('messages').upsert(
+                {
+                  ghl_message_id: msg.id,
+                  ghl_conversation_id: msg.conversationId || conv.id,
+                  ghl_contact_id: msg.contactId || conv.contactId || null,
+                  direction: msg.direction || 'outbound',
+                  type: msg.type || 'sms',
+                  body: msg.body || null,
+                  status: msg.status || 'delivered',
+                  sent_at: msg.dateAdded || now,
+                },
+                { onConflict: 'ghl_message_id' },
+              );
+              syncedMessages++;
+
+              // Create lead event for the message
+              const msgType = msg.type || 'sms';
+              let eventType: string;
+              if (msg.direction === 'inbound') {
+                eventType = msgType === 'email' ? 'email_received' : 'sms_received';
+              } else {
+                eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
+              }
+              await createLeadEvent(msg.contactId || conv.contactId, eventType, msg.id, msg.dateAdded || now, msg);
+            } catch (err) {
+              errors.push(`Message ${msg.id}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        } catch (err) {
+          errors.push(`Messages for conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      } catch (err) {
+        errors.push(`Conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    await updateLastSynced('conversations');
+    await logSyncComplete(syncLogId, syncedConversations + syncedMessages);
+    console.error(`[EntitySync] Conversations synced: ${syncedConversations}, Messages synced: ${syncedMessages}`);
+    return { synced_conversations: syncedConversations, synced_messages: syncedMessages, errors };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Fatal: ${msg}`);
+    await logSyncFailed(syncLogId, msg);
+    console.error(`[EntitySync] Conversation sync failed: ${msg}`);
+    return { synced_conversations: 0, synced_messages: 0, errors };
   }
 }
 
@@ -300,7 +419,7 @@ export async function computeFunnelProgression(): Promise<{ computed: number; er
     if (fetchError) throw new Error(fetchError.message);
 
     // Deduplicate contact IDs
-    const contactIds = [...new Set((contacts || []).map(r => r.contact_id as string).filter(Boolean))];
+    const contactIds = [...new Set((contacts || []).map((r: { contact_id: unknown }) => r.contact_id as string).filter(Boolean))];
 
     let computed = 0;
     const now = new Date().toISOString();
@@ -313,7 +432,7 @@ export async function computeFunnelProgression(): Promise<{ computed: number; er
           .select('event_type')
           .eq('contact_id', contactId);
 
-        const eventTypes = (events || []).map(e => e.event_type as string);
+        const eventTypes = (events || []).map((e: { event_type: unknown }) => e.event_type as string);
         const { stage, history } = deriveFunnelStage(eventTypes);
 
         await supabase.from('contact_funnel_progression').upsert(
