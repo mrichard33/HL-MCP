@@ -45,12 +45,45 @@ export interface GHLOpportunity {
   dateUpdated?: string;
 }
 
+export interface GHLWorkflowStep {
+  id: string;
+  name?: string;
+  type?: string;
+  delay?: number;
+  delayUnit?: string;
+  templateId?: string;
+  condition?: string;
+  actions?: GHLWorkflowAction[];
+  [key: string]: unknown;
+}
+
+export interface GHLWorkflowTrigger {
+  id?: string;
+  type?: string;
+  name?: string;
+  value?: string;
+  filters?: Record<string, unknown>[];
+  [key: string]: unknown;
+}
+
+export interface GHLWorkflowAction {
+  id?: string;
+  type?: string;
+  name?: string;
+  target?: string;
+  [key: string]: unknown;
+}
+
 export interface GHLWorkflow {
   id: string;
   locationId?: string;
   name: string;
   status: string;
   version?: number;
+  steps?: GHLWorkflowStep[];
+  triggers?: GHLWorkflowTrigger[];
+  actions?: GHLWorkflowAction[];
+  [key: string]: unknown;
 }
 
 export interface GHLConversation {

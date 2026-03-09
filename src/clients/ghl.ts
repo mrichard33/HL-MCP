@@ -171,6 +171,11 @@ export class GHLClient {
     return res.workflows;
   }
 
+  async getWorkflow(workflowId: string): Promise<GHLWorkflow> {
+    const res = await this.request<{ workflow: GHLWorkflow }>(`/workflows/${workflowId}`);
+    return res.workflow;
+  }
+
   // ---- Conversations ----
 
   async getConversations(params?: {
