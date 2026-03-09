@@ -114,45 +114,8 @@ function handleAuthorizeGet(res: ServerResponse, url: URL): void {
   const codeChallenge = url.searchParams.get('code_challenge') || '';
   const codeChallengeMethod = url.searchParams.get('code_challenge_method') || 'S256';
   const state = url.searchParams.get('state') || '';
-  const scope = url.searchParams.get('scope') || '';
 
-  const secret = process.env.OAUTH_AUTHORIZE_SECRET;
-
-  if (secret) {
-    // Show a minimal HTML form asking for the passphrase
-    const html = `<!DOCTYPE html>
-<html>
-<head><title>Authorize MCP Server</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 420px; margin: 80px auto; padding: 0 20px; }
-  h2 { color: #333; }
-  input[type=password] { width: 100%; padding: 10px; margin: 8px 0 16px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-  button { background: #2563eb; color: white; border: none; padding: 10px 24px; border-radius: 4px; cursor: pointer; font-size: 16px; }
-  button:hover { background: #1d4ed8; }
-</style>
-</head>
-<body>
-  <h2>Authorize HL Workflow Intelligence</h2>
-  <p>Enter the server passphrase to grant access.</p>
-  <form method="POST" action="/authorize">
-    <input type="hidden" name="client_id" value="${escapeHtml(clientId)}" />
-    <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}" />
-    <input type="hidden" name="code_challenge" value="${escapeHtml(codeChallenge)}" />
-    <input type="hidden" name="code_challenge_method" value="${escapeHtml(codeChallengeMethod)}" />
-    <input type="hidden" name="state" value="${escapeHtml(state)}" />
-    <input type="hidden" name="scope" value="${escapeHtml(scope)}" />
-    <label for="passphrase">Passphrase:</label>
-    <input type="password" id="passphrase" name="passphrase" required />
-    <button type="submit">Authorize</button>
-  </form>
-</body>
-</html>`;
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(html);
-    return;
-  }
-
-  // No secret configured — auto-approve
+  // Auto-approve — issue authorization code and redirect immediately
   const code = createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
   const location = buildRedirectUrl(redirectUri, code, state);
   res.writeHead(302, { Location: location });
@@ -163,19 +126,11 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse): P
   const body = await readBody(req);
   const params = new URLSearchParams(body);
 
-  const passphrase = params.get('passphrase') || '';
   const clientId = params.get('client_id') || '';
   const redirectUri = params.get('redirect_uri') || '';
   const codeChallenge = params.get('code_challenge') || '';
   const codeChallengeMethod = params.get('code_challenge_method') || 'S256';
   const state = params.get('state') || '';
-
-  const secret = process.env.OAUTH_AUTHORIZE_SECRET;
-  if (secret && passphrase !== secret) {
-    res.writeHead(403, { 'Content-Type': 'text/html' });
-    res.end('<html><body><h2>Invalid passphrase</h2><p><a href="javascript:history.back()">Try again</a></p></body></html>');
-    return;
-  }
 
   const code = createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
   const location = buildRedirectUrl(redirectUri, code, state);
@@ -206,14 +161,6 @@ function buildRedirectUrl(redirectUri: string, code: string, state: string): str
   url.searchParams.set('code', code);
   if (state) url.searchParams.set('state', state);
   return url.toString();
-}
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 // ---- Token Endpoint ----
