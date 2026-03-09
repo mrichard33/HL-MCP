@@ -130,7 +130,7 @@ export class GHLClient {
     startAfterId?: string;
   }): Promise<{ contacts: GHLContact[]; meta?: GHLPaginationMeta }> {
     const reqParams: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.query) reqParams.query = params.query;
@@ -201,7 +201,7 @@ export class GHLClient {
 
   async getPipelines(): Promise<GHLPipeline[]> {
     const params: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
     const res = await this.request<{ pipelines: GHLPipeline[] }>('/opportunities/pipelines', {
       params,
@@ -220,7 +220,7 @@ export class GHLClient {
     startAfterId?: string;
   }): Promise<{ opportunities: GHLOpportunity[]; meta?: GHLPaginationMeta }> {
     const reqParams: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
     if (params?.pipelineId) reqParams.pipelineId = params.pipelineId;
     if (params?.stageId) reqParams.stageId = params.stageId;
@@ -292,7 +292,7 @@ export class GHLClient {
 
   async getWorkflows(): Promise<GHLWorkflow[]> {
     const params: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
     const res = await this.request<{ workflows: GHLWorkflow[] }>('/workflows/', { params });
     return res.workflows;
@@ -347,7 +347,7 @@ export class GHLClient {
     startAfterId?: string;
   }): Promise<{ conversations: GHLConversation[] }> {
     const reqParams: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
     if (params?.contactId) reqParams.contactId = params.contactId;
     if (params?.limit) reqParams.limit = String(params.limit);
@@ -370,7 +370,7 @@ export class GHLClient {
         await this.request('/conversations/search', {
           method: 'GET',
           params: {
-            locationId: this.locationId,
+            location_id: this.locationId,
             limit: '100',
             ...(startAfter ? { startAfter } : {}),
             ...(startAfterId ? { startAfterId } : {}),
@@ -421,7 +421,7 @@ export class GHLClient {
 
   async getCalendars(): Promise<GHLCalendar[]> {
     const params: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
     const res = await this.request<{ calendars: GHLCalendar[] }>('/calendars/', { params });
     return res.calendars;
@@ -434,7 +434,7 @@ export class GHLClient {
     limit?: number;
   }): Promise<{ events: GHLAppointment[] }> {
     const reqParams: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
     if (params?.calendarId) reqParams.calendarId = params.calendarId;
     if (params?.startTime) reqParams.startTime = params.startTime;
