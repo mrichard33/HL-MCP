@@ -1,6 +1,7 @@
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import type { GHLWorkflow, GHLWorkflowStep } from '../types/ghl.js';
+import { parseNodeGraph } from './node-graph-parser.js';
 
 export interface SyncResult {
   workflows_synced: number;
@@ -63,18 +64,24 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         // 2. Fetch full workflow detail (internal API if available, public API fallback)
         let workflowDetail: GHLWorkflow;
         let fullJson: Record<string, unknown>;
+        let parsedConnections: Array<{ fromStep: string; toStep: string; condition?: string }> = [];
         try {
           fullJson = await ghl.getWorkflowDetail(workflowSummary.id);
-          // Build a GHLWorkflow from the full JSON for structured extraction
+
+          // Parse the node graph from the internal API response
+          const parsed = parseNodeGraph(fullJson);
+          parsedConnections = parsed.connections;
+
+          // Build a GHLWorkflow from parsed data
           workflowDetail = {
             id: workflowSummary.id,
             locationId: (fullJson.locationId as string) || workflowSummary.locationId,
             name: (fullJson.name as string) || workflowSummary.name,
             status: (fullJson.status as string) || workflowSummary.status,
             version: (fullJson.version as number) || workflowSummary.version,
-            steps: (fullJson.steps as GHLWorkflowStep[]) || workflowSummary.steps || [],
-            triggers: fullJson.triggers as GHLWorkflow['triggers'] || workflowSummary.triggers || [],
-            actions: fullJson.actions as GHLWorkflow['actions'] || workflowSummary.actions || [],
+            steps: parsed.steps.length > 0 ? parsed.steps : (fullJson.steps as GHLWorkflowStep[]) || workflowSummary.steps || [],
+            triggers: parsed.triggers.length > 0 ? parsed.triggers : (fullJson.triggers as GHLWorkflow['triggers']) || workflowSummary.triggers || [],
+            actions: parsed.actions.length > 0 ? parsed.actions : (fullJson.actions as GHLWorkflow['actions']) || workflowSummary.actions || [],
           };
         } catch {
           // If detail endpoint fails, use summary data
@@ -93,8 +100,8 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           status: workflowDetail.status,
           version: workflowDetail.version || 1,
           trigger_type: workflowDetail.triggers?.[0]?.type || null,
-          trigger_config: workflowDetail.triggers ? JSON.stringify(workflowDetail.triggers) : '{}',
-          actions: workflowDetail.actions ? JSON.stringify(workflowDetail.actions) : '[]',
+          trigger_config: workflowDetail.triggers && workflowDetail.triggers.length > 0 ? workflowDetail.triggers : {},
+          actions: workflowDetail.actions && workflowDetail.actions.length > 0 ? workflowDetail.actions : [],
           raw_json: rawJson,
           synced_at: new Date().toISOString(),
         }, { onConflict: 'ghl_workflow_id' });
@@ -159,14 +166,29 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
             }
           }
 
-          // Build connections between sequential steps
-          if (i < steps.length - 1) {
-            const nextStep = steps[i + 1] as GHLWorkflowStep;
+        }
+
+        // 6b. Insert connections from parsed graph (or fallback to sequential)
+        if (parsedConnections.length > 0) {
+          for (const conn of parsedConnections) {
             await supabase.from('workflow_connections').insert({
               workflow_id: workflowDetail.id,
-              from_step: step.id || `${workflowDetail.id}_step_${i}`,
-              to_step: nextStep.id || `${workflowDetail.id}_step_${i + 1}`,
-              condition: step.condition || null,
+              from_step: conn.fromStep,
+              to_step: conn.toStep,
+              condition: conn.condition || null,
+            });
+            result.connections_synced++;
+          }
+        } else {
+          // Fallback: build connections between sequential steps
+          for (let j = 0; j < steps.length - 1; j++) {
+            const fromStep = steps[j] as GHLWorkflowStep;
+            const toStep = steps[j + 1] as GHLWorkflowStep;
+            await supabase.from('workflow_connections').insert({
+              workflow_id: workflowDetail.id,
+              from_step: fromStep.id || `${workflowDetail.id}_step_${j}`,
+              to_step: toStep.id || `${workflowDetail.id}_step_${j + 1}`,
+              condition: fromStep.condition || null,
             });
             result.connections_synced++;
           }

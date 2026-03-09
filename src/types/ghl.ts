@@ -129,6 +129,27 @@ export interface GHLAppointment {
   [key: string]: unknown;
 }
 
+/** Node in the GHL internal API workflow graph */
+export interface GHLWorkflowNode {
+  id: string;
+  type: string;
+  name?: string;
+  data?: Record<string, unknown>;
+  position?: { x: number; y: number };
+  [key: string]: unknown;
+}
+
+/** Edge in the GHL internal API workflow graph */
+export interface GHLWorkflowEdge {
+  id?: string;
+  source: string;
+  target: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  label?: string;
+  [key: string]: unknown;
+}
+
 export interface GHLApiResponse<T> {
   [key: string]: T[] | T | number | string | undefined;
 }

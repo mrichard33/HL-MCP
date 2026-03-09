@@ -2,6 +2,13 @@ import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { extractAndSyncWorkflows } from '../extractor/workflow-extractor.js';
+import {
+  syncContacts,
+  syncOpportunities,
+  syncAppointments,
+  syncPipelines,
+  syncConversationsAndMessages,
+} from '../extractor/entity-syncer.js';
 
 export const workflowTools = {
   list_workflows: {
@@ -133,6 +140,92 @@ export const workflowTools = {
         failure_rate: total > 0 ? ((failed / total) * 100).toFixed(1) + '%' : 'N/A',
         avg_duration_seconds: avgDurationMs > 0 ? (avgDurationMs / 1000).toFixed(1) : 'N/A',
       };
+    },
+  },
+
+  inspect_workflow_raw_json: {
+    description: 'Inspect the raw JSON structure of a workflow stored in Supabase. Useful for debugging workflow data extraction.',
+    inputSchema: z.object({
+      workflowId: z.string().describe('GHL workflow ID'),
+    }),
+    handler: async (args: { workflowId: string }) => {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from('workflows')
+        .select('ghl_workflow_id, name, trigger_type, trigger_config, actions, raw_json')
+        .eq('ghl_workflow_id', args.workflowId)
+        .single();
+
+      if (error) throw new Error(`Supabase error: ${error.message}`);
+      if (!data) throw new Error(`Workflow ${args.workflowId} not found`);
+
+      const raw = (data.raw_json || {}) as Record<string, unknown>;
+      return {
+        workflow_id: data.ghl_workflow_id,
+        name: data.name,
+        current_trigger_type: data.trigger_type,
+        current_trigger_config: data.trigger_config,
+        current_actions: data.actions,
+        raw_json_top_level_keys: Object.keys(raw),
+        raw_json_structure: Object.fromEntries(
+          Object.entries(raw).map(([k, v]) => [
+            k,
+            Array.isArray(v)
+              ? `Array[${v.length}]${v.length > 0 ? ` of ${typeof v[0]}` : ''}`
+              : typeof v,
+          ])
+        ),
+        raw_json: raw,
+      };
+    },
+  },
+
+  sync_all_entities: {
+    description: 'Run a full sync of all entities (contacts, opportunities, appointments, pipelines, conversations, messages) from GoHighLevel to Supabase.',
+    inputSchema: z.object({}),
+    handler: async () => {
+      const results: Record<string, unknown> = {};
+
+      try {
+        const contactResult = await syncContacts();
+        results.contacts = { synced: contactResult.synced, errors: contactResult.errors.length };
+      } catch (err) {
+        results.contacts = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      try {
+        const oppResult = await syncOpportunities();
+        results.opportunities = { synced: oppResult.synced, errors: oppResult.errors.length };
+      } catch (err) {
+        results.opportunities = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      try {
+        const aptResult = await syncAppointments();
+        results.appointments = { synced: aptResult.synced, errors: aptResult.errors.length };
+      } catch (err) {
+        results.appointments = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      try {
+        const pipResult = await syncPipelines();
+        results.pipelines = { synced: pipResult.synced, errors: pipResult.errors.length };
+      } catch (err) {
+        results.pipelines = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      try {
+        const convResult = await syncConversationsAndMessages();
+        results.conversations = {
+          synced_conversations: convResult.synced_conversations,
+          synced_messages: convResult.synced_messages,
+          errors: convResult.errors.length,
+        };
+      } catch (err) {
+        results.conversations = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      return results;
     },
   },
 };
