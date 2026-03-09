@@ -1,0 +1,36 @@
+{
+  "name": "hl-workflow-intelligence-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for GoHighLevel CRM & Workflow Intelligence with Supabase backend",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "hl-workflow-intelligence-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "gohighlevel",
+    "ghl",
+    "crm",
+    "workflows",
+    "supabase"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@supabase/supabase-js": "^2.49.4",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.3"
+  }
+}
