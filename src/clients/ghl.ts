@@ -220,10 +220,10 @@ export class GHLClient {
     startAfterId?: string;
   }): Promise<{ opportunities: GHLOpportunity[]; meta?: GHLPaginationMeta }> {
     const reqParams: Record<string, string> = {
-      locationId: this.locationId,
+      location_id: this.locationId,
     };
-    if (params?.pipelineId) reqParams.pipelineId = params.pipelineId;
-    if (params?.stageId) reqParams.stageId = params.stageId;
+    if (params?.pipelineId) reqParams.pipeline_id = params.pipelineId;
+    if (params?.stageId) reqParams.stage_id = params.stageId;
     if (params?.status) reqParams.status = params.status;
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.startAfter) reqParams.startAfter = params.startAfter;

@@ -44,10 +44,21 @@ function findNodes(rawJson: Record<string, unknown>): GHLWorkflowNode[] {
     if (Array.isArray(data.nodes)) return data.nodes;
   }
 
+  // Nested under workflowData key (GHL internal backend API format)
+  if (rawJson.workflowData && typeof rawJson.workflowData === 'object') {
+    const wd = rawJson.workflowData as Record<string, unknown>;
+    if (Array.isArray(wd.nodes)) return wd.nodes;
+    // workflowData may itself contain a nested workflow/data key
+    if (wd.workflow && typeof wd.workflow === 'object') {
+      const inner = wd.workflow as Record<string, unknown>;
+      if (Array.isArray(inner.nodes)) return inner.nodes;
+    }
+  }
+
   // Search for any array of objects that look like nodes (have id and type)
   for (const [key, value] of Object.entries(rawJson)) {
     if (Array.isArray(value) && value.length > 0 && value[0]?.id && value[0]?.type) {
-      console.error(`[NodeGraphParser] Found node-like array under key "${key}" with ${value.length} items`);
+      console.warn(`[NodeGraphParser] Found node-like array under key "${key}" with ${value.length} items`);
       return value;
     }
   }
@@ -74,6 +85,16 @@ function findEdges(rawJson: Record<string, unknown>): GHLWorkflowEdge[] {
     if (Array.isArray(data.edges)) return data.edges;
   }
 
+  // Nested under workflowData key (GHL internal backend API format)
+  if (rawJson.workflowData && typeof rawJson.workflowData === 'object') {
+    const wd = rawJson.workflowData as Record<string, unknown>;
+    if (Array.isArray(wd.edges)) return wd.edges;
+    if (wd.workflow && typeof wd.workflow === 'object') {
+      const inner = wd.workflow as Record<string, unknown>;
+      if (Array.isArray(inner.edges)) return inner.edges;
+    }
+  }
+
   // Also check for "connections" as alternate key name
   if (Array.isArray(rawJson.connections)) return rawJson.connections;
 
@@ -96,9 +117,9 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
   const edges = findEdges(rawJson);
 
   if (nodes.length === 0) {
-    // Log diagnostic info for debugging
-    const topKeys = Object.keys(rawJson);
-    console.error(`[NodeGraphParser] No nodes found in raw JSON. Top-level keys: ${topKeys.join(', ')}`);
+    // Only log at debug level — this is expected for public API fallback responses
+    const workflowName = (rawJson.name as string) || (rawJson._id as string) || 'unknown';
+    console.warn(`[NodeGraphParser] No nodes found for workflow "${workflowName}" (public API fallback — node graph requires internal API)`);
 
     // Try to extract from legacy flat structure (public API format)
     if (Array.isArray(rawJson.triggers)) {
@@ -114,7 +135,10 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
     return result;
   }
 
-  console.error(`[NodeGraphParser] Found ${nodes.length} nodes and ${edges.length} edges`);
+  // Debug-level: only useful during development
+  if (process.env.DEBUG) {
+    console.error(`[NodeGraphParser] Found ${nodes.length} nodes and ${edges.length} edges`);
+  }
 
   // Build a set of trigger node IDs for ordering
   const triggerNodeIds = new Set<string>();
@@ -205,11 +229,13 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
     }
   }
 
-  console.error(
-    `[NodeGraphParser] Parsed: ${result.triggers.length} triggers, ` +
-    `${result.steps.length} steps, ${result.actions.length} actions, ` +
-    `${result.connections.length} connections`
-  );
+  if (process.env.DEBUG) {
+    console.error(
+      `[NodeGraphParser] Parsed: ${result.triggers.length} triggers, ` +
+      `${result.steps.length} steps, ${result.actions.length} actions, ` +
+      `${result.connections.length} connections`
+    );
+  }
 
   return result;
 }
