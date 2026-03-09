@@ -27,6 +27,9 @@ function toDelayMinutes(delay?: number, unit?: string): number {
 
 /**
  * Extracts and syncs all workflow data from GoHighLevel into Supabase.
+ * Uses the internal backend API (via Firebase auth) for full workflow JSON
+ * when available, falling back to the public API otherwise.
+ *
  * Populates: workflows, workflow_steps, workflow_triggers, workflow_actions,
  * workflow_connections, and workflow_snapshots tables.
  */
@@ -52,21 +55,35 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
   }).select().single();
 
   try {
-    // 1. Fetch all workflows (summary)
+    // 1. Fetch all workflows (summary list from public API)
     const workflows = await ghl.getWorkflows();
 
     for (const workflowSummary of workflows) {
       try {
-        // 2. Fetch full workflow detail
+        // 2. Fetch full workflow detail (internal API if available, public API fallback)
         let workflowDetail: GHLWorkflow;
+        let fullJson: Record<string, unknown>;
         try {
-          workflowDetail = await ghl.getWorkflow(workflowSummary.id);
+          fullJson = await ghl.getWorkflowDetail(workflowSummary.id);
+          // Build a GHLWorkflow from the full JSON for structured extraction
+          workflowDetail = {
+            id: workflowSummary.id,
+            locationId: (fullJson.locationId as string) || workflowSummary.locationId,
+            name: (fullJson.name as string) || workflowSummary.name,
+            status: (fullJson.status as string) || workflowSummary.status,
+            version: (fullJson.version as number) || workflowSummary.version,
+            steps: (fullJson.steps as GHLWorkflowStep[]) || workflowSummary.steps || [],
+            triggers: fullJson.triggers as GHLWorkflow['triggers'] || workflowSummary.triggers || [],
+            actions: fullJson.actions as GHLWorkflow['actions'] || workflowSummary.actions || [],
+          };
         } catch {
           // If detail endpoint fails, use summary data
           workflowDetail = workflowSummary;
+          fullJson = JSON.parse(JSON.stringify(workflowSummary));
         }
 
-        const rawJson = JSON.parse(JSON.stringify(workflowDetail));
+        // Store the complete raw JSON (from internal API if available)
+        const rawJson = JSON.parse(JSON.stringify(fullJson));
 
         // 3. Upsert workflow with raw JSON
         await supabase.from('workflows').upsert({

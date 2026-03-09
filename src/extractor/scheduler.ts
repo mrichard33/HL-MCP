@@ -4,6 +4,8 @@ import {
   syncContacts,
   syncOpportunities,
   syncAppointments,
+  syncPipelines,
+  syncConversationsAndMessages,
   computeFunnelProgression,
 } from './entity-syncer.js';
 
@@ -42,6 +44,8 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
  * - Contacts: every 15 minutes
  * - Opportunities: every 15 minutes
  * - Appointments: every 15 minutes
+ * - Pipelines: every 30 minutes
+ * - Conversations & Messages: every 15 minutes
  * - Funnel progression: every hour
  */
 export function startScheduledSync(): void {
@@ -64,6 +68,13 @@ export function startScheduledSync(): void {
   setTimeout(() => runJob('contacts', syncContacts), 5_000);
   setTimeout(() => runJob('opportunities', syncOpportunities), 10_000);
   setTimeout(() => runJob('appointments', syncAppointments), 15_000);
+  setTimeout(() => runJob('pipelines', syncPipelines), 20_000);
+  setTimeout(() => runJob('conversations', async () => {
+    const result = await syncConversationsAndMessages();
+    console.error(
+      `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
+    );
+  }), 25_000);
 
   // Run funnel computation after initial syncs complete (2 minutes)
   setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
@@ -90,12 +101,26 @@ export function startScheduledSync(): void {
     runJob('appointments', syncAppointments);
   });
 
+  cron.schedule('*/30 * * * *', () => {
+    runJob('pipelines', syncPipelines);
+  });
+
+  cron.schedule('*/15 * * * *', () => {
+    runJob('conversations', async () => {
+      const result = await syncConversationsAndMessages();
+      console.error(
+        `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
+      );
+    });
+  });
+
   cron.schedule('0 * * * *', () => {
     runJob('funnel_progression', computeFunnelProgression);
   });
 
   console.error('[Scheduler] Cron jobs registered:');
   console.error('  */10 * * * * — workflows');
-  console.error('  */15 * * * * — contacts, opportunities, appointments');
+  console.error('  */15 * * * * — contacts, opportunities, appointments, conversations/messages');
+  console.error('  */30 * * * * — pipelines');
   console.error('  0 * * * *    — funnel progression');
 }
