@@ -6,6 +6,8 @@ import { contactTools } from './tools/contacts.js';
 import { pipelineTools } from './tools/pipelines.js';
 import { workflowTools } from './tools/workflows.js';
 import { conversationTools } from './tools/conversations.js';
+import { workflowAnalysisTools } from './tools/workflow-analysis.js';
+import { startScheduledSync } from './extractor/scheduler.js';
 
 const server = new McpServer({
   name: 'hl-workflow-intelligence-mcp',
@@ -18,6 +20,7 @@ const allTools = {
   ...pipelineTools,
   ...workflowTools,
   ...conversationTools,
+  ...workflowAnalysisTools,
 };
 
 for (const [name, tool] of Object.entries(allTools)) {
@@ -47,6 +50,11 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('HL Workflow Intelligence MCP server running on stdio');
+
+  // Start scheduled sync if enabled
+  if (process.env.ENABLE_SCHEDULED_SYNC === 'true') {
+    startScheduledSync();
+  }
 }
 
 main().catch((err) => {
