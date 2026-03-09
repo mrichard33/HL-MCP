@@ -19,6 +19,9 @@ export const conversationTools = {
         if (error) throw new Error(`Supabase error: ${error.message}`);
         return { conversations: data, source: 'cache' };
       }
+      if (!args.contactId) {
+        throw new Error('contactId is required for live GHL API calls — the conversations/search endpoint requires it. Use useCache=true to query from Supabase without a contactId.');
+      }
       const ghl = new GHLClient();
       const result = await ghl.getConversations({ contactId: args.contactId, limit: args.limit });
       return { ...result, source: 'ghl_api' };
@@ -68,6 +71,9 @@ export const conversationTools = {
       limit: z.number().optional().default(50),
     }),
     handler: async (args: { contactId?: string; limit?: number }) => {
+      if (!args.contactId) {
+        throw new Error('contactId is required — the GHL conversations/search endpoint requires it.');
+      }
       const ghl = new GHLClient();
       const supabase = getSupabaseClient();
 

@@ -282,63 +282,75 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   let syncedMessages = 0;
 
   try {
-    const conversations = await ghl.getAllConversations();
+    // GHL conversations/search requires contactId — iterate by contact
+    const contacts = await ghl.getAllContacts();
     const now = new Date().toISOString();
 
-    for (const conv of conversations) {
+    for (const contact of contacts) {
       try {
-        await supabase.from('conversations').upsert(
-          {
-            ghl_conversation_id: conv.id,
-            ghl_contact_id: conv.contactId,
-            ghl_location_id: conv.locationId || null,
-            type: conv.type || 'sms',
-            last_message_at: conv.lastMessageDate || null,
-            unread_count: conv.unreadCount || 0,
-            synced_at: now,
-          },
-          { onConflict: 'ghl_conversation_id' },
-        );
-        syncedConversations++;
+        const conversations = await ghl.getAllConversations(contact.id);
 
-        // Fetch and sync messages for this conversation
-        try {
-          const { messages } = await ghl.getMessages(conv.id);
-          for (const msg of messages || []) {
+        for (const conv of conversations) {
+          try {
+            await supabase.from('conversations').upsert(
+              {
+                ghl_conversation_id: conv.id,
+                ghl_contact_id: conv.contactId,
+                ghl_location_id: conv.locationId || null,
+                type: conv.type || 'sms',
+                last_message_at: conv.lastMessageDate || null,
+                unread_count: conv.unreadCount || 0,
+                synced_at: now,
+              },
+              { onConflict: 'ghl_conversation_id' },
+            );
+            syncedConversations++;
+
+            // Fetch and sync messages for this conversation
             try {
-              await supabase.from('messages').upsert(
-                {
-                  ghl_message_id: msg.id,
-                  ghl_conversation_id: msg.conversationId || conv.id,
-                  ghl_contact_id: msg.contactId || conv.contactId || null,
-                  direction: msg.direction || 'outbound',
-                  type: msg.type || 'sms',
-                  body: msg.body || null,
-                  status: msg.status || 'delivered',
-                  sent_at: msg.dateAdded || now,
-                },
-                { onConflict: 'ghl_message_id' },
-              );
-              syncedMessages++;
+              const { messages } = await ghl.getMessages(conv.id);
+              for (const msg of messages || []) {
+                try {
+                  await supabase.from('messages').upsert(
+                    {
+                      ghl_message_id: msg.id,
+                      ghl_conversation_id: msg.conversationId || conv.id,
+                      ghl_contact_id: msg.contactId || conv.contactId || null,
+                      direction: msg.direction || 'outbound',
+                      type: msg.type || 'sms',
+                      body: msg.body || null,
+                      status: msg.status || 'delivered',
+                      sent_at: msg.dateAdded || now,
+                    },
+                    { onConflict: 'ghl_message_id' },
+                  );
+                  syncedMessages++;
 
-              // Create lead event for the message
-              const msgType = msg.type || 'sms';
-              let eventType: string;
-              if (msg.direction === 'inbound') {
-                eventType = msgType === 'email' ? 'email_received' : 'sms_received';
-              } else {
-                eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
+                  // Create lead event for the message
+                  const msgType = msg.type || 'sms';
+                  let eventType: string;
+                  if (msg.direction === 'inbound') {
+                    eventType = msgType === 'email' ? 'email_received' : 'sms_received';
+                  } else {
+                    eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
+                  }
+                  await createLeadEvent(msg.contactId || conv.contactId, eventType, msg.id, msg.dateAdded || now, msg);
+                } catch (err) {
+                  errors.push(`Message ${msg.id}: ${err instanceof Error ? err.message : String(err)}`);
+                }
               }
-              await createLeadEvent(msg.contactId || conv.contactId, eventType, msg.id, msg.dateAdded || now, msg);
             } catch (err) {
-              errors.push(`Message ${msg.id}: ${err instanceof Error ? err.message : String(err)}`);
+              errors.push(`Messages for conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
             }
+          } catch (err) {
+            errors.push(`Conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
           }
-        } catch (err) {
-          errors.push(`Messages for conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
         }
+
+        // Small delay between contacts to avoid rate limiting
+        await new Promise(r => setTimeout(r, 100));
       } catch (err) {
-        errors.push(`Conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(`Conversations for contact ${contact.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
