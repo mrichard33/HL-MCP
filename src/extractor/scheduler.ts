@@ -8,6 +8,7 @@ import {
   syncConversationsAndMessages,
   computeFunnelProgression,
 } from './entity-syncer.js';
+import { getSupabaseClient } from '../clients/supabase.js';
 
 /** Track running state per job to prevent concurrent runs. */
 const runningJobs = new Map<string, boolean>();
@@ -39,7 +40,30 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
 }
 
 /**
- * Starts all scheduled sync jobs:
+ * Check if this is the first time we're syncing (no sync_state records exist).
+ * If so, use a wider appointment lookback to backfill historical data.
+ */
+async function isFirstRun(): Promise<boolean> {
+  try {
+    const supabase = getSupabaseClient();
+    const { data } = await supabase
+      .from('sync_state')
+      .select('entity_name')
+      .limit(1);
+    return !data || data.length === 0;
+  } catch {
+    // Table might not exist yet or connection issue — treat as first run
+    return true;
+  }
+}
+
+/**
+ * Starts all scheduled sync jobs.
+ *
+ * On first run (no prior sync_state), appointments use a 1-year lookback
+ * to backfill historical data. Subsequent runs use the normal 24h lookback.
+ *
+ * Schedule:
  * - Workflows: every 10 minutes
  * - Contacts: every 15 minutes
  * - Opportunities: every 15 minutes
@@ -51,35 +75,55 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
 export function startScheduledSync(): void {
   console.error('[Scheduler] Starting scheduled sync jobs');
 
-  // Run workflow sync immediately, then every 10 minutes
-  runJob('workflows', async () => {
-    const result = await extractAndSyncWorkflows();
-    console.error(
-      `[Scheduler] Workflows: ${result.workflows_synced} synced, ` +
-      `${result.steps_synced} steps, ${result.triggers_synced} triggers, ` +
-      `${result.actions_synced} actions, ${result.snapshots_created} snapshots`,
-    );
-    if (result.errors.length > 0) {
-      console.error(`[Scheduler] Workflow errors: ${result.errors.join('; ')}`);
+  // Run initial sync with first-run detection
+  (async () => {
+    const firstRun = await isFirstRun();
+    if (firstRun) {
+      console.error('[Scheduler] First run detected — performing full historical backfill');
     }
-  });
 
-  // Run entity syncs immediately with staggered starts
-  setTimeout(() => runJob('contacts', syncContacts), 5_000);
-  setTimeout(() => runJob('opportunities', syncOpportunities), 10_000);
-  setTimeout(() => runJob('appointments', syncAppointments), 15_000);
-  setTimeout(() => runJob('pipelines', syncPipelines), 20_000);
-  setTimeout(() => runJob('conversations', async () => {
-    const result = await syncConversationsAndMessages();
-    console.error(
-      `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
-    );
-  }), 25_000);
+    // Run workflow sync immediately
+    runJob('workflows', async () => {
+      const result = await extractAndSyncWorkflows();
+      console.error(
+        `[Scheduler] Workflows: ${result.workflows_synced} synced, ` +
+        `${result.steps_synced} steps, ${result.triggers_synced} triggers, ` +
+        `${result.actions_synced} actions, ${result.snapshots_created} snapshots`,
+      );
+      if (result.errors.length > 0) {
+        console.error(`[Scheduler] Workflow errors: ${result.errors.join('; ')}`);
+      }
+    });
 
-  // Run funnel computation after initial syncs complete (2 minutes)
-  setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
+    // Run entity syncs immediately with staggered starts
+    // Pipelines first (referenced by opportunities)
+    setTimeout(() => runJob('pipelines', syncPipelines), 5_000);
+    setTimeout(() => runJob('contacts', syncContacts), 10_000);
+    setTimeout(() => runJob('opportunities', syncOpportunities), 15_000);
 
-  // Schedule recurring jobs
+    // Appointments: wider lookback on first run (1 year back, 60 days forward)
+    setTimeout(() => runJob('appointments', () => {
+      if (firstRun) {
+        return syncAppointments({
+          startTime: new Date(Date.now() - 365 * 86_400_000).toISOString(),
+          endTime: new Date(Date.now() + 60 * 86_400_000).toISOString(),
+        });
+      }
+      return syncAppointments();
+    }), 20_000);
+
+    setTimeout(() => runJob('conversations', async () => {
+      const result = await syncConversationsAndMessages();
+      console.error(
+        `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
+      );
+    }), 25_000);
+
+    // Run funnel computation after initial syncs complete (2 minutes)
+    setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
+  })();
+
+  // Schedule recurring jobs (every 15 minutes for most entities)
   cron.schedule('*/10 * * * *', () => {
     runJob('workflows', async () => {
       const result = await extractAndSyncWorkflows();

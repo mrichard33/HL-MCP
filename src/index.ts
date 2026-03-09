@@ -74,7 +74,7 @@ async function startHttpServer(port: number) {
         status: 'ok',
         name: 'hl-workflow-intelligence-mcp',
         version: '1.0.0',
-        sync_enabled: process.env.ENABLE_SCHEDULED_SYNC === 'true',
+        sync_enabled: process.env.ENABLE_SCHEDULED_SYNC !== 'false',
         ghl_configured: !!(process.env.GHL_API_KEY && process.env.GHL_LOCATION_ID),
         supabase_configured: !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY)),
       }));
@@ -267,8 +267,8 @@ async function main() {
     await startStdioServer();
   }
 
-  // Start scheduled sync if enabled
-  if (process.env.ENABLE_SCHEDULED_SYNC === 'true') {
+  // Start scheduled sync — enabled by default, set ENABLE_SCHEDULED_SYNC=false to disable
+  if (process.env.ENABLE_SCHEDULED_SYNC !== 'false') {
     startScheduledSync();
   }
 }
