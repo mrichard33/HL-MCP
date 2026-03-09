@@ -19,7 +19,7 @@ function isJobRunning(name: string): boolean {
 
 async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
   if (isJobRunning(name)) {
-    console.error(`[Scheduler] ${name} already in progress, skipping`);
+    console.warn(`[Scheduler] ${name} already in progress, skipping`);
     return;
   }
 
