@@ -78,6 +78,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           trigger_type: workflowDetail.triggers?.[0]?.type || null,
           trigger_config: workflowDetail.triggers ? JSON.stringify(workflowDetail.triggers) : '{}',
           actions: workflowDetail.actions ? JSON.stringify(workflowDetail.actions) : '[]',
+          raw_json: rawJson,
           synced_at: new Date().toISOString(),
         }, { onConflict: 'ghl_workflow_id' });
         result.workflows_synced++;

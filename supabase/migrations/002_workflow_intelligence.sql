@@ -2,6 +2,11 @@
 -- This migration adds tables for workflow steps, connections, triggers, actions, and snapshots
 
 -- ============================================================
+-- Add raw_json column to existing workflows table
+-- ============================================================
+ALTER TABLE workflows ADD COLUMN IF NOT EXISTS raw_json JSONB DEFAULT '{}';
+
+-- ============================================================
 -- Workflow Steps
 -- ============================================================
 CREATE TABLE IF NOT EXISTS workflow_steps (
@@ -49,6 +54,7 @@ CREATE TABLE IF NOT EXISTS workflow_triggers (
 
 CREATE INDEX idx_workflow_triggers_workflow ON workflow_triggers(workflow_id);
 CREATE INDEX idx_workflow_triggers_event ON workflow_triggers(trigger_event);
+CREATE INDEX idx_workflow_triggers_event_value ON workflow_triggers(trigger_event, trigger_value);
 
 -- ============================================================
 -- Workflow Actions
