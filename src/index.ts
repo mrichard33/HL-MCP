@@ -92,6 +92,17 @@ async function startHttpServer(port: number) {
 
     // MCP endpoint
     if (url.pathname === '/mcp') {
+      // Token-based authentication
+      const authToken = process.env.MCP_AUTH_TOKEN;
+      if (authToken) {
+        const authHeader = req.headers['authorization'] || '';
+        const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+        if (bearerToken !== authToken) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }));
+          return;
+        }
+      }
       // Handle DELETE for session cleanup
       if (req.method === 'DELETE') {
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
