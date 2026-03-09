@@ -11,6 +11,14 @@ import { conversationTools } from './tools/conversations.js';
 import { workflowAnalysisTools } from './tools/workflow-analysis.js';
 import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
+import {
+  getOAuthMetadata,
+  handleRegister,
+  handleAuthorize,
+  handleToken,
+  validateAccessToken,
+} from './auth/oauth.js';
+import { runDiagnostics } from './diagnostics.js';
 
 function createMcpServer() {
   const server = new McpServer({
@@ -62,7 +70,64 @@ async function startHttpServer(port: number) {
     // Health check endpoint
     if (url.pathname === '/' || url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', name: 'hl-workflow-intelligence-mcp', version: '1.0.0' }));
+      res.end(JSON.stringify({
+        status: 'ok',
+        name: 'hl-workflow-intelligence-mcp',
+        version: '1.0.0',
+        sync_enabled: process.env.ENABLE_SCHEDULED_SYNC === 'true',
+        ghl_configured: !!(process.env.GHL_API_KEY && process.env.GHL_LOCATION_ID),
+        supabase_configured: !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY)),
+      }));
+      return;
+    }
+
+    // OAuth metadata discovery (RFC 8414)
+    if (url.pathname === '/.well-known/oauth-authorization-server' && req.method === 'GET') {
+      const issuer = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(getOAuthMetadata(issuer)));
+      return;
+    }
+
+    // OAuth authorization endpoint
+    if (url.pathname === '/authorize') {
+      await handleAuthorize(req, res, url);
+      return;
+    }
+
+    // OAuth token endpoint
+    if (url.pathname === '/token' && req.method === 'POST') {
+      await handleToken(req, res);
+      return;
+    }
+
+    // OAuth dynamic client registration
+    if (url.pathname === '/register' && req.method === 'POST') {
+      await handleRegister(req, res);
+      return;
+    }
+
+    // Diagnostics endpoint
+    if (url.pathname === '/diagnostics' && req.method === 'GET') {
+      // Protect with MCP_AUTH_TOKEN if set
+      const authToken = process.env.MCP_AUTH_TOKEN;
+      if (authToken) {
+        const authHeader = req.headers['authorization'] || '';
+        const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+        if (bearerToken !== authToken) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized — provide Bearer token' }));
+          return;
+        }
+      }
+      try {
+        const report = await runDiagnostics();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(report, null, 2));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
       return;
     }
 
@@ -92,16 +157,23 @@ async function startHttpServer(port: number) {
 
     // MCP endpoint
     if (url.pathname === '/mcp') {
-      // Token-based authentication
-      const authToken = process.env.MCP_AUTH_TOKEN;
-      if (authToken) {
-        const authHeader = req.headers['authorization'] || '';
-        const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-        if (bearerToken !== authToken) {
+      // Token-based authentication: accept static MCP_AUTH_TOKEN or OAuth-issued tokens
+      const authHeader = req.headers['authorization'] || '';
+      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      const staticToken = process.env.MCP_AUTH_TOKEN;
+
+      if (staticToken) {
+        // If a static token is configured, require either it or a valid OAuth token
+        const isStaticMatch = bearerToken === staticToken;
+        const isOAuthValid = bearerToken ? validateAccessToken(bearerToken) : false;
+        if (!isStaticMatch && !isOAuthValid) {
           res.writeHead(401, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }));
           return;
         }
+      } else if (bearerToken) {
+        // No static token configured, but a bearer was provided — check if it's a valid OAuth token
+        // (allow through even if invalid, to maintain backwards compatibility with no-auth mode)
       }
       // Handle DELETE for session cleanup
       if (req.method === 'DELETE') {
@@ -172,8 +244,10 @@ async function startHttpServer(port: number) {
 
   httpServer.listen(port, () => {
     console.error(`HL Workflow Intelligence MCP server running on http://0.0.0.0:${port}`);
-    console.error(`  Health check: http://0.0.0.0:${port}/`);
-    console.error(`  MCP endpoint: http://0.0.0.0:${port}/mcp`);
+    console.error(`  Health check:  http://0.0.0.0:${port}/`);
+    console.error(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
+    console.error(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
+    console.error(`  Diagnostics:   http://0.0.0.0:${port}/diagnostics`);
   });
 }
 
