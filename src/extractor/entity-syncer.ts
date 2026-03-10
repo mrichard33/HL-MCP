@@ -807,15 +807,32 @@ export async function syncTriggerLinks(): Promise<{ synced: number; errors: stri
   try {
     const links = await ghl.getLinks();
 
+    // Log first link's keys to help diagnose field mapping
+    if (links.length > 0) {
+      console.log(`[EntitySync] Trigger link sample keys: ${Object.keys(links[0]).join(', ')}`);
+    }
+
     for (const link of links) {
       try {
+        // GHL API may return the generated tracking URL under various field names
+        const raw = link as Record<string, unknown>;
+        const linkUrl = (
+          raw.url || raw.linkUrl || raw.link || raw.shortUrl ||
+          raw.fullUrl || raw.trackingUrl || raw.generatedUrl ||
+          raw.fieldKey || null
+        ) as string | null;
+        const redirectTo = (
+          raw.redirectTo || raw.redirect_to || raw.redirectUrl ||
+          raw.destination || raw.targetUrl || null
+        ) as string | null;
+
         await supabase.from('trigger_links').upsert(
           {
             ghl_link_id: link.id,
-            ghl_location_id: ghl.getLocationId(),
+            ghl_location_id: link.locationId || ghl.getLocationId(),
             name: link.name || null,
-            redirect_to: link.redirectTo || null,
-            url: link.url || null,
+            redirect_to: redirectTo,
+            url: linkUrl,
             raw_json: link,
             synced_at: now,
             updated_at: now,
