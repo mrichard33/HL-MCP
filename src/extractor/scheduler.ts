@@ -8,6 +8,10 @@ import {
   syncPipelines,
   syncConversationsAndMessages,
   computeFunnelProgression,
+  syncCustomFields,
+  syncCustomValues,
+  syncTags,
+  syncTriggerLinks,
 } from './entity-syncer.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 
@@ -146,6 +150,12 @@ export function startScheduledSync(): void {
       );
     }), 25_000);
 
+    // Run new entity syncs with staggered starts
+    setTimeout(() => runJob('custom_fields', syncCustomFields), 30_000);
+    setTimeout(() => runJob('custom_values', syncCustomValues), 35_000);
+    setTimeout(() => runJob('tags', syncTags), 40_000);
+    setTimeout(() => runJob('trigger_links', syncTriggerLinks), 45_000);
+
     // Run funnel computation after initial syncs complete (2 minutes)
     setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
   })();
@@ -185,6 +195,22 @@ export function startScheduledSync(): void {
     });
   });
 
+  cron.schedule('*/30 * * * *', () => {
+    runJob('custom_fields', syncCustomFields);
+  });
+
+  cron.schedule('*/30 * * * *', () => {
+    runJob('custom_values', syncCustomValues);
+  });
+
+  cron.schedule('*/30 * * * *', () => {
+    runJob('tags', syncTags);
+  });
+
+  cron.schedule('*/30 * * * *', () => {
+    runJob('trigger_links', syncTriggerLinks);
+  });
+
   cron.schedule('0 * * * *', () => {
     runJob('funnel_progression', computeFunnelProgression);
   });
@@ -192,6 +218,6 @@ export function startScheduledSync(): void {
   console.log('[Scheduler] Cron jobs registered:');
   console.log('  */10 * * * * — workflows');
   console.log('  */15 * * * * — contacts, opportunities, appointments, conversations/messages');
-  console.log('  */30 * * * * — pipelines');
+  console.log('  */30 * * * * — pipelines, custom_fields, custom_values, tags, trigger_links');
   console.log('  0 * * * *    — funnel progression');
 }

@@ -35,7 +35,7 @@ function toDelayMinutes(delay?: number, unit?: string): number {
  */
 function extractTriggerValue(trigger: Record<string, unknown>): string | null {
   const valueFields = [
-    'value', 'triggerValue', 'filterValue',
+    'triggerValue', 'filterValue',
     'formId', 'formName', 'tagId', 'tagName', 'tag',
     'pipelineId', 'pipelineName', 'stageId', 'stageName',
     'pipelineStageId', 'surveyId', 'surveyName',
@@ -81,6 +81,9 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     'id', '_id', 'type', 'triggerType', 'event', 'name', 'triggerName',
     'createdAt', 'updatedAt', 'locationId', 'workflowId', '__v', 'raw',
     'filters', 'data', 'config', 'settings', 'options', 'properties', 'metadata',
+    'created_at', 'updated_at', 'createdTs', 'updatedTs', 'timestamp',
+    'modifiedAt', 'modified_at', 'lastModified', 'dateCreated', 'dateUpdated',
+    'dateAdded', 'dateModified', 'version', 'order', 'priority',
   ]);
   for (const [key, val] of Object.entries(trigger)) {
     if (skipKeys.has(key)) continue;
@@ -317,12 +320,12 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           let mergedTriggers: GHLWorkflow['triggers'];
           if (backendTriggers.length > 0) {
             mergedTriggers = backendTriggers.map(t => ({
+              ...t,  // Raw data as base (preserves all fields for raw_json)
               id: (t.id || t._id) as string | undefined,
               type: (t.type || t.triggerType || t.event) as string | undefined,
               name: (t.name || t.triggerName || t.type) as string | undefined,
               value: extractTriggerValue(t as Record<string, unknown>) || undefined,
               filters: Array.isArray(t.filters) ? t.filters as Record<string, unknown>[] : undefined,
-              ...t,
             }));
           } else {
             mergedTriggers = parsed.triggers.length > 0

@@ -651,3 +651,192 @@ export async function computeFunnelProgression(): Promise<{ computed: number; er
     return { computed: 0, errors };
   }
 }
+
+// ---- Custom Fields Sync ----
+
+export async function syncCustomFields(): Promise<{ synced: number; errors: string[] }> {
+  const ghl = new GHLClient();
+  const supabase = getSupabaseClient();
+  const now = nowET();
+  let synced = 0;
+  const errors: string[] = [];
+  const syncLogId = await logSyncStart('custom_fields');
+
+  try {
+    const customFields = await ghl.getCustomFields();
+
+    for (const cf of customFields) {
+      try {
+        await supabase.from('custom_fields').upsert(
+          {
+            ghl_field_id: cf.id,
+            ghl_location_id: ghl.getLocationId(),
+            name: cf.name,
+            field_key: cf.fieldKey || null,
+            data_type: cf.dataType || null,
+            placeholder: cf.placeholder || null,
+            position: cf.position ?? null,
+            model: cf.model || null,
+            raw_json: cf,
+            synced_at: now,
+            updated_at: now,
+          },
+          { onConflict: 'ghl_field_id' },
+        );
+        synced++;
+      } catch (err) {
+        errors.push(`CustomField ${cf.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    await logSyncComplete(syncLogId, synced);
+    await updateLastSynced('custom_fields');
+    console.log(`[EntitySync] Custom fields synced: ${synced}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Fatal: ${msg}`);
+    await logSyncFailed(syncLogId, msg);
+    console.error(`[EntitySync] Custom fields sync failed: ${msg}`);
+  }
+
+  return { synced, errors };
+}
+
+// ---- Custom Values Sync ----
+
+export async function syncCustomValues(): Promise<{ synced: number; errors: string[] }> {
+  const ghl = new GHLClient();
+  const supabase = getSupabaseClient();
+  const now = nowET();
+  let synced = 0;
+  const errors: string[] = [];
+  const syncLogId = await logSyncStart('custom_values');
+
+  try {
+    const customValues = await ghl.getCustomValues();
+
+    for (const cv of customValues) {
+      try {
+        await supabase.from('custom_values').upsert(
+          {
+            ghl_value_id: cv.id,
+            ghl_location_id: ghl.getLocationId(),
+            name: cv.name,
+            field_key: cv.fieldKey || null,
+            value: cv.value || null,
+            raw_json: cv,
+            synced_at: now,
+            updated_at: now,
+          },
+          { onConflict: 'ghl_value_id' },
+        );
+        synced++;
+      } catch (err) {
+        errors.push(`CustomValue ${cv.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    await logSyncComplete(syncLogId, synced);
+    await updateLastSynced('custom_values');
+    console.log(`[EntitySync] Custom values synced: ${synced}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Fatal: ${msg}`);
+    await logSyncFailed(syncLogId, msg);
+    console.error(`[EntitySync] Custom values sync failed: ${msg}`);
+  }
+
+  return { synced, errors };
+}
+
+// ---- Tags Sync ----
+
+export async function syncTags(): Promise<{ synced: number; errors: string[] }> {
+  const ghl = new GHLClient();
+  const supabase = getSupabaseClient();
+  const now = nowET();
+  let synced = 0;
+  const errors: string[] = [];
+  const syncLogId = await logSyncStart('tags');
+
+  try {
+    const tags = await ghl.getTags();
+
+    for (const tag of tags) {
+      try {
+        await supabase.from('tags').upsert(
+          {
+            ghl_tag_id: tag.id,
+            ghl_location_id: ghl.getLocationId(),
+            name: tag.name,
+            raw_json: tag,
+            synced_at: now,
+            updated_at: now,
+          },
+          { onConflict: 'ghl_tag_id' },
+        );
+        synced++;
+      } catch (err) {
+        errors.push(`Tag ${tag.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    await logSyncComplete(syncLogId, synced);
+    await updateLastSynced('tags');
+    console.log(`[EntitySync] Tags synced: ${synced}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Fatal: ${msg}`);
+    await logSyncFailed(syncLogId, msg);
+    console.error(`[EntitySync] Tags sync failed: ${msg}`);
+  }
+
+  return { synced, errors };
+}
+
+// ---- Trigger Links Sync ----
+
+export async function syncTriggerLinks(): Promise<{ synced: number; errors: string[] }> {
+  const ghl = new GHLClient();
+  const supabase = getSupabaseClient();
+  const now = nowET();
+  let synced = 0;
+  const errors: string[] = [];
+  const syncLogId = await logSyncStart('trigger_links');
+
+  try {
+    const links = await ghl.getLinks();
+
+    for (const link of links) {
+      try {
+        await supabase.from('trigger_links').upsert(
+          {
+            ghl_link_id: link.id,
+            ghl_location_id: ghl.getLocationId(),
+            name: link.name || null,
+            redirect_to: link.redirectTo || null,
+            url: link.url || null,
+            raw_json: link,
+            synced_at: now,
+            updated_at: now,
+          },
+          { onConflict: 'ghl_link_id' },
+        );
+        synced++;
+      } catch (err) {
+        errors.push(`Link ${link.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    await logSyncComplete(syncLogId, synced);
+    await updateLastSynced('trigger_links');
+    console.log(`[EntitySync] Trigger links synced: ${synced}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`Fatal: ${msg}`);
+    await logSyncFailed(syncLogId, msg);
+    console.error(`[EntitySync] Trigger links sync failed: ${msg}`);
+  }
+
+  return { synced, errors };
+}
