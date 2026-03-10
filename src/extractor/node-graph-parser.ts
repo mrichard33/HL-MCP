@@ -48,6 +48,17 @@ function findNodes(rawJson: Record<string, unknown>): GHLWorkflowNode[] {
   if (rawJson.workflowData && typeof rawJson.workflowData === 'object') {
     const wd = rawJson.workflowData as Record<string, unknown>;
     if (Array.isArray(wd.nodes)) return wd.nodes;
+    // GHL stores workflow steps as "templates" in the internal API
+    if (Array.isArray(wd.templates) && wd.templates.length > 0) {
+      // Map templates to node-like objects: attributes → data for downstream parsing
+      return wd.templates.map((t: unknown) => {
+        const tmpl = t as Record<string, unknown>;
+        return {
+          ...tmpl,
+          data: tmpl.attributes || tmpl.data || {},
+        } as GHLWorkflowNode;
+      });
+    }
     // workflowData may itself contain a nested workflow/data key
     if (wd.workflow && typeof wd.workflow === 'object') {
       const inner = wd.workflow as Record<string, unknown>;
@@ -262,6 +273,30 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
   if (edges.length === 0 && nodes.length > 1) {
     for (const node of nodes) {
       const nodeData = (node.data || {}) as Record<string, unknown>;
+
+      // Check top-level "next" field (GHL templates format: string or array)
+      const nodeNext = (node as Record<string, unknown>).next;
+      if (typeof nodeNext === 'string' && nodeNext) {
+        result.connections.push({
+          fromStep: node.id,
+          toStep: nodeNext,
+        });
+      } else if (Array.isArray(nodeNext)) {
+        // if_else branches: next is an array of target IDs
+        const branches = (nodeData.branches || []) as Record<string, unknown>[];
+        for (let i = 0; i < nodeNext.length; i++) {
+          const branchId = nodeNext[i] as string;
+          if (!branchId) continue;
+          const branchName = branches[i] ? (branches[i].name as string) : undefined;
+          const condition = branchName || (i >= branches.length ? 'Default' : undefined);
+          result.connections.push({
+            fromStep: node.id,
+            toStep: branchId,
+            condition,
+          });
+        }
+      }
+
       // Check for next/target references in node data
       const nextId = (nodeData.nextStep || nodeData.nextNode || nodeData.target) as string;
       if (nextId) {
@@ -270,7 +305,7 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
           toStep: nextId,
         });
       }
-      // Check for branches
+      // Check for branches in node data
       if (Array.isArray(nodeData.branches)) {
         for (const branch of nodeData.branches) {
           const b = branch as Record<string, unknown>;
@@ -282,6 +317,14 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
             });
           }
         }
+      }
+
+      // Handle goto targets
+      if (node.type === 'goto' && nodeData.targetNodeId) {
+        result.connections.push({
+          fromStep: node.id,
+          toStep: nodeData.targetNodeId as string,
+        });
       }
     }
   }
