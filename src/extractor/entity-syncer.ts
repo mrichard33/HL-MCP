@@ -2,6 +2,7 @@ import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { createLeadEvent } from '../webhooks/handler.js';
 import { nowET, toET } from '../utils/timezone.js';
+import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 
 // ---- Sync State Helpers ----
 
@@ -97,7 +98,7 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
 
         const stableTs = c.dateUpdated || c.dateAdded;
         if (stableTs) {
-          const eventType = c.dateAdded === c.dateUpdated ? 'contact_created' : 'contact_updated';
+          const eventType = deriveContactEventType({ dateAdded: c.dateAdded, dateUpdated: c.dateUpdated });
           await createLeadEvent(c.id, eventType, c.id, stableTs, c);
         }
       } catch (err) {
@@ -190,8 +191,8 @@ export async function syncAppointments(options?: {
 
   try {
     // Fetch appointments across ALL calendars (calendarId is required by GHL API)
-    // Default: 24h back to 30d forward (for scheduled sync); callers can override for initial population
-    const startTime = options?.startTime ?? toET(Date.now() - 24 * 60 * 60 * 1000);
+    // Default: 2 weeks back to 30d forward (for scheduled sync); callers can override for initial population
+    const startTime = options?.startTime ?? toET(Date.now() - 14 * 24 * 60 * 60 * 1000);
     const endTime = options?.endTime ?? toET(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const events = await ghl.getAllAppointments({ startTime, endTime });
     if (events.length === 0) {
@@ -220,10 +221,7 @@ export async function syncAppointments(options?: {
           { onConflict: 'ghl_appointment_id' },
         );
 
-        const eventType = apt.status === 'showed' ? 'appointment_showed' :
-                          apt.status === 'noshow' ? 'appointment_noshow' :
-                          apt.status === 'cancelled' ? 'appointment_cancelled' :
-                          'appointment_booked';
+        const eventType = deriveAppointmentEventType(apt.status);
         if (apt.startTime) {
           await createLeadEvent(apt.contactId, eventType, apt.id, apt.startTime, apt);
         }
@@ -324,13 +322,7 @@ async function createLeadEventsForRecentMessages(): Promise<number> {
   let created = 0;
   for (const msg of recentMessages) {
     try {
-      const msgType = msg.type || 'sms';
-      let eventType: string;
-      if (msg.direction === 'inbound') {
-        eventType = msgType === 'email' ? 'email_received' : 'sms_received';
-      } else {
-        eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
-      }
+      const eventType = deriveMessageEventType({ direction: msg.direction, type: msg.type, status: msg.status });
       await createLeadEvent(msg.ghl_contact_id, eventType, msg.ghl_message_id, msg.sent_at || nowET(), msg);
       created++;
     } catch {

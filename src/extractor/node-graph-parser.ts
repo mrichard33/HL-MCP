@@ -55,11 +55,44 @@ function findNodes(rawJson: Record<string, unknown>): GHLWorkflowNode[] {
     }
   }
 
+  // Check under graph key
+  if (rawJson.graph && typeof rawJson.graph === 'object') {
+    const g = rawJson.graph as Record<string, unknown>;
+    if (Array.isArray(g.nodes)) return g.nodes;
+  }
+
+  // Check for direct steps array (some GHL versions use steps instead of nodes)
+  if (Array.isArray(rawJson.steps) && rawJson.steps.length > 0 && (rawJson.steps[0] as Record<string, unknown>)?.id) {
+    console.warn(`[NodeGraphParser] Found node-like data under "steps" (${rawJson.steps.length} items)`);
+    return rawJson.steps as GHLWorkflowNode[];
+  }
+
   // Search for any array of objects that look like nodes (have id and type)
   for (const [key, value] of Object.entries(rawJson)) {
     if (Array.isArray(value) && value.length > 0 && value[0]?.id && value[0]?.type) {
       console.warn(`[NodeGraphParser] Found node-like array under key "${key}" with ${value.length} items`);
       return value;
+    }
+  }
+
+  // Deep search: check ALL top-level object values for a nested nodes array
+  for (const [key, value] of Object.entries(rawJson)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = value as Record<string, unknown>;
+      if (Array.isArray(nested.nodes) && nested.nodes.length > 0) {
+        console.warn(`[NodeGraphParser] Found nodes under "${key}.nodes" (${nested.nodes.length} items)`);
+        return nested.nodes;
+      }
+      // Two levels deep
+      for (const [subKey, subValue] of Object.entries(nested)) {
+        if (subValue && typeof subValue === 'object' && !Array.isArray(subValue)) {
+          const deep = subValue as Record<string, unknown>;
+          if (Array.isArray(deep.nodes) && deep.nodes.length > 0) {
+            console.warn(`[NodeGraphParser] Found nodes under "${key}.${subKey}.nodes" (${deep.nodes.length} items)`);
+            return deep.nodes;
+          }
+        }
+      }
     }
   }
 
@@ -97,6 +130,29 @@ function findEdges(rawJson: Record<string, unknown>): GHLWorkflowEdge[] {
 
   // Also check for "connections" as alternate key name
   if (Array.isArray(rawJson.connections)) return rawJson.connections;
+
+  // Check under graph key
+  if (rawJson.graph && typeof rawJson.graph === 'object') {
+    const g = rawJson.graph as Record<string, unknown>;
+    if (Array.isArray(g.edges)) return g.edges;
+    if (Array.isArray(g.connections)) return g.connections as GHLWorkflowEdge[];
+  }
+
+  // Deep search: check ALL top-level object values for nested edges
+  for (const [, value] of Object.entries(rawJson)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = value as Record<string, unknown>;
+      if (Array.isArray(nested.edges) && nested.edges.length > 0) return nested.edges;
+      if (Array.isArray(nested.connections) && nested.connections.length > 0) return nested.connections as GHLWorkflowEdge[];
+      // Two levels deep
+      for (const [, subValue] of Object.entries(nested)) {
+        if (subValue && typeof subValue === 'object' && !Array.isArray(subValue)) {
+          const deep = subValue as Record<string, unknown>;
+          if (Array.isArray(deep.edges) && deep.edges.length > 0) return deep.edges;
+        }
+      }
+    }
+  }
 
   return [];
 }
