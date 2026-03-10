@@ -105,7 +105,8 @@ export async function softDeleteMissing(
 
   const activeSet = new Set(activeGhlIds);
   const toDelete = existingRows
-    .map((r: Record<string, unknown>) => r[ghlIdColumn] as string)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((r: any) => r[ghlIdColumn] as string)
     .filter((id: string) => !activeSet.has(id));
 
   if (toDelete.length === 0) return { deleted: 0, restored };
