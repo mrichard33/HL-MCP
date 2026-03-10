@@ -112,6 +112,9 @@ export class GHLClient {
 
     if (!response.ok) {
       const errorBody = await response.text();
+      if (response.status === 401 || response.status === 403) {
+        console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
+      }
       throw new Error(`GHL API error ${response.status}: ${errorBody}`);
     }
 
