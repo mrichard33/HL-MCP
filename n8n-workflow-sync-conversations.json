@@ -1,0 +1,352 @@
+{
+  "name": "Sync GHL Conversations & Messages to Supabase",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hl-conversations",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "id": "e02361d9-e225-4d8b-a119-1abbaefa6401",
+      "name": "Webhook",
+      "webhookId": "ac512955-0c37-485a-b559-0e943f5b4f7d"
+    },
+    {
+      "parameters": {
+        "url": "https://xmwhxfrzswgarspchura.supabase.co/rest/v1/contacts?select=ghl_contact_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [220, 0],
+      "id": "b1a1c001-0001-4000-8000-000000000001",
+      "name": "Get Contacts from Supabase",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": ""
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Supabase REST API returns an array directly\nconst items = $input.all();\nconst allContacts = [];\n\nfor (const item of items) {\n  // The response could be an array at the top level or nested\n  const data = Array.isArray(item.json) ? item.json : (item.json.body || [item.json]);\n  for (const contact of data) {\n    if (contact.ghl_contact_id) {\n      allContacts.push({ json: { ghl_contact_id: contact.ghl_contact_id } });\n    }\n  }\n}\n\nif (allContacts.length === 0) {\n  return [{ json: { _no_contacts: true, synced_conversations: 0, synced_messages: 0 } }];\n}\n\nconsole.log(`Found ${allContacts.length} contacts to process`);\nreturn allContacts;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "id": "b1a1c001-0002-4000-8000-000000000002",
+      "name": "Split Contacts"
+    },
+    {
+      "parameters": {
+        "url": "=https://services.leadconnectorhq.com/conversations/search?contactId={{ $json.ghl_contact_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "highLevelOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [660, 0],
+      "id": "7905f17c-3304-4af0-baab-129cd0dfcaa4",
+      "name": "Get Conversations for Contact",
+      "credentials": {
+        "highLevelOAuth2Api": {
+          "id": "kVeAssiD7UmbKvAM",
+          "name": "HighLevel OAuth2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all conversations from all contact responses\nconst allConversations = [];\n\nfor (const item of $input.all()) {\n  const conversations = item.json.conversations || [];\n  for (const c of conversations) {\n    allConversations.push({\n      json: {\n        ghl_conversation_id: c.id,\n        ghl_contact_id: c.contactId,\n        ghl_location_id: c.locationId || null,\n        type: c.type || 'sms',\n        status: 'open',\n        last_message_at: c.lastMessageDate || null,\n        unread_count: c.unreadCount || 0,\n        synced_at: new Date().toISOString(),\n      }\n    });\n  }\n}\n\nif (allConversations.length === 0) {\n  return [{ json: { _no_conversations: true, synced_conversations: 0, synced_messages: 0 } }];\n}\n\nconsole.log(`Found ${allConversations.length} conversations to sync`);\nreturn allConversations;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "id": "b1a1c001-0003-4000-8000-000000000003",
+      "name": "Map Conversations"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://xmwhxfrzswgarspchura.supabase.co/rest/v1/conversations?on_conflict=ghl_conversation_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ ghl_conversation_id: $json.ghl_conversation_id, ghl_contact_id: $json.ghl_contact_id, ghl_location_id: $json.ghl_location_id, type: $json.type, status: $json.status, last_message_at: $json.last_message_at, unread_count: $json.unread_count, synced_at: $json.synced_at }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1100, 0],
+      "id": "b1a1c001-0004-4000-8000-000000000004",
+      "name": "Upsert Conversations to Supabase",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://services.leadconnectorhq.com/conversations/{{ $('Map Conversations').item.json.ghl_conversation_id }}/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "highLevelOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1320, 0],
+      "id": "90d7829d-249d-44fc-acd2-dd11ff2b002d",
+      "name": "Get Messages for Conversation",
+      "credentials": {
+        "highLevelOAuth2Api": {
+          "id": "kVeAssiD7UmbKvAM",
+          "name": "HighLevel OAuth2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all messages from all conversation responses\nconst allMessages = [];\n\nfor (const item of $input.all()) {\n  const messages = item.json.messages || [];\n  for (const m of messages) {\n    // Determine direction\n    let direction = 'outbound';\n    if (m.direction === 'inbound' || m.direction === 1) {\n      direction = 'inbound';\n    } else if (m.direction === 'outbound' || m.direction === 2) {\n      direction = 'outbound';\n    }\n\n    // Determine message type\n    let type = 'sms';\n    if (m.type) {\n      type = String(m.type).toLowerCase();\n    } else if (m.messageType === 2) {\n      type = 'email';\n    }\n\n    allMessages.push({\n      json: {\n        ghl_message_id: m.id,\n        ghl_conversation_id: m.conversationId,\n        ghl_contact_id: m.contactId || null,\n        direction: direction,\n        type: type,\n        body: m.body || null,\n        status: m.status || 'delivered',\n        sent_at: m.dateAdded || new Date().toISOString(),\n      }\n    });\n  }\n}\n\nif (allMessages.length === 0) {\n  return [{ json: { _no_messages: true, synced_messages: 0 } }];\n}\n\nconsole.log(`Found ${allMessages.length} messages to sync`);\nreturn allMessages;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0],
+      "id": "b1a1c001-0005-4000-8000-000000000005",
+      "name": "Map Messages"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://xmwhxfrzswgarspchura.supabase.co/rest/v1/messages?on_conflict=ghl_message_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ ghl_message_id: $json.ghl_message_id, ghl_conversation_id: $json.ghl_conversation_id, ghl_contact_id: $json.ghl_contact_id, direction: $json.direction, type: $json.type, body: $json.body, status: $json.status, sent_at: $json.sent_at }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1760, 0],
+      "id": "b1a1c001-0006-4000-8000-000000000006",
+      "name": "Upsert Messages to Supabase",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": ""
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Count items that passed through the pipeline\nlet syncedConversations = 0;\nlet syncedMessages = 0;\n\ntry {\n  const convItems = $('Map Conversations').all();\n  syncedConversations = convItems.filter(i => !i.json._no_conversations).length;\n} catch (e) {\n  // Node may not have run\n}\n\ntry {\n  const msgItems = $('Map Messages').all();\n  syncedMessages = msgItems.filter(i => !i.json._no_messages).length;\n} catch (e) {\n  // Node may not have run\n}\n\nreturn [{\n  json: {\n    synced_conversations: syncedConversations,\n    synced_messages: syncedMessages,\n    completed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 0],
+      "id": "b1a1c001-0007-4000-8000-000000000007",
+      "name": "Aggregate Counts"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Contacts from Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Contacts from Supabase": {
+      "main": [
+        [
+          {
+            "node": "Split Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Contacts": {
+      "main": [
+        [
+          {
+            "node": "Get Conversations for Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Conversations for Contact": {
+      "main": [
+        [
+          {
+            "node": "Map Conversations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Conversations": {
+      "main": [
+        [
+          {
+            "node": "Upsert Conversations to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Conversations to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Get Messages for Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Messages for Conversation": {
+      "main": [
+        [
+          {
+            "node": "Map Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Messages": {
+      "main": [
+        [
+          {
+            "node": "Upsert Messages to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Messages to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Counts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [
+    {
+      "id": "xrjdFtVcM4TgXno6",
+      "name": "HighLevel"
+    }
+  ]
+}

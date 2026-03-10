@@ -317,12 +317,17 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
   const syncLogId = await logSyncStart('conversations');
 
+  // 5-minute timeout — the n8n workflow loops through all contacts/conversations
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
   try {
     console.error('[EntitySync] Triggering n8n conversations/messages sync webhook...');
     const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ triggered_by: 'mcp-server', timestamp: new Date().toISOString() }),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -349,6 +354,8 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     await logSyncFailed(syncLogId, msg);
     console.error(`[EntitySync] Conversation sync failed: ${msg}`);
     return { synced_conversations: 0, synced_messages: 0, errors: [msg] };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
