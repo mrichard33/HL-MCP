@@ -104,21 +104,33 @@ export class GHLClient {
       Version: '2021-07-28',
     };
 
-    const response = await fetch(url.toString(), {
-      method: options.method || 'GET',
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await fetch(url.toString(), {
+        method: options.method || 'GET',
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      if (response.status === 401 || response.status === 403) {
-        console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
+      if (response.status === 429) {
+        const retryAfter = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+        console.warn(`[GHL] 429 rate limited on ${path}, retrying in ${retryAfter}ms (attempt ${attempt + 1}/3)`);
+        await new Promise(r => setTimeout(r, retryAfter));
+        lastError = new Error(`GHL API error 429: Too Many Requests`);
+        continue;
       }
-      throw new Error(`GHL API error ${response.status}: ${errorBody}`);
-    }
 
-    return response.json() as Promise<T>;
+      if (!response.ok) {
+        const errorBody = await response.text();
+        if (response.status === 401 || response.status === 403) {
+          console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
+        }
+        throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+      }
+
+      return response.json() as Promise<T>;
+    }
+    throw lastError!;
   }
 
   /** Whether GHL OAuth is configured for conversation/message API access. */
