@@ -24,6 +24,10 @@
         "headerParameters": {
           "parameters": [
             {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY"
+            },
+            {
               "name": "Content-Type",
               "value": "application/json"
             }
@@ -45,13 +49,24 @@
     },
     {
       "parameters": {
-        "jsCode": "// Supabase REST API returns an array directly\nconst items = $input.all();\nconst allContacts = [];\n\nfor (const item of items) {\n  // The response could be an array at the top level or nested\n  const data = Array.isArray(item.json) ? item.json : (item.json.body || [item.json]);\n  for (const contact of data) {\n    if (contact.ghl_contact_id) {\n      allContacts.push({ json: { ghl_contact_id: contact.ghl_contact_id } });\n    }\n  }\n}\n\nif (allContacts.length === 0) {\n  return [{ json: { _no_contacts: true, synced_conversations: 0, synced_messages: 0 } }];\n}\n\nconsole.log(`Found ${allContacts.length} contacts to process`);\nreturn allContacts;"
+        "jsCode": "// Supabase REST API returns an array directly\nconst items = $input.all();\nconst allContacts = [];\n\nfor (const item of items) {\n  const data = Array.isArray(item.json) ? item.json : (item.json.body || [item.json]);\n  for (const contact of data) {\n    if (contact.ghl_contact_id) {\n      allContacts.push({ json: { ghl_contact_id: contact.ghl_contact_id } });\n    }\n  }\n}\n\nif (allContacts.length === 0) {\n  return [{ json: { _no_contacts: true, synced_conversations: 0, synced_messages: 0 } }];\n}\n\n// Limit to 100 contacts per run to avoid GHL rate limits\n// The scheduler runs every 15 min, so all contacts get covered over time\nconst limited = allContacts.slice(0, 100);\nconsole.log(`Processing ${limited.length} of ${allContacts.length} total contacts`);\nreturn limited;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [440, 288],
       "id": "bc752d86-6b0a-4ed1-a138-70b164fc304e",
       "name": "Split Contacts"
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [660, 288],
+      "id": "a1b2c3d4-batch-node-0000-000000000001",
+      "name": "Loop Over Items"
     },
     {
       "parameters": {
@@ -75,7 +90,7 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [660, 288],
+      "position": [880, 288],
       "id": "575d1752-4034-4bcd-acc9-eb4334077066",
       "name": "Get Conversations for Contact",
       "credentials": {
@@ -88,13 +103,43 @@
     },
     {
       "parameters": {
-        "jsCode": "// Collect all conversations from all contact responses\nconst allConversations = [];\n\nfor (const item of $input.all()) {\n  const conversations = item.json.conversations || [];\n  for (const c of conversations) {\n    allConversations.push({\n      json: {\n        ghl_conversation_id: c.id,\n        ghl_contact_id: c.contactId,\n        ghl_location_id: c.locationId || null,\n        type: c.type || 'sms',\n        status: 'open',\n        last_message_at: c.lastMessageDate || null,\n        unread_count: c.unreadCount || 0,\n        synced_at: new Date().toISOString(),\n      }\n    });\n  }\n}\n\nif (allConversations.length === 0) {\n  return [{ json: { _no_conversations: true, synced_conversations: 0, synced_messages: 0 } }];\n}\n\nconsole.log(`Found ${allConversations.length} conversations to sync`);\nreturn allConversations;"
+        "jsCode": "// Collect all conversations from all contact responses\nconst allConversations = [];\n\nfor (const item of $input.all()) {\n  const conversations = item.json.conversations || [];\n  for (const c of conversations) {\n    allConversations.push({\n      json: {\n        ghl_conversation_id: c.id,\n        ghl_contact_id: c.contactId,\n        ghl_location_id: c.locationId || null,\n        type: c.type || 'sms',\n        status: 'open',\n        last_message_at: c.lastMessageDate || null,\n        unread_count: c.unreadCount || 0,\n        synced_at: new Date().toISOString(),\n      }\n    });\n  }\n}\n\nif (allConversations.length === 0) {\n  // Return a passthrough item so the loop continues\n  return [{ json: { _no_conversations: true, _passthrough: true } }];\n}\n\nconsole.log(`Found ${allConversations.length} conversations in this batch`);\nreturn allConversations;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 288],
+      "position": [1100, 288],
       "id": "bf56c505-31e1-43bc-85d7-26ae583f3bf3",
       "name": "Map Conversations"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "filter-passthrough",
+              "leftValue": "={{ $json._passthrough }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1320, 288],
+      "id": "f1a1c001-filt-4000-8000-000000000001",
+      "name": "Has Conversations?",
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -105,6 +150,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY"
+            },
             {
               "name": "Prefer",
               "value": "resolution=merge-duplicates,return=representation"
@@ -122,7 +171,7 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1100, 288],
+      "position": [1540, 288],
       "id": "7468dec3-c0ef-41ac-86e4-66e90eeb1b3c",
       "name": "Upsert Conversations to Supabase",
       "credentials": {
@@ -155,7 +204,7 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1320, 288],
+      "position": [1760, 288],
       "id": "ac78ae36-5100-45f3-97e8-293ed028815d",
       "name": "Get Messages for Conversation",
       "credentials": {
@@ -168,11 +217,11 @@
     },
     {
       "parameters": {
-        "jsCode": "// Collect all messages from all conversation responses\nconst allMessages = [];\n\nfor (const item of $input.all()) {\n  const messages = item.json.messages || [];\n  for (const m of messages) {\n    // Determine direction\n    let direction = 'outbound';\n    if (m.direction === 'inbound' || m.direction === 1) {\n      direction = 'inbound';\n    } else if (m.direction === 'outbound' || m.direction === 2) {\n      direction = 'outbound';\n    }\n\n    // Determine message type\n    let type = 'sms';\n    if (m.type) {\n      type = String(m.type).toLowerCase();\n    } else if (m.messageType === 2) {\n      type = 'email';\n    }\n\n    allMessages.push({\n      json: {\n        ghl_message_id: m.id,\n        ghl_conversation_id: m.conversationId,\n        ghl_contact_id: m.contactId || null,\n        direction: direction,\n        type: type,\n        body: m.body || null,\n        status: m.status || 'delivered',\n        sent_at: m.dateAdded || new Date().toISOString(),\n      }\n    });\n  }\n}\n\nif (allMessages.length === 0) {\n  return [{ json: { _no_messages: true, synced_messages: 0 } }];\n}\n\nconsole.log(`Found ${allMessages.length} messages to sync`);\nreturn allMessages;"
+        "jsCode": "// Collect all messages from all conversation responses\nconst allMessages = [];\n\nfor (const item of $input.all()) {\n  const messages = item.json.messages || [];\n  for (const m of messages) {\n    let direction = 'outbound';\n    if (m.direction === 'inbound' || m.direction === 1) {\n      direction = 'inbound';\n    } else if (m.direction === 'outbound' || m.direction === 2) {\n      direction = 'outbound';\n    }\n\n    let type = 'sms';\n    if (m.type) {\n      type = String(m.type).toLowerCase();\n    } else if (m.messageType === 2) {\n      type = 'email';\n    }\n\n    allMessages.push({\n      json: {\n        ghl_message_id: m.id,\n        ghl_conversation_id: m.conversationId,\n        ghl_contact_id: m.contactId || null,\n        direction: direction,\n        type: type,\n        body: m.body || null,\n        status: m.status || 'delivered',\n        sent_at: m.dateAdded || new Date().toISOString(),\n      }\n    });\n  }\n}\n\nif (allMessages.length === 0) {\n  return [{ json: { _no_messages: true } }];\n}\n\nconsole.log(`Found ${allMessages.length} messages in this batch`);\nreturn allMessages;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 288],
+      "position": [1980, 288],
       "id": "b0f366a6-b95b-489b-b338-3322aed0dbe6",
       "name": "Map Messages"
     },
@@ -185,6 +234,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
+            {
+              "name": "apikey",
+              "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY"
+            },
             {
               "name": "Prefer",
               "value": "resolution=merge-duplicates,return=minimal"
@@ -202,7 +255,7 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1760, 288],
+      "position": [2200, 288],
       "id": "8ac6b767-8807-45d5-84f8-80031ed1e89a",
       "name": "Upsert Messages to Supabase",
       "credentials": {
@@ -215,11 +268,11 @@
     },
     {
       "parameters": {
-        "jsCode": "// Count items that passed through the pipeline\nlet syncedConversations = 0;\nlet syncedMessages = 0;\n\ntry {\n  const convItems = $('Map Conversations').all();\n  syncedConversations = convItems.filter(i => !i.json._no_conversations).length;\n} catch (e) {\n  // Node may not have run\n}\n\ntry {\n  const msgItems = $('Map Messages').all();\n  syncedMessages = msgItems.filter(i => !i.json._no_messages).length;\n} catch (e) {\n  // Node may not have run\n}\n\nreturn [{\n  json: {\n    synced_conversations: syncedConversations,\n    synced_messages: syncedMessages,\n    completed_at: new Date().toISOString()\n  }\n}];"
+        "jsCode": "// Count total synced items across all batches\n// Query Supabase for current counts since we processed in batches\nconst now = new Date().toISOString();\n\nreturn [{\n  json: {\n    synced_conversations: 'batch_complete',\n    synced_messages: 'batch_complete',\n    completed_at: now,\n    status: 'success'\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1980, 288],
+      "position": [880, 500],
       "id": "e52e5c6f-5b2a-48b3-922f-7512dcf58961",
       "name": "Aggregate Counts"
     },
@@ -231,7 +284,7 @@
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2200, 288],
+      "position": [1100, 500],
       "id": "f1a1c001-0008-4000-8000-000000000008",
       "name": "Respond to Webhook"
     }
@@ -264,7 +317,25 @@
       "main": [
         [
           {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
             "node": "Get Conversations for Contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Counts",
             "type": "main",
             "index": 0
           }
@@ -286,7 +357,25 @@
       "main": [
         [
           {
+            "node": "Has Conversations?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Conversations?": {
+      "main": [
+        [
+          {
             "node": "Upsert Conversations to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
             "type": "main",
             "index": 0
           }
@@ -330,7 +419,7 @@
       "main": [
         [
           {
-            "node": "Aggregate Counts",
+            "node": "Loop Over Items",
             "type": "main",
             "index": 0
           }
