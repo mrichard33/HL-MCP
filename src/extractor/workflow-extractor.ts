@@ -137,6 +137,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         result.workflows_synced++;
 
         // 4. Check for version changes and create snapshot
+        // Only create a new snapshot if the workflow content actually changed
         const { data: existingSnapshots } = await supabase
           .from('workflow_snapshots')
           .select('version, json_structure')
@@ -144,12 +145,18 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           .order('version', { ascending: false })
           .limit(1);
 
-        const currentVersion = workflowDetail.version || 1;
         const latestSnapshot = existingSnapshots?.[0];
 
-        if (!latestSnapshot ||
-            latestSnapshot.version !== currentVersion ||
-            JSON.stringify(latestSnapshot.json_structure) !== JSON.stringify(rawJson)) {
+        // Deep-compare by sorting keys recursively to handle JSONB key reordering
+        const stableStringify = (obj: unknown): string => JSON.stringify(obj, (_key, value) =>
+          value && typeof value === 'object' && !Array.isArray(value)
+            ? Object.keys(value).sort().reduce((sorted: Record<string, unknown>, k) => { sorted[k] = value[k]; return sorted; }, {})
+            : value
+        );
+        const normalizedExisting = latestSnapshot ? stableStringify(latestSnapshot.json_structure) : null;
+        const normalizedNew = stableStringify(rawJson);
+
+        if (!latestSnapshot || normalizedExisting !== normalizedNew) {
           const newVersion = latestSnapshot ? latestSnapshot.version + 1 : 1;
           await supabase.from('workflow_snapshots').insert({
             workflow_id: workflowDetail.id,

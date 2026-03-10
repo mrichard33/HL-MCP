@@ -555,7 +555,9 @@ export class GHLClient {
       locationId: this.locationId,
     };
     const res = await this.request<{ calendars: GHLCalendar[] }>('/calendars/', { params });
-    return res.calendars;
+    const keys = Object.keys(res || {});
+    console.log(`[GHL] getCalendars response keys: [${keys.join(', ')}], calendars count: ${(res.calendars || []).length}, raw preview: ${JSON.stringify(res).substring(0, 500)}`);
+    return res.calendars || [];
   }
 
   async getAppointments(params?: {
@@ -571,7 +573,10 @@ export class GHLClient {
     if (params?.startTime) reqParams.startTime = params.startTime;
     if (params?.endTime) reqParams.endTime = params.endTime;
     if (params?.limit) reqParams.limit = String(params.limit);
-    return this.request('/calendars/events', { params: reqParams });
+    const result = await this.request<{ events: GHLAppointment[] }>('/calendars/events', { params: reqParams });
+    const keys = Object.keys(result || {});
+    console.log(`[GHL] getAppointments response keys: [${keys.join(', ')}], events count: ${(result.events || []).length}, raw preview: ${JSON.stringify(result).substring(0, 500)}`);
+    return { events: result.events || [] };
   }
 
   /** Fetch ALL appointments across all calendars. */
