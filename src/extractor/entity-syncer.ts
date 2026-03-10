@@ -276,8 +276,8 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 
 // ---- Conversation & Message Sync (every 15 min) — direct GHL OAuth calls ----
 
-const BATCH_SIZE = 10;
-const BATCH_DELAY_MS = 1000; // 1s pause between batches to stay under GHL rate limits
+const BATCH_SIZE = 5;
+const BATCH_DELAY_MS = 2000; // 2s pause between batches to stay under GHL rate limits
 const MAX_CONTACTS_PER_SYNC = 100; // Limit per run to avoid timeouts
 
 /** Small helper to pause between batches. */
@@ -389,8 +389,23 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
               // Fetch and upsert messages for this conversation
               try {
-                const { messages } = await ghl.getMessages(conv.id);
-                for (const msg of messages || []) {
+                const msgResponse = await ghl.getMessages(conv.id);
+
+                // Debug: log response shape on first conversation to diagnose API format
+                if (convCount === 1 && i === 0) {
+                  console.error(`[EntitySync] DEBUG getMessages response keys: ${JSON.stringify(Object.keys(msgResponse))}`);
+                  if (msgResponse.messages && !Array.isArray(msgResponse.messages)) {
+                    console.error(`[EntitySync] DEBUG messages type: ${typeof msgResponse.messages}, keys: ${JSON.stringify(Object.keys(msgResponse.messages as any))}`);
+                  }
+                }
+
+                // Handle various response shapes from GHL API
+                const messageList = Array.isArray(msgResponse.messages)
+                  ? msgResponse.messages
+                  : Array.isArray((msgResponse as any).messages?.messages)
+                    ? (msgResponse as any).messages.messages
+                    : [];
+                for (const msg of messageList) {
                   await supabase.from('messages').upsert(
                     {
                       ghl_message_id: msg.id,
