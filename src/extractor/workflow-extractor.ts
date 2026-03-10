@@ -1,6 +1,6 @@
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
-import type { GHLWorkflow, GHLWorkflowStep, GHLWorkflowTrigger } from '../types/ghl.js';
+import type { GHLWorkflow, GHLWorkflowStep, GHLWorkflowTrigger, GHLWorkflowAction } from '../types/ghl.js';
 import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
 import { updateLastSynced } from './entity-syncer.js';
@@ -31,48 +31,152 @@ function toDelayMinutes(delay?: number, unit?: string): number {
 /**
  * Extracts a meaningful trigger value from a trigger object by checking
  * multiple possible GHL field names for the trigger's configuration value.
+ * Handles string, number, and nested object values.
  */
 function extractTriggerValue(trigger: Record<string, unknown>): string | null {
-  const directFields = [
+  const valueFields = [
     'value', 'triggerValue', 'filterValue',
-    'formId', 'formName',
-    'tagId', 'tagName',
-    'pipelineId', 'pipelineName',
-    'stageId', 'stageName',
-    'pipelineStageId',
-    'surveyId', 'surveyName',
-    'calendarId', 'calendarName',
-    'webhookUrl',
+    'formId', 'formName', 'tagId', 'tagName', 'tag',
+    'pipelineId', 'pipelineName', 'stageId', 'stageName',
+    'pipelineStageId', 'surveyId', 'surveyName',
+    'calendarId', 'calendarName', 'webhookUrl',
     'customFieldId', 'customFieldName',
     'membershipId', 'membershipName',
-    'invoiceId',
-    'campaignId', 'campaignName',
+    'invoiceId', 'campaignId', 'campaignName',
+    'url', 'link', 'uri',
   ];
 
-  for (const field of directFields) {
-    const val = trigger[field];
-    if (val && typeof val === 'string' && val.trim()) {
-      return val.trim();
-    }
-  }
-
-  // Check nested data object (from node-graph-parser raw nodes)
-  if (trigger.data && typeof trigger.data === 'object') {
-    const data = trigger.data as Record<string, unknown>;
-    for (const field of directFields) {
-      const val = data[field];
-      if (val && typeof val === 'string' && val.trim()) {
-        return val.trim();
+  // Helper: check an object for any known value field (accepts strings and numbers)
+  function tryExtract(obj: Record<string, unknown>): string | null {
+    for (const field of valueFields) {
+      const val = obj[field];
+      if (val !== null && val !== undefined && val !== '') {
+        const str = typeof val === 'string' ? val.trim() : String(val);
+        if (str && str !== 'undefined' && str !== 'null') return str;
       }
     }
+    return null;
   }
 
-  // Fallback: serialize filters if present
+  // 1. Check top-level fields
+  let found = tryExtract(trigger);
+  if (found) return found;
+
+  // 2. Check nested objects commonly used in GHL trigger configs
+  for (const nestedKey of ['data', 'config', 'settings', 'options', 'properties', 'metadata']) {
+    const nested = trigger[nestedKey];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      found = tryExtract(nested as Record<string, unknown>);
+      if (found) return found;
+    }
+  }
+
+  // 3. Serialize filters if present
   if (trigger.filters && Array.isArray(trigger.filters) && trigger.filters.length > 0) {
     return JSON.stringify(trigger.filters);
   }
 
+  // 4. Last resort: scan ALL keys for non-metadata values
+  const skipKeys = new Set([
+    'id', '_id', 'type', 'triggerType', 'event', 'name', 'triggerName',
+    'createdAt', 'updatedAt', 'locationId', 'workflowId', '__v', 'raw',
+    'filters', 'data', 'config', 'settings', 'options', 'properties', 'metadata',
+  ]);
+  for (const [key, val] of Object.entries(trigger)) {
+    if (skipKeys.has(key)) continue;
+    if (val && typeof val === 'object' && !Array.isArray(val)) continue;
+    if (Array.isArray(val) && val.length > 0) {
+      return JSON.stringify(val);
+    }
+    if (val !== null && val !== undefined && val !== '' && typeof val !== 'boolean') {
+      const str = String(val).trim();
+      if (str && str !== 'undefined' && str !== 'null') return str;
+    }
+  }
+
   return null;
+}
+
+/**
+ * Extracts workflow steps, actions, and connections from the GHL internal API's
+ * `workflowData.templates` format. Templates are a flat array of step/action
+ * objects linked via `next` fields (string for sequential, array for branches).
+ */
+function extractFromTemplates(templates: Record<string, unknown>[]): {
+  steps: GHLWorkflowStep[];
+  actions: GHLWorkflowAction[];
+  connections: Array<{ fromStep: string; toStep: string; condition?: string }>;
+} {
+  const steps: GHLWorkflowStep[] = [];
+  const actions: GHLWorkflowAction[] = [];
+  const connections: Array<{ fromStep: string; toStep: string; condition?: string }> = [];
+
+  for (const tmpl of templates) {
+    const id = (tmpl.id || tmpl._id) as string;
+    if (!id) continue;
+    const type = (tmpl.type as string) || 'unknown';
+    const name = (tmpl.name as string) || type;
+    const order = (tmpl.order as number) ?? steps.length;
+    const attrs = (tmpl.attributes || {}) as Record<string, unknown>;
+
+    // Create step
+    const step: GHLWorkflowStep = {
+      id,
+      type,
+      name,
+      delay: undefined,
+      delayUnit: undefined,
+      templateId: (attrs.template_id as string) || undefined,
+      condition: type === 'if_else' ? (attrs.conditionName as string) || undefined : undefined,
+    };
+
+    // Extract delay for wait steps
+    if (type === 'wait' && attrs.startAfter && typeof attrs.startAfter === 'object') {
+      const sa = attrs.startAfter as Record<string, unknown>;
+      step.delay = (sa.value as number) || undefined;
+      step.delayUnit = (sa.type as string) || undefined;
+    }
+
+    Object.assign(step, { raw: tmpl, stepOrder: order + 1 });
+    steps.push(step);
+
+    // Create action entry
+    const action: GHLWorkflowAction = {
+      id,
+      type,
+      name,
+      target: (attrs.to || attrs.recipient || attrs.from_email) as string || undefined,
+    };
+    Object.assign(action, { raw: tmpl });
+    actions.push(action);
+
+    // Build connections from "next" field
+    const next = tmpl.next;
+    if (typeof next === 'string' && next) {
+      connections.push({ fromStep: id, toStep: next });
+    } else if (Array.isArray(next)) {
+      // if_else branches — get branch names from attributes.branches
+      const branches = (attrs.branches || []) as Record<string, unknown>[];
+      for (let i = 0; i < next.length; i++) {
+        const branchId = next[i] as string;
+        if (!branchId) continue;
+        const branchName = branches[i] ? (branches[i].name as string) : undefined;
+        // Last next ID beyond branches count is the "none/default" branch
+        const condition = branchName || (i >= branches.length ? 'Default' : undefined);
+        connections.push({ fromStep: id, toStep: branchId, condition });
+      }
+    }
+
+    // Handle goto targets
+    if (type === 'goto' && attrs.targetNodeId) {
+      connections.push({ fromStep: id, toStep: attrs.targetNodeId as string });
+    }
+  }
+
+  // Sort steps by order field
+  steps.sort((a, b) => ((a as Record<string, unknown>).stepOrder as number || 0) - ((b as Record<string, unknown>).stepOrder as number || 0));
+
+  return { steps, actions, connections };
 }
 
 /**
@@ -141,20 +245,32 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           parsedConnections = parsed.connections;
           if (parsed.triggers.length === 0 && parsed.steps.length === 0 && parsed.actions.length === 0) {
             noNodesCount++;
-            // Fallback: try public API individual endpoint for structured data
-            try {
-              const publicDetail = await ghl.getWorkflow(workflowSummary.id);
-              if (publicDetail.steps && publicDetail.steps.length > 0) {
-                parsed.steps = publicDetail.steps as GHLWorkflowStep[];
+
+            // Primary fallback: extract from workflowData.templates (GHL internal format)
+            const wd = fullJson.workflowData as Record<string, unknown> | undefined;
+            if (wd && Array.isArray(wd.templates) && wd.templates.length > 0) {
+              const extracted = extractFromTemplates(wd.templates as Record<string, unknown>[]);
+              parsed.steps = extracted.steps;
+              parsed.actions = extracted.actions;
+              parsedConnections = extracted.connections;
+            }
+
+            // Secondary fallback: try public API if templates extraction also failed
+            if (parsed.steps.length === 0) {
+              try {
+                const publicDetail = await ghl.getWorkflow(workflowSummary.id);
+                if (publicDetail.steps && publicDetail.steps.length > 0) {
+                  parsed.steps = publicDetail.steps as GHLWorkflowStep[];
+                }
+                if (publicDetail.triggers && publicDetail.triggers.length > 0) {
+                  parsed.triggers = publicDetail.triggers as GHLWorkflowTrigger[];
+                }
+                if (publicDetail.actions && publicDetail.actions.length > 0) {
+                  parsed.actions = publicDetail.actions as GHLWorkflow['actions'] & GHLWorkflowTrigger[];
+                }
+              } catch {
+                // Public API fallback is best-effort
               }
-              if (publicDetail.triggers && publicDetail.triggers.length > 0) {
-                parsed.triggers = publicDetail.triggers as GHLWorkflowTrigger[];
-              }
-              if (publicDetail.actions && publicDetail.actions.length > 0) {
-                parsed.actions = publicDetail.actions as GHLWorkflow['actions'] & GHLWorkflowTrigger[];
-              }
-            } catch {
-              // Public API fallback is best-effort
             }
           }
 
