@@ -169,6 +169,42 @@ function findEdges(rawJson: Record<string, unknown>): GHLWorkflowEdge[] {
 }
 
 /**
+ * Extracts a meaningful action target based on the action type and its data.
+ * Different GHL action types store their targets in different fields.
+ */
+function extractActionTarget(actionType: string, data: Record<string, unknown>): string | undefined {
+  switch (actionType) {
+    case 'email':
+      return (data.subject || data.from_email || data.template_id) as string || undefined;
+    case 'sms':
+      return data.body ? String(data.body).substring(0, 100) : undefined;
+    case 'add_contact_tag':
+    case 'remove_contact_tag':
+      return Array.isArray(data.tags) ? data.tags.join(', ') : undefined;
+    case 'goto':
+      return (data.targetNodeId as string) || undefined;
+    case 'if_else':
+      return (data.conditionName as string) || undefined;
+    case 'create_opportunity':
+      return (data.pipelineId || data.pipeline) as string || undefined;
+    case 'assign_user':
+      return (data.userId || data.assignedTo) as string || undefined;
+    case 'task-notification':
+      return (data.title || data.taskName) as string || undefined;
+    case 'transition':
+      return (data.targetStageId || data.stageId || data.stageName) as string || undefined;
+    case 'wait':
+      if (data.startAfter && typeof data.startAfter === 'object') {
+        const sa = data.startAfter as Record<string, unknown>;
+        return `${sa.value || ''} ${sa.type || 'minutes'}`;
+      }
+      return undefined;
+    default:
+      return (data.target || data.to || data.recipient) as string || undefined;
+  }
+}
+
+/**
  * Parses the GHL internal API node-graph response into structured workflow components.
  * Handles multiple possible JSON structures and logs diagnostic info when parsing fails.
  */
@@ -240,10 +276,18 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
         name: nodeName,
         delay: (nodeData.delay || nodeData.waitTime || nodeData.delayValue) as number || undefined,
         delayUnit: (nodeData.delayUnit || nodeData.waitUnit || nodeData.unit) as string || undefined,
-        templateId: (nodeData.templateId || nodeData.template) as string || undefined,
-        condition: (nodeData.condition || nodeData.branchCondition) as string || undefined,
+        templateId: (nodeData.templateId || nodeData.template || nodeData.template_id) as string || undefined,
+        condition: (nodeData.condition || nodeData.branchCondition || nodeData.conditionName) as string || undefined,
         actions: Array.isArray(nodeData.actions) ? nodeData.actions : undefined,
       };
+
+      // Extract delay from startAfter for wait-type templates
+      if (nodeType === 'wait' && !step.delay && nodeData.startAfter && typeof nodeData.startAfter === 'object') {
+        const sa = nodeData.startAfter as Record<string, unknown>;
+        step.delay = (sa.value as number) || undefined;
+        step.delayUnit = (sa.type as string) || undefined;
+      }
+
       // Preserve full node data
       Object.assign(step, { raw: node, stepOrder });
       result.steps.push(step);
@@ -253,7 +297,7 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
         id: node.id,
         type: nodeType,
         name: nodeName,
-        target: (nodeData.target || nodeData.to || nodeData.recipient) as string || undefined,
+        target: extractActionTarget(nodeType, nodeData),
       };
       Object.assign(action, { raw: node });
       result.actions.push(action);
