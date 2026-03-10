@@ -41,6 +41,11 @@ import {
   validateAccessToken,
 } from './auth/oauth.js';
 import { runDiagnostics } from './diagnostics.js';
+import {
+  isOAuthConfigured as isGhlOAuthConfigured,
+  getAuthorizeUrl as getGhlAuthorizeUrl,
+  exchangeCodeForTokens as exchangeGhlCode,
+} from './clients/ghl-oauth.js';
 
 function createMcpServer() {
   const server = new McpServer({
@@ -98,6 +103,7 @@ async function startHttpServer(port: number) {
         version: '1.0.0',
         sync_enabled: process.env.ENABLE_SCHEDULED_SYNC !== 'false',
         ghl_configured: !!(process.env.GHL_API_KEY && process.env.GHL_LOCATION_ID),
+        ghl_oauth_configured: isGhlOAuthConfigured(),
         supabase_configured: !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY)),
       }));
       return;
@@ -126,6 +132,46 @@ async function startHttpServer(port: number) {
     // OAuth dynamic client registration
     if (url.pathname === '/register' && req.method === 'POST') {
       await handleRegister(req, res);
+      return;
+    }
+
+    // ---- GHL OAuth one-time setup routes ----
+
+    // Step 1: Redirect user to GHL consent screen
+    if (url.pathname === '/ghl-oauth/authorize' && req.method === 'GET') {
+      if (!isGhlOAuthConfigured()) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET must be set in .env' }));
+        return;
+      }
+      const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
+      const host = req.headers.host || `localhost:${port}`;
+      const redirectUri = `${proto}://${host}/ghl-oauth/callback`;
+      const authorizeUrl = getGhlAuthorizeUrl(redirectUri);
+      res.writeHead(302, { Location: authorizeUrl });
+      res.end();
+      return;
+    }
+
+    // Step 2: GHL redirects back here with ?code=...
+    if (url.pathname === '/ghl-oauth/callback' && req.method === 'GET') {
+      const code = url.searchParams.get('code');
+      if (!code) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing authorization code' }));
+        return;
+      }
+      const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
+      const host = req.headers.host || `localhost:${port}`;
+      const redirectUri = `${proto}://${host}/ghl-oauth/callback`;
+      try {
+        await exchangeGhlCode(code, redirectUri);
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<h1>GHL OAuth Connected!</h1><p>Conversations and messages will now sync directly. You can close this tab.</p>');
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
       return;
     }
 
@@ -270,6 +316,7 @@ async function startHttpServer(port: number) {
     console.error(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
     console.error(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
     console.error(`  Diagnostics:   http://0.0.0.0:${port}/diagnostics`);
+    console.error(`  GHL OAuth:     http://0.0.0.0:${port}/ghl-oauth/authorize`);
   });
 }
 

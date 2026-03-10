@@ -270,7 +270,16 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
   }
 }
 
-// ---- Conversation & Message Sync (every 15 min) — via n8n webhook proxy ----
+// ---- Conversation & Message Sync (every 15 min) — direct GHL OAuth calls ----
+
+const BATCH_SIZE = 10;
+const BATCH_DELAY_MS = 1000; // 1s pause between batches to stay under GHL rate limits
+const MAX_CONTACTS_PER_SYNC = 100; // Limit per run to avoid timeouts
+
+/** Small helper to pause between batches. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Create lead events for recently synced messages that don't yet have events.
@@ -308,36 +317,116 @@ async function createLeadEventsForRecentMessages(): Promise<number> {
 }
 
 export async function syncConversationsAndMessages(): Promise<{ synced_conversations: number; synced_messages: number; errors: string[] }> {
-  const webhookUrl = process.env.N8N_SYNC_CONVERSATIONS_WEBHOOK_URL;
-  if (!webhookUrl) {
-    console.warn('[EntitySync] N8N_SYNC_CONVERSATIONS_WEBHOOK_URL not set — skipping conversations/messages sync. ' +
-      'Create an n8n workflow with GHL OAuth to sync conversations and set the webhook URL.');
-    return { synced_conversations: 0, synced_messages: 0, errors: ['n8n webhook not configured'] };
+  const ghl = new GHLClient();
+  const supabase = getSupabaseClient();
+  const errors: string[] = [];
+
+  // Check if OAuth is configured
+  if (!ghl.isOAuthConfigured) {
+    console.warn('[EntitySync] GHL OAuth not configured — skipping conversations/messages sync. ' +
+      'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /ghl-oauth/authorize.');
+    return { synced_conversations: 0, synced_messages: 0, errors: ['GHL OAuth not configured'] };
   }
 
   const syncLogId = await logSyncStart('conversations');
 
-  // 5-minute timeout — the n8n workflow loops through all contacts/conversations
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
-
   try {
-    console.error('[EntitySync] Triggering n8n conversations/messages sync webhook...');
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ triggered_by: 'mcp-server', timestamp: new Date().toISOString() }),
-      signal: controller.signal,
-    });
+    // Get contacts from Supabase (already synced by contact sync job)
+    const { data: contacts, error: contactError } = await supabase
+      .from('contacts')
+      .select('ghl_contact_id')
+      .order('date_updated', { ascending: false })
+      .limit(MAX_CONTACTS_PER_SYNC);
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`n8n webhook error ${response.status}: ${errorBody}`);
+    if (contactError) throw new Error(`Failed to fetch contacts: ${contactError.message}`);
+    if (!contacts?.length) {
+      console.error('[EntitySync] No contacts found in Supabase — sync contacts first');
+      await logSyncComplete(syncLogId, 0);
+      return { synced_conversations: 0, synced_messages: 0, errors: [] };
     }
 
-    const result = await response.json() as Record<string, unknown>;
-    const syncedConversations = (result.synced_conversations as number) || 0;
-    const syncedMessages = (result.synced_messages as number) || 0;
+    console.error(`[EntitySync] Syncing conversations for ${contacts.length} contacts (batch size: ${BATCH_SIZE})...`);
+
+    let totalConversations = 0;
+    let totalMessages = 0;
+    const now = new Date().toISOString();
+
+    // Process contacts in batches
+    for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
+      const batch = contacts.slice(i, i + BATCH_SIZE);
+
+      // Process each contact in the batch concurrently
+      const results = await Promise.allSettled(
+        batch.map(async (contact) => {
+          const contactId = contact.ghl_contact_id;
+          let convCount = 0;
+          let msgCount = 0;
+
+          try {
+            // Fetch conversations for this contact
+            const { conversations } = await ghl.getConversations({ contactId, limit: 50 });
+
+            for (const conv of conversations) {
+              // Upsert conversation
+              await supabase.from('conversations').upsert(
+                {
+                  ghl_conversation_id: conv.id,
+                  ghl_contact_id: conv.contactId,
+                  ghl_location_id: conv.locationId || null,
+                  type: conv.type || 'sms',
+                  last_message_at: conv.lastMessageDate || null,
+                  unread_count: conv.unreadCount || 0,
+                  synced_at: now,
+                  updated_at: now,
+                },
+                { onConflict: 'ghl_conversation_id' },
+              );
+              convCount++;
+
+              // Fetch and upsert messages for this conversation
+              try {
+                const { messages } = await ghl.getMessages(conv.id);
+                for (const msg of messages || []) {
+                  await supabase.from('messages').upsert(
+                    {
+                      ghl_message_id: msg.id,
+                      ghl_conversation_id: msg.conversationId || conv.id,
+                      ghl_contact_id: msg.contactId || contactId,
+                      direction: msg.direction || 'outbound',
+                      type: msg.type || 'sms',
+                      body: msg.body || null,
+                      status: msg.status || 'delivered',
+                      sent_at: msg.dateAdded || now,
+                    },
+                    { onConflict: 'ghl_message_id' },
+                  );
+                  msgCount++;
+                }
+              } catch (msgErr) {
+                errors.push(`Messages for conv ${conv.id}: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`);
+              }
+            }
+          } catch (err) {
+            errors.push(`Contact ${contactId}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+
+          return { convCount, msgCount };
+        }),
+      );
+
+      // Aggregate counts from this batch
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          totalConversations += result.value.convCount;
+          totalMessages += result.value.msgCount;
+        }
+      }
+
+      // Pause between batches to avoid rate limits (skip after last batch)
+      if (i + BATCH_SIZE < contacts.length) {
+        await sleep(BATCH_DELAY_MS);
+      }
+    }
 
     // Create lead events for any newly synced messages
     const eventsCreated = await createLeadEventsForRecentMessages();
@@ -346,16 +435,19 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     }
 
     await updateLastSynced('conversations');
-    await logSyncComplete(syncLogId, syncedConversations + syncedMessages);
-    console.error(`[EntitySync] Conversations synced: ${syncedConversations}, Messages synced: ${syncedMessages}`);
-    return { synced_conversations: syncedConversations, synced_messages: syncedMessages, errors: [] };
+    await logSyncComplete(syncLogId, totalConversations + totalMessages);
+    console.error(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}`);
+
+    if (errors.length > 0) {
+      console.error(`[EntitySync] ${errors.length} errors during conversation sync`);
+    }
+
+    return { synced_conversations: totalConversations, synced_messages: totalMessages, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await logSyncFailed(syncLogId, msg);
     console.error(`[EntitySync] Conversation sync failed: ${msg}`);
     return { synced_conversations: 0, synced_messages: 0, errors: [msg] };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
