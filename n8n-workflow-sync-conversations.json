@@ -10,22 +10,22 @@
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
-      "position": [0, 0],
+      "position": [0, 288],
       "id": "e02361d9-e225-4d8b-a119-1abbaefa6401",
       "name": "Webhook",
       "webhookId": "ac512955-0c37-485a-b559-0e943f5b4f7d"
     },
     {
       "parameters": {
-        "url": "https://xmwhxfrzswgarspchura.supabase.co/rest/v1/contacts?select=ghl_contact_id",
+        "url": "https://jtlngmcrtqncimtjjzlz.supabase.co/rest/v1/contacts?select=ghl_contact_id",
         "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "apikey",
-              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
         },
@@ -33,13 +33,13 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [220, 0],
-      "id": "b1a1c001-0001-4000-8000-000000000001",
+      "position": [220, 288],
+      "id": "3a6e9e1f-3055-4c6b-892d-5b0d83688b3e",
       "name": "Get Contacts from Supabase",
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "",
-          "name": ""
+        "httpBearerAuth": {
+          "id": "uqGF0KatajiU9219",
+          "name": "Supabase Highlevel MCP"
         }
       }
     },
@@ -49,8 +49,8 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 0],
-      "id": "b1a1c001-0002-4000-8000-000000000002",
+      "position": [440, 288],
+      "id": "bc752d86-6b0a-4ed1-a138-70b164fc304e",
       "name": "Split Contacts"
     },
     {
@@ -75,8 +75,8 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [660, 0],
-      "id": "7905f17c-3304-4af0-baab-129cd0dfcaa4",
+      "position": [660, 288],
+      "id": "575d1752-4034-4bcd-acc9-eb4334077066",
       "name": "Get Conversations for Contact",
       "credentials": {
         "highLevelOAuth2Api": {
@@ -92,26 +92,22 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 0],
-      "id": "b1a1c001-0003-4000-8000-000000000003",
+      "position": [880, 288],
+      "id": "bf56c505-31e1-43bc-85d7-26ae583f3bf3",
       "name": "Map Conversations"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://xmwhxfrzswgarspchura.supabase.co/rest/v1/conversations?on_conflict=ghl_conversation_id",
+        "url": "https://jtlngmcrtqncimtjjzlz.supabase.co/rest/v1/conversations?on_conflict=ghl_conversation_id",
         "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
-              "name": "apikey",
-              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
-            },
-            {
               "name": "Prefer",
-              "value": "resolution=merge-duplicates,return=minimal"
+              "value": "resolution=merge-duplicates,return=representation"
             },
             {
               "name": "Content-Type",
@@ -126,20 +122,20 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1100, 0],
-      "id": "b1a1c001-0004-4000-8000-000000000004",
+      "position": [1100, 288],
+      "id": "7468dec3-c0ef-41ac-86e4-66e90eeb1b3c",
       "name": "Upsert Conversations to Supabase",
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "",
-          "name": ""
+        "httpBearerAuth": {
+          "id": "uqGF0KatajiU9219",
+          "name": "Supabase Highlevel MCP"
         }
       },
       "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "url": "=https://services.leadconnectorhq.com/conversations/{{ $('Map Conversations').item.json.ghl_conversation_id }}/messages",
+        "url": "=https://services.leadconnectorhq.com/conversations/{{ $json.ghl_conversation_id }}/messages",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "highLevelOAuth2Api",
         "sendHeaders": true,
@@ -159,8 +155,8 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1320, 0],
-      "id": "90d7829d-249d-44fc-acd2-dd11ff2b002d",
+      "position": [1320, 288],
+      "id": "ac78ae36-5100-45f3-97e8-293ed028815d",
       "name": "Get Messages for Conversation",
       "credentials": {
         "highLevelOAuth2Api": {
@@ -176,23 +172,19 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 0],
-      "id": "b1a1c001-0005-4000-8000-000000000005",
+      "position": [1540, 288],
+      "id": "b0f366a6-b95b-489b-b338-3322aed0dbe6",
       "name": "Map Messages"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://xmwhxfrzswgarspchura.supabase.co/rest/v1/messages?on_conflict=ghl_message_id",
+        "url": "https://jtlngmcrtqncimtjjzlz.supabase.co/rest/v1/messages?on_conflict=ghl_message_id",
         "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
+        "genericAuthType": "httpBearerAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "apikey",
-              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
-            },
             {
               "name": "Prefer",
               "value": "resolution=merge-duplicates,return=minimal"
@@ -210,13 +202,13 @@
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [1760, 0],
-      "id": "b1a1c001-0006-4000-8000-000000000006",
+      "position": [1760, 288],
+      "id": "8ac6b767-8807-45d5-84f8-80031ed1e89a",
       "name": "Upsert Messages to Supabase",
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "",
-          "name": ""
+        "httpBearerAuth": {
+          "id": "uqGF0KatajiU9219",
+          "name": "Supabase Highlevel MCP"
         }
       },
       "onError": "continueRegularOutput"
@@ -227,9 +219,21 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1980, 0],
-      "id": "b1a1c001-0007-4000-8000-000000000007",
+      "position": [1980, 288],
+      "id": "e52e5c6f-5b2a-48b3-922f-7512dcf58961",
       "name": "Aggregate Counts"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2200, 288],
+      "id": "f1a1c001-0008-4000-8000-000000000008",
+      "name": "Respond to Webhook"
     }
   ],
   "pinData": {},
@@ -327,6 +331,17 @@
         [
           {
             "node": "Aggregate Counts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Counts": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
             "type": "main",
             "index": 0
           }
