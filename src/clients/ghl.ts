@@ -570,8 +570,15 @@ export class GHLClient {
       locationId: this.locationId,
     };
     if (params?.calendarId) reqParams.calendarId = params.calendarId;
-    if (params?.startTime) reqParams.startTime = params.startTime;
-    if (params?.endTime) reqParams.endTime = params.endTime;
+    // GHL Calendar Events API expects epoch milliseconds for startTime/endTime
+    if (params?.startTime) {
+      const ms = isNaN(Number(params.startTime)) ? new Date(params.startTime).getTime() : Number(params.startTime);
+      reqParams.startTime = String(ms);
+    }
+    if (params?.endTime) {
+      const ms = isNaN(Number(params.endTime)) ? new Date(params.endTime).getTime() : Number(params.endTime);
+      reqParams.endTime = String(ms);
+    }
     if (params?.limit) reqParams.limit = String(params.limit);
     const result = await this.request<{ events: GHLAppointment[] }>('/calendars/events', { params: reqParams });
     const keys = Object.keys(result || {});

@@ -75,6 +75,21 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         if (internalJson) {
           // Internal API returned data — parse the full node graph
           fullJson = internalJson;
+
+          // Diagnostic: log the actual JSON structure so we can match it in findNodes()
+          if (noNodesCount === 0) {
+            const topKeys = Object.keys(fullJson);
+            console.log(`[WorkflowSync] Internal API top-level keys for "${workflowSummary.name}": [${topKeys.join(', ')}]`);
+            for (const key of topKeys) {
+              const val = fullJson[key];
+              if (val && typeof val === 'object' && !Array.isArray(val)) {
+                console.log(`[WorkflowSync]   .${key} keys: [${Object.keys(val as object).join(', ')}]`);
+              } else if (Array.isArray(val)) {
+                console.log(`[WorkflowSync]   .${key}: Array(${val.length})`);
+              }
+            }
+          }
+
           const parsed = parseNodeGraph(fullJson);
           parsedConnections = parsed.connections;
           if (parsed.triggers.length === 0 && parsed.steps.length === 0 && parsed.actions.length === 0) {

@@ -69,12 +69,11 @@ export const workflowTools = {
     },
   },
 
-  // NOTE: workflow_executions is intentionally NOT auto-synced. It is populated
-  // exclusively via this MCP tool. GoHighLevel does not expose a workflow execution
-  // history API, so execution tracking relies on manual logging through this tool
-  // or webhook events.
+  // NOTE: workflow_executions is populated from two sources:
+  // 1. Webhook events (automatic — see handleWorkflowWebhook in handler.ts)
+  // 2. This MCP tool (manual logging for executions not captured by webhooks)
   log_workflow_execution: {
-    description: 'Log a workflow execution event to Supabase for tracking and analytics. Note: this is the only way to populate the workflow_executions table — there is no automatic sync for execution history.',
+    description: 'Log a workflow execution event to Supabase for tracking and analytics. Workflow executions are also automatically populated from webhook events.',
     inputSchema: z.object({
       workflowId: z.string().describe('GHL workflow ID'),
       contactId: z.string().optional(),

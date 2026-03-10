@@ -41,19 +41,23 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
 }
 
 /**
- * Check if this is the first time we're syncing (no sync_state records exist).
- * If so, use a wider appointment lookback to backfill historical data.
+ * Check if a specific entity has ever been successfully synced.
+ * The migration seeds sync_state rows with last_synced_at='1970-01-01',
+ * so we check whether the timestamp has been updated from the default.
  */
-async function isFirstRun(): Promise<boolean> {
+async function isFirstRunFor(entityName: string): Promise<boolean> {
   try {
     const supabase = getSupabaseClient();
     const { data } = await supabase
       .from('sync_state')
-      .select('entity_name')
-      .limit(1);
-    return !data || data.length === 0;
+      .select('last_synced_at')
+      .eq('entity_name', entityName)
+      .single();
+    if (!data) return true;
+    // Still at epoch default means never synced
+    const ts = data.last_synced_at as string;
+    return ts.startsWith('1970-01-01');
   } catch {
-    // Table might not exist yet or connection issue — treat as first run
     return true;
   }
 }
@@ -100,9 +104,9 @@ export function startScheduledSync(): void {
 
   // Run initial sync with first-run detection
   (async () => {
-    const firstRun = await isFirstRun();
-    if (firstRun) {
-      console.log('[Scheduler] First run detected — performing full historical backfill');
+    const appointmentsFirstRun = await isFirstRunFor('appointments');
+    if (appointmentsFirstRun) {
+      console.log('[Scheduler] First appointment sync detected — will perform 1-year historical backfill');
     }
 
     // Run workflow sync immediately
@@ -124,9 +128,9 @@ export function startScheduledSync(): void {
     setTimeout(() => runJob('contacts', syncContacts), 10_000);
     setTimeout(() => runJob('opportunities', syncOpportunities), 15_000);
 
-    // Appointments: wider lookback on first run (1 year back, 60 days forward)
+    // Appointments: 1-year lookback on first run, 2-week default otherwise
     setTimeout(() => runJob('appointments', () => {
-      if (firstRun) {
+      if (appointmentsFirstRun) {
         return syncAppointments({
           startTime: toET(Date.now() - 365 * 86_400_000),
           endTime: toET(Date.now() + 60 * 86_400_000),

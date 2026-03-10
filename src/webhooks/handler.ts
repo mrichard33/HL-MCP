@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
+import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 
 /**
  * Creates a deterministic event hash for deduplication.
@@ -89,7 +90,7 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
     { onConflict: 'ghl_contact_id' },
   );
 
-  const eventType = payload.dateAdded && !payload.dateUpdated ? 'contact_created' : 'contact_updated';
+  const eventType = deriveContactEventType({ dateAdded: payload.dateAdded as string, dateUpdated: payload.dateUpdated as string });
   const stableTs = (payload.dateUpdated || payload.dateAdded || now) as string;
   await createLeadEvent(id, eventType, id, stableTs, payload);
 
@@ -159,13 +160,7 @@ async function handleAppointmentWebhook(payload: Record<string, unknown>): Promi
     { onConflict: 'ghl_appointment_id' },
   );
 
-  const status = (payload.status as string) || '';
-  let eventType = 'appointment_booked';
-  if (status === 'showed') eventType = 'appointment_showed';
-  else if (status === 'noshow') eventType = 'appointment_noshow';
-  else if (status === 'cancelled') eventType = 'appointment_cancelled';
-  else if (payload.dateUpdated) eventType = 'appointment_updated';
-
+  const eventType = deriveAppointmentEventType((payload.status as string) || '');
   const stableTs = (payload.startTime || now) as string;
   await createLeadEvent(contactId, eventType, id, stableTs, payload);
 }
@@ -192,23 +187,7 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
     { onConflict: 'ghl_message_id' },
   );
 
-  // Derive event type from direction and message type
-  let eventType: string;
-  if (direction === 'inbound') {
-    eventType = msgType === 'email' ? 'email_received' : 'sms_received';
-  } else {
-    eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
-  }
-  if (payload.status === 'delivered') {
-    eventType = msgType === 'email' ? 'email_delivered' : 'sms_delivered';
-  }
-  if (payload.status === 'opened') {
-    eventType = 'email_opened';
-  }
-  if (payload.status === 'clicked') {
-    eventType = 'email_clicked';
-  }
-
+  const eventType = deriveMessageEventType({ direction, type: msgType, status: payload.status as string });
   const stableTs = (payload.dateAdded || now) as string;
   await createLeadEvent(contactId, eventType, id, stableTs, payload);
 }
@@ -233,6 +212,22 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
 
   const stableTs = (payload.dateAdded || now) as string;
   await createLeadEvent(contactId, 'workflow_executed', id, stableTs, payload);
+
+  // Also populate workflow_executions table
+  try {
+    await supabase.from('workflow_executions').insert({
+      ghl_workflow_id: id,
+      ghl_contact_id: contactId || null,
+      ghl_location_id: (payload.locationId as string) || null,
+      status: (payload.status as string) || 'completed',
+      started_at: stableTs,
+      completed_at: now,
+      execution_data: payload,
+    });
+  } catch {
+    // Non-critical — log but don't fail the webhook
+    console.warn(`[Webhook] Failed to insert workflow_execution for workflow ${id}`);
+  }
 }
 
 // ---- Main webhook router ----
