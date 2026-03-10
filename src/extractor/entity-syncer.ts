@@ -347,21 +347,42 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   const syncLogId = await logSyncStart('conversations');
 
   try {
-    // Get contacts from Supabase (already synced by contact sync job)
-    const { data: contacts, error: contactError } = await supabase
+    // Get all contact IDs
+    const { data: allContacts, error: allError } = await supabase
       .from('contacts')
       .select('ghl_contact_id')
-      .order('date_updated', { ascending: false })
-      .limit(MAX_CONTACTS_PER_SYNC);
-
-    if (contactError) throw new Error(`Failed to fetch contacts: ${contactError.message}`);
-    if (!contacts?.length) {
+      .order('date_added', { ascending: true });
+    if (allError) throw new Error(`Failed to fetch contacts: ${allError.message}`);
+    if (!allContacts?.length) {
       console.warn('[EntitySync] No contacts found in Supabase — sync contacts first');
       await logSyncComplete(syncLogId, 0);
       return { synced_conversations: 0, synced_messages: 0, errors: [] };
     }
 
-    console.log(`[EntitySync] Syncing conversations for ${contacts.length} contacts (batch size: ${BATCH_SIZE})...`);
+    // Determine backfill vs incremental mode
+    // Backfill: process contacts that have NEVER had conversations checked
+    // Incremental: all contacts covered, refresh most recently updated
+    const { data: syncedRows } = await supabase
+      .from('conversations')
+      .select('ghl_contact_id');
+    const syncedIds = new Set((syncedRows || []).map(r => r.ghl_contact_id));
+    const unsyncedContacts = allContacts.filter(c => !syncedIds.has(c.ghl_contact_id));
+
+    let contacts: { ghl_contact_id: string }[];
+    if (unsyncedContacts.length > 0) {
+      // Backfill mode — drip through unsynced contacts
+      contacts = unsyncedContacts.slice(0, MAX_CONTACTS_PER_SYNC);
+      console.log(`[EntitySync] Backfill: syncing ${contacts.length} of ${unsyncedContacts.length} remaining unsynced contacts (${allContacts.length} total)`);
+    } else {
+      // All contacts covered — incremental mode
+      const { data: recentContacts } = await supabase
+        .from('contacts')
+        .select('ghl_contact_id')
+        .order('date_updated', { ascending: false })
+        .limit(MAX_CONTACTS_PER_SYNC);
+      contacts = recentContacts || allContacts.slice(0, MAX_CONTACTS_PER_SYNC);
+      console.log(`[EntitySync] Incremental: refreshing ${contacts.length} most recently updated contacts`);
+    }
 
     let totalConversations = 0;
     let totalMessages = 0;
@@ -381,6 +402,17 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
           try {
             // Fetch conversations for this contact
             const { conversations } = await ghl.getConversations({ contactId, limit: 50 });
+
+            if (conversations.length === 0) {
+              // Mark contact as checked so it won't appear in backfill again
+              await supabase.from('conversations').upsert({
+                ghl_conversation_id: `no-conv-${contactId}`,
+                ghl_contact_id: contactId,
+                type: 'none',
+                synced_at: now,
+                updated_at: now,
+              }, { onConflict: 'ghl_conversation_id' });
+            }
 
             for (const conv of conversations) {
               // Upsert conversation
