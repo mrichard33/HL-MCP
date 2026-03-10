@@ -75,6 +75,17 @@ async function isFirstRun(): Promise<boolean> {
 export function startScheduledSync(): void {
   console.error('[Scheduler] Starting scheduled sync jobs');
 
+  // One-time diagnostic: Firebase auth status affects workflow data quality
+  const hasFirebaseAuth = !!(process.env.GHL_FIREBASE_API_KEY && process.env.GHL_FIREBASE_REFRESH_TOKEN);
+  if (hasFirebaseAuth) {
+    console.error('[Scheduler] Firebase auth configured — workflows will use internal API for full node graph data');
+  } else {
+    console.error(
+      '[Scheduler] Firebase auth NOT configured — workflow sync will use public API (no steps/node graphs). ' +
+      'Set GHL_FIREBASE_API_KEY and GHL_FIREBASE_REFRESH_TOKEN for full data.',
+    );
+  }
+
   // Run initial sync with first-run detection
   (async () => {
     const firstRun = await isFirstRun();

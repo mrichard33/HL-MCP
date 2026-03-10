@@ -48,6 +48,8 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
     errors: [],
   };
 
+  let publicApiFallbackCount = 0;
+
   // Log sync start
   const { data: syncLog } = await supabase.from('sync_log').insert({
     entity_type: 'workflows_full',
@@ -69,7 +71,9 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           fullJson = await ghl.getWorkflowDetail(workflowSummary.id);
 
           // Parse the node graph from the internal API response
-          const parsed = parseNodeGraph(fullJson);
+          const isPublicApiFallback = !!fullJson.__publicApiFallback;
+          if (isPublicApiFallback) publicApiFallbackCount++;
+          const parsed = parseNodeGraph(fullJson, { isPublicApiFallback });
           parsedConnections = parsed.connections;
 
           // Fetch triggers from the dedicated backend trigger endpoint
@@ -243,6 +247,14 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         const msg = err instanceof Error ? err.message : String(err);
         result.errors.push(`Workflow ${workflowSummary.id}: ${msg}`);
       }
+    }
+
+    // Log summary of public API fallbacks (once per cycle, not per-workflow)
+    if (publicApiFallbackCount > 0) {
+      console.error(
+        `[WorkflowExtractor] ${publicApiFallbackCount}/${workflows.length} workflows used public API fallback (no node graph). ` +
+        'Set GHL_FIREBASE_API_KEY and GHL_FIREBASE_REFRESH_TOKEN for full workflow step data.',
+      );
     }
 
     // Update sync log

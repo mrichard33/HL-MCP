@@ -312,7 +312,9 @@ export class GHLClient {
     if (!this.hasFirebaseAuth) {
       // Fallback to public API
       const workflow = await this.getWorkflow(workflowId);
-      return workflow as unknown as Record<string, unknown>;
+      const result = workflow as unknown as Record<string, unknown>;
+      result.__publicApiFallback = true;
+      return result;
     }
 
     const idToken = await this.getFirebaseToken();
@@ -332,7 +334,9 @@ export class GHLClient {
       // Fall back to public API on failure
       console.error(`[GHL] Internal API failed for workflow ${workflowId} (${response.status}), falling back to public API`);
       const workflow = await this.getWorkflow(workflowId);
-      return workflow as unknown as Record<string, unknown>;
+      const result = workflow as unknown as Record<string, unknown>;
+      result.__publicApiFallback = true;
+      return result;
     }
 
     return response.json() as Promise<Record<string, unknown>>;

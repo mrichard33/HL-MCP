@@ -105,7 +105,10 @@ function findEdges(rawJson: Record<string, unknown>): GHLWorkflowEdge[] {
  * Parses the GHL internal API node-graph response into structured workflow components.
  * Handles multiple possible JSON structures and logs diagnostic info when parsing fails.
  */
-export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflowGraph {
+export function parseNodeGraph(
+  rawJson: Record<string, unknown>,
+  options?: { isPublicApiFallback?: boolean },
+): ParsedWorkflowGraph {
   const result: ParsedWorkflowGraph = {
     triggers: [],
     actions: [],
@@ -117,9 +120,14 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
   const edges = findEdges(rawJson);
 
   if (nodes.length === 0) {
-    // Only log at debug level — this is expected for public API fallback responses
     const workflowName = (rawJson.name as string) || (rawJson._id as string) || 'unknown';
-    console.warn(`[NodeGraphParser] No nodes found for workflow "${workflowName}" (public API fallback — node graph requires internal API)`);
+
+    // Only warn when this is unexpected (Firebase auth configured but still no nodes)
+    if (!options?.isPublicApiFallback) {
+      console.warn(`[NodeGraphParser] No nodes found for workflow "${workflowName}" — unexpected response format (Firebase auth is configured)`);
+    } else if (process.env.DEBUG) {
+      console.error(`[NodeGraphParser] Public API fallback for "${workflowName}" (no node graph available)`);
+    }
 
     // Try to extract from legacy flat structure (public API format)
     if (Array.isArray(rawJson.triggers)) {
