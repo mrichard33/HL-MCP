@@ -3,6 +3,16 @@ import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
 
+/** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
+function toISODate(value: string | number | null | undefined): string | null {
+  if (value == null) return null;
+  const n = typeof value === 'string' ? Number(value) : value;
+  if (!isNaN(n) && n > 946684800000) {
+    return new Date(n).toISOString();
+  }
+  return typeof value === 'string' ? value : null;
+}
+
 export const conversationTools = {
   list_conversations: {
     description: 'List conversations from GoHighLevel, optionally filtered by contact. Uses OAuth tokens automatically when configured. Use useCache=true to query synced data from Supabase.',
@@ -84,7 +94,7 @@ export const conversationTools = {
         ghl_contact_id: c.contactId,
         ghl_location_id: c.locationId,
         type: c.type || 'sms',
-        last_message_at: c.lastMessageDate,
+        last_message_at: toISODate(c.lastMessageDate),
         unread_count: c.unreadCount || 0,
         synced_at: nowET(),
       }));

@@ -280,6 +280,18 @@ const BATCH_SIZE = 3;
 const BATCH_DELAY_MS = 3000; // 3s pause between batches to stay under GHL rate limits
 const MAX_CONTACTS_PER_SYNC = 100; // Limit per run to avoid timeouts
 
+/** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
+function toISODate(value: string | number | null | undefined): string | null {
+  if (value == null) return null;
+  const n = typeof value === 'string' ? Number(value) : value;
+  // If it looks like a ms timestamp (> year 2000 in ms), convert to ISO
+  if (!isNaN(n) && n > 946684800000) {
+    return new Date(n).toISOString();
+  }
+  // Already an ISO string or other valid date format
+  return typeof value === 'string' ? value : null;
+}
+
 /** Small helper to pause between batches. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -378,7 +390,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                   ghl_contact_id: conv.contactId,
                   ghl_location_id: conv.locationId || null,
                   type: conv.type || 'sms',
-                  last_message_at: conv.lastMessageDate || null,
+                  last_message_at: toISODate(conv.lastMessageDate),
                   unread_count: conv.unreadCount || 0,
                   synced_at: now,
                   updated_at: now,
@@ -412,7 +424,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                       type: msg.type || 'sms',
                       body: msg.body || null,
                       status: msg.status || 'delivered',
-                      sent_at: msg.dateAdded || now,
+                      sent_at: toISODate(msg.dateAdded) || now,
                     },
                     { onConflict: 'ghl_message_id' },
                   );
