@@ -118,7 +118,9 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
 
   if (nodes.length === 0) {
     const workflowName = (rawJson.name as string) || (rawJson._id as string) || 'unknown';
-    console.warn(`[NodeGraphParser] No nodes found for workflow "${workflowName}" — unexpected internal API response format`);
+    if (process.env.DEBUG) {
+      console.warn(`[NodeGraphParser] No nodes found for workflow "${workflowName}" — unexpected internal API response format`);
+    }
 
     // Try to extract from legacy flat structure (public API format)
     if (Array.isArray(rawJson.triggers)) {
