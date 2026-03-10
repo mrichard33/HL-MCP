@@ -28,8 +28,9 @@ function toDelayMinutes(delay?: number, unit?: string): number {
 
 /**
  * Extracts and syncs all workflow data from GoHighLevel into Supabase.
- * Uses the internal backend API (via Firebase auth) for full workflow JSON
- * when available, falling back to the public API otherwise.
+ * Uses the internal backend API (via Firebase auth) for full workflow node graphs.
+ * When Firebase auth is not configured, uses summary data only (no per-workflow
+ * detail calls since steps/nodes require the internal API).
  *
  * Populates: workflows, workflow_steps, workflow_triggers, workflow_actions,
  * workflow_connections, and workflow_snapshots tables.
@@ -48,8 +49,6 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
     errors: [],
   };
 
-  let publicApiFallbackCount = 0;
-
   // Log sync start
   const { data: syncLog } = await supabase.from('sync_log').insert({
     entity_type: 'workflows_full',
@@ -63,17 +62,17 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
 
     for (const workflowSummary of workflows) {
       try {
-        // 2. Fetch full workflow detail (internal API if available, public API fallback)
+        // 2. Fetch full workflow detail from internal API (requires Firebase auth)
         let workflowDetail: GHLWorkflow;
         let fullJson: Record<string, unknown>;
         let parsedConnections: Array<{ fromStep: string; toStep: string; condition?: string }> = [];
-        try {
-          fullJson = await ghl.getWorkflowDetail(workflowSummary.id);
 
-          // Parse the node graph from the internal API response
-          const isPublicApiFallback = !!fullJson.__publicApiFallback;
-          if (isPublicApiFallback) publicApiFallbackCount++;
-          const parsed = parseNodeGraph(fullJson, { isPublicApiFallback });
+        const internalJson = await ghl.getWorkflowDetail(workflowSummary.id);
+
+        if (internalJson) {
+          // Internal API returned data — parse the full node graph
+          fullJson = internalJson;
+          const parsed = parseNodeGraph(fullJson);
           parsedConnections = parsed.connections;
 
           // Fetch triggers from the dedicated backend trigger endpoint
@@ -107,8 +106,8 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
             triggers: mergedTriggers,
             actions: parsed.actions.length > 0 ? parsed.actions : (fullJson.actions as GHLWorkflow['actions']) || workflowSummary.actions || [],
           };
-        } catch {
-          // If detail endpoint fails, use summary data
+        } else {
+          // No internal API available — use summary data directly (no redundant API calls)
           workflowDetail = workflowSummary;
           fullJson = JSON.parse(JSON.stringify(workflowSummary));
         }
@@ -247,14 +246,6 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         const msg = err instanceof Error ? err.message : String(err);
         result.errors.push(`Workflow ${workflowSummary.id}: ${msg}`);
       }
-    }
-
-    // Log summary of public API fallbacks (once per cycle, not per-workflow)
-    if (publicApiFallbackCount > 0) {
-      console.error(
-        `[WorkflowExtractor] ${publicApiFallbackCount}/${workflows.length} workflows used public API fallback (no node graph). ` +
-        'Set GHL_FIREBASE_API_KEY and GHL_FIREBASE_REFRESH_TOKEN for full workflow step data.',
-      );
     }
 
     // Update sync log

@@ -83,6 +83,11 @@ export class GHLClient {
     return !!(this.firebaseApiKey && this.firebaseRefreshToken);
   }
 
+  /** Whether Firebase auth is configured for internal API access. */
+  get isFirebaseAuthConfigured(): boolean {
+    return this.hasFirebaseAuth;
+  }
+
   private async getFirebaseToken(): Promise<string> {
     if (!this.firebaseApiKey || !this.firebaseRefreshToken) {
       throw new Error('Firebase auth not configured — set GHL_FIREBASE_API_KEY and GHL_FIREBASE_REFRESH_TOKEN');
@@ -305,16 +310,12 @@ export class GHLClient {
 
   /**
    * Fetch full workflow detail from the internal GHL backend API.
-   * Returns the complete node/step/action graph.
-   * Falls back to public API if Firebase auth is not configured.
+   * Returns the complete node/step/action graph, or null if Firebase auth
+   * is not configured (callers should use summary data instead).
    */
-  async getWorkflowDetail(workflowId: string): Promise<Record<string, unknown>> {
+  async getWorkflowDetail(workflowId: string): Promise<Record<string, unknown> | null> {
     if (!this.hasFirebaseAuth) {
-      // Fallback to public API
-      const workflow = await this.getWorkflow(workflowId);
-      const result = workflow as unknown as Record<string, unknown>;
-      result.__publicApiFallback = true;
-      return result;
+      return null;
     }
 
     const idToken = await this.getFirebaseToken();
@@ -330,13 +331,8 @@ export class GHLClient {
     });
 
     if (!response.ok) {
-      const errorBody = await response.text();
-      // Fall back to public API on failure
-      console.error(`[GHL] Internal API failed for workflow ${workflowId} (${response.status}), falling back to public API`);
-      const workflow = await this.getWorkflow(workflowId);
-      const result = workflow as unknown as Record<string, unknown>;
-      result.__publicApiFallback = true;
-      return result;
+      console.error(`[GHL] Internal API failed for workflow ${workflowId} (${response.status})`);
+      return null;
     }
 
     return response.json() as Promise<Record<string, unknown>>;
