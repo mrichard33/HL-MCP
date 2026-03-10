@@ -2,6 +2,7 @@ import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import type { GHLWorkflow, GHLWorkflowStep } from '../types/ghl.js';
 import { parseNodeGraph } from './node-graph-parser.js';
+import { nowET } from '../utils/timezone.js';
 
 export interface SyncResult {
   workflows_synced: number;
@@ -126,7 +127,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           trigger_config: workflowDetail.triggers && workflowDetail.triggers.length > 0 ? workflowDetail.triggers : {},
           actions: workflowDetail.actions && workflowDetail.actions.length > 0 ? workflowDetail.actions : [],
           raw_json: rawJson,
-          synced_at: new Date().toISOString(),
+          synced_at: nowET(),
         }, { onConflict: 'ghl_workflow_id' });
         result.workflows_synced++;
 
@@ -253,7 +254,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
       await supabase.from('sync_log').update({
         status: 'completed',
         records_synced: result.workflows_synced,
-        completed_at: new Date().toISOString(),
+        completed_at: nowET(),
       }).eq('id', syncLog.id);
     }
 
@@ -265,7 +266,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
       await supabase.from('sync_log').update({
         status: 'failed',
         error_message: msg,
-        completed_at: new Date().toISOString(),
+        completed_at: nowET(),
       }).eq('id', syncLog.id);
     }
   }

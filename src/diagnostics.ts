@@ -1,4 +1,5 @@
 import { getSupabaseClient } from './clients/supabase.js';
+import { nowET } from './utils/timezone.js';
 
 interface DiagnosticResult {
   status: 'ok' | 'warning' | 'error';
@@ -44,6 +45,8 @@ const ENV_VARS = [
   'GHL_LOCATION_ID',
   'GHL_FIREBASE_API_KEY',
   'GHL_FIREBASE_REFRESH_TOKEN',
+  'GHL_OAUTH_CLIENT_ID',
+  'GHL_OAUTH_CLIENT_SECRET',
   'ENABLE_SCHEDULED_SYNC',
   'MCP_AUTH_TOKEN',
   'OAUTH_AUTHORIZE_SECRET',
@@ -188,7 +191,7 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
   const overall = hasError ? 'unhealthy' : hasWarning ? 'degraded' : 'healthy';
 
   return {
-    timestamp: new Date().toISOString(),
+    timestamp: nowET(),
     overall,
     checks: {
       supabase_connection: supabaseCheck,

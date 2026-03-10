@@ -14,6 +14,7 @@
  */
 
 import { getSupabaseClient } from './supabase.js';
+import { nowET, toET } from '../utils/timezone.js';
 
 const GHL_TOKEN_URL = 'https://services.leadconnectorhq.com/oauth/token';
 const GHL_AUTHORIZE_URL = 'https://marketplace.gohighlevel.com/oauth/chooselocation';
@@ -72,8 +73,8 @@ async function saveTokenToSupabase(
       location_id: process.env.GHL_LOCATION_ID || 'default',
       access_token: accessToken,
       refresh_token: refreshToken,
-      expires_at: new Date(expiresAt).toISOString(),
-      updated_at: new Date().toISOString(),
+      expires_at: toET(expiresAt),
+      updated_at: nowET(),
     },
     { onConflict: 'location_id' },
   );

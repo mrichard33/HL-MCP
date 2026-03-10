@@ -1,6 +1,7 @@
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { createLeadEvent } from '../webhooks/handler.js';
+import { nowET, toET } from '../utils/timezone.js';
 
 // ---- Sync State Helpers ----
 
@@ -22,8 +23,8 @@ async function updateLastSynced(entityName: string): Promise<void> {
     .upsert(
       {
         entity_name: entityName,
-        last_synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        last_synced_at: nowET(),
+        updated_at: nowET(),
       },
       { onConflict: 'entity_name' },
     );
@@ -45,7 +46,7 @@ async function logSyncComplete(syncLogId: string | null, recordsSynced: number):
   await supabase.from('sync_log').update({
     status: 'completed',
     records_synced: recordsSynced,
-    completed_at: new Date().toISOString(),
+    completed_at: nowET(),
   }).eq('id', syncLogId);
 }
 
@@ -55,7 +56,7 @@ async function logSyncFailed(syncLogId: string | null, errorMessage: string): Pr
   await supabase.from('sync_log').update({
     status: 'failed',
     error_message: errorMessage,
-    completed_at: new Date().toISOString(),
+    completed_at: nowET(),
   }).eq('id', syncLogId);
 }
 
@@ -71,7 +72,7 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
     // Fetch ALL contacts with pagination (no updatedAfter — not supported by GHL API v2)
     const contacts = await ghl.getAllContacts();
 
-    const now = new Date().toISOString();
+    const now = nowET();
     for (const c of contacts) {
       try {
         await supabase.from('contacts').upsert(
@@ -126,7 +127,7 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
     // Fetch ALL opportunities with pagination (locationId always included now)
     const opportunities = await ghl.getAllOpportunities();
 
-    const now = new Date().toISOString();
+    const now = nowET();
     for (const o of opportunities) {
       try {
         await supabase.from('opportunities').upsert(
@@ -184,11 +185,11 @@ export async function syncAppointments(options?: {
   try {
     // Fetch appointments across ALL calendars (calendarId is required by GHL API)
     // Default: 24h back to 30d forward (for scheduled sync); callers can override for initial population
-    const startTime = options?.startTime ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const endTime = options?.endTime ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const startTime = options?.startTime ?? toET(Date.now() - 24 * 60 * 60 * 1000);
+    const endTime = options?.endTime ?? toET(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const events = await ghl.getAllAppointments({ startTime, endTime });
 
-    const now = new Date().toISOString();
+    const now = nowET();
     let synced = 0;
     for (const apt of events) {
       try {
@@ -244,7 +245,7 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 
   try {
     const pipelines = await ghl.getPipelines();
-    const now = new Date().toISOString();
+    const now = nowET();
 
     const rows = pipelines.map((p) => ({
       ghl_pipeline_id: p.id,
@@ -287,7 +288,7 @@ function sleep(ms: number): Promise<void> {
  */
 async function createLeadEventsForRecentMessages(): Promise<number> {
   const supabase = getSupabaseClient();
-  const cutoff = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  const cutoff = toET(Date.now() - 20 * 60 * 1000);
 
   const { data: recentMessages, error } = await supabase
     .from('messages')
@@ -306,7 +307,7 @@ async function createLeadEventsForRecentMessages(): Promise<number> {
       } else {
         eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
       }
-      await createLeadEvent(msg.ghl_contact_id, eventType, msg.ghl_message_id, msg.sent_at || new Date().toISOString(), msg);
+      await createLeadEvent(msg.ghl_contact_id, eventType, msg.ghl_message_id, msg.sent_at || nowET(), msg);
       created++;
     } catch {
       // Duplicate events are expected (deduped by event_hash) — ignore
@@ -349,7 +350,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
     let totalConversations = 0;
     let totalMessages = 0;
-    const now = new Date().toISOString();
+    const now = nowET();
 
     // Process contacts in batches
     for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
@@ -466,7 +467,7 @@ type FunnelStage = typeof FUNNEL_STAGES[number];
 
 function deriveFunnelStage(eventTypes: string[]): { stage: FunnelStage; history: { stage: string; entered_at: string }[] } {
   const typeSet = new Set(eventTypes);
-  const now = new Date().toISOString();
+  const now = nowET();
   const history: { stage: string; entered_at: string }[] = [];
   let currentStage: FunnelStage = 'lead_created';
 
@@ -522,7 +523,7 @@ export async function computeFunnelProgression(): Promise<{ computed: number; er
     const contactIds = [...new Set((contacts || []).map((r: { contact_id: unknown }) => r.contact_id as string).filter(Boolean))];
 
     let computed = 0;
-    const now = new Date().toISOString();
+    const now = nowET();
 
     for (const contactId of contactIds) {
       try {

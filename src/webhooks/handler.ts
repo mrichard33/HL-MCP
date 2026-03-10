@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { getSupabaseClient } from '../clients/supabase.js';
+import { nowET } from '../utils/timezone.js';
 
 /**
  * Creates a deterministic event hash for deduplication.
@@ -66,7 +67,7 @@ async function logWebhookFailure(
 async function handleContactWebhook(payload: Record<string, unknown>): Promise<void> {
   const supabase = getSupabaseClient();
   const id = (payload.id || payload.contactId) as string;
-  const now = new Date().toISOString();
+  const now = nowET();
 
   await supabase.from('contacts').upsert(
     {
@@ -104,7 +105,7 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
   const supabase = getSupabaseClient();
   const id = (payload.id || payload.opportunityId) as string;
   const contactId = payload.contactId as string | undefined;
-  const now = new Date().toISOString();
+  const now = nowET();
 
   await supabase.from('opportunities').upsert(
     {
@@ -136,7 +137,7 @@ async function handleAppointmentWebhook(payload: Record<string, unknown>): Promi
   const supabase = getSupabaseClient();
   const id = (payload.id || payload.appointmentId) as string;
   const contactId = payload.contactId as string | undefined;
-  const now = new Date().toISOString();
+  const now = nowET();
 
   await supabase.from('appointments').upsert(
     {
@@ -172,7 +173,7 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
   const contactId = payload.contactId as string | undefined;
   const direction = (payload.direction as string) || 'outbound';
   const msgType = (payload.type as string) || 'sms';
-  const now = new Date().toISOString();
+  const now = nowET();
 
   await supabase.from('messages').upsert(
     {
@@ -212,7 +213,7 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
   const supabase = getSupabaseClient();
   const id = (payload.id || payload.workflowId) as string;
   const contactId = payload.contactId as string | undefined;
-  const now = new Date().toISOString();
+  const now = nowET();
 
   await supabase.from('workflows').upsert(
     {

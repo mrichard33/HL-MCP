@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
+import { nowET } from '../utils/timezone.js';
 
 export const pipelineTools = {
   list_pipelines: {
@@ -94,7 +95,7 @@ export const pipelineTools = {
         ghl_location_id: p.locationId,
         name: p.name,
         stages: p.stages,
-        synced_at: new Date().toISOString(),
+        synced_at: nowET(),
       }));
 
       const { error } = await supabase.from('pipelines').upsert(pipelineRows, { onConflict: 'ghl_pipeline_id' });
