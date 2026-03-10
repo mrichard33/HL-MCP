@@ -185,3 +185,40 @@ export interface FirebaseTokenResponse {
   user_id: string;
   project_id: string;
 }
+
+export interface GHLCustomField {
+  id: string;
+  name: string;
+  fieldKey?: string;
+  dataType?: string;
+  placeholder?: string;
+  position?: number;
+  model?: string;
+  locationId?: string;
+  [key: string]: unknown;
+}
+
+export interface GHLCustomValue {
+  id: string;
+  name: string;
+  fieldKey?: string;
+  value?: string;
+  locationId?: string;
+  [key: string]: unknown;
+}
+
+export interface GHLTag {
+  id: string;
+  name: string;
+  locationId?: string;
+  [key: string]: unknown;
+}
+
+export interface GHLLink {
+  id: string;
+  name?: string;
+  redirectTo?: string;
+  url?: string;
+  locationId?: string;
+  [key: string]: unknown;
+}

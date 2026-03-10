@@ -9,6 +9,10 @@ import type {
   GHLAppointment,
   GHLPaginationMeta,
   FirebaseTokenResponse,
+  GHLCustomField,
+  GHLCustomValue,
+  GHLTag,
+  GHLLink,
 } from '../types/ghl.js';
 import { isOAuthConfigured, getOAuthAccessToken } from './ghl-oauth.js';
 
@@ -613,6 +617,43 @@ export class GHLClient {
     }
 
     return all;
+  }
+
+  // ---- Custom Fields ----
+
+  async getCustomFields(): Promise<GHLCustomField[]> {
+    const res = await this.request<{ customFields: GHLCustomField[] }>(
+      `/locations/${this.locationId}/customFields`,
+    );
+    return res.customFields || [];
+  }
+
+  // ---- Custom Values ----
+
+  async getCustomValues(): Promise<GHLCustomValue[]> {
+    const res = await this.request<{ customValues: GHLCustomValue[] }>(
+      `/locations/${this.locationId}/customValues`,
+    );
+    return res.customValues || [];
+  }
+
+  // ---- Tags ----
+
+  async getTags(): Promise<GHLTag[]> {
+    const res = await this.request<{ tags: GHLTag[] }>(
+      `/locations/${this.locationId}/tags`,
+    );
+    return res.tags || [];
+  }
+
+  // ---- Links (Trigger Links) ----
+
+  async getLinks(): Promise<GHLLink[]> {
+    const params: Record<string, string> = {
+      locationId: this.locationId,
+    };
+    const res = await this.request<{ links: GHLLink[] }>('/links/', { params });
+    return res.links || [];
   }
 
   /** Expose locationId for use by other modules. */
