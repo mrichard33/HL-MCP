@@ -10,6 +10,7 @@ import type {
   GHLPaginationMeta,
   FirebaseTokenResponse,
 } from '../types/ghl.js';
+import { isOAuthConfigured, getOAuthAccessToken } from './ghl-oauth.js';
 
 const DEFAULT_BASE_URL = 'https://services.leadconnectorhq.com';
 const BACKEND_BASE_URL = 'https://backend.leadconnectorhq.com';
@@ -75,6 +76,51 @@ export class GHLClient {
     }
 
     return response.json() as Promise<T>;
+  }
+
+  /**
+   * Make a request using OAuth 2.0 tokens (for conversations/messages API).
+   * Falls back to API key auth if OAuth is not configured.
+   */
+  private async requestWithOAuth<T>(path: string, options: RequestOptions = {}): Promise<T> {
+    const url = new URL(path, this.baseUrl);
+    if (options.params) {
+      for (const [key, value] of Object.entries(options.params)) {
+        url.searchParams.set(key, value);
+      }
+    }
+
+    let authToken: string;
+    if (isOAuthConfigured()) {
+      authToken = await getOAuthAccessToken();
+    } else {
+      // Fallback to API key — may fail for endpoints that require OAuth
+      authToken = this.apiKey;
+    }
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${authToken}`,
+      'Content-Type': 'application/json',
+      Version: '2021-07-28',
+    };
+
+    const response = await fetch(url.toString(), {
+      method: options.method || 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+    }
+
+    return response.json() as Promise<T>;
+  }
+
+  /** Whether GHL OAuth is configured for conversation/message API access. */
+  get isOAuthConfigured(): boolean {
+    return isOAuthConfigured();
   }
 
   // ---- Firebase Auth for Internal API ----
@@ -399,7 +445,7 @@ export class GHLClient {
     if (params?.startAfter) reqParams.startAfter = params.startAfter;
     if (params?.startAfterId) reqParams.startAfterId = params.startAfterId;
 
-    return this.request('/conversations/search', { method: 'GET', params: reqParams });
+    return this.requestWithOAuth('/conversations/search', { method: 'GET', params: reqParams });
   }
 
   /** Fetch ALL conversations for a given contact using pagination. */
@@ -412,7 +458,7 @@ export class GHLClient {
 
     do {
       const result: { conversations: GHLConversation[]; meta?: GHLPaginationMeta } =
-        await this.request('/conversations/search', {
+        await this.requestWithOAuth('/conversations/search', {
           method: 'GET',
           params: {
             locationId: this.locationId,
@@ -438,7 +484,7 @@ export class GHLClient {
   }
 
   async getConversation(conversationId: string): Promise<GHLConversation> {
-    const res = await this.request<{ conversation: GHLConversation }>(
+    const res = await this.requestWithOAuth<{ conversation: GHLConversation }>(
       `/conversations/${conversationId}`
     );
     return res.conversation;
@@ -447,7 +493,7 @@ export class GHLClient {
   // ---- Messages ----
 
   async getMessages(conversationId: string): Promise<{ messages: GHLMessage[] }> {
-    return this.request(`/conversations/${conversationId}/messages`);
+    return this.requestWithOAuth(`/conversations/${conversationId}/messages`);
   }
 
   async sendMessage(data: {
@@ -456,7 +502,7 @@ export class GHLClient {
     message: string;
     contactId: string;
   }): Promise<GHLMessage> {
-    const res = await this.request<{ message: GHLMessage }>(
+    const res = await this.requestWithOAuth<{ message: GHLMessage }>(
       `/conversations/messages`,
       { method: 'POST', body: data }
     );
