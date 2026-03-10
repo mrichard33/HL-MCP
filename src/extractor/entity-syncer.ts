@@ -16,7 +16,7 @@ async function getLastSynced(entityName: string): Promise<string> {
   return data?.last_synced_at || '1970-01-01T00:00:00Z';
 }
 
-async function updateLastSynced(entityName: string): Promise<void> {
+export async function updateLastSynced(entityName: string): Promise<void> {
   const supabase = getSupabaseClient();
   await supabase
     .from('sync_state')
@@ -190,6 +190,9 @@ export async function syncAppointments(options?: {
     const startTime = options?.startTime ?? toET(Date.now() - 24 * 60 * 60 * 1000);
     const endTime = options?.endTime ?? toET(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const events = await ghl.getAllAppointments({ startTime, endTime });
+    if (events.length === 0) {
+      console.warn('[EntitySync] No appointments returned — check that calendars exist and GHL_LOCATION_ID is correct');
+    }
 
     const now = nowET();
     let synced = 0;
@@ -249,10 +252,11 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
   try {
     const pipelines = await ghl.getPipelines();
     const now = nowET();
+    const locationId = ghl.getLocationId();
 
     const rows = pipelines.map((p) => ({
       ghl_pipeline_id: p.id,
-      ghl_location_id: p.locationId || null,
+      ghl_location_id: p.locationId || locationId,
       name: p.name,
       stages: p.stages,
       synced_at: now,

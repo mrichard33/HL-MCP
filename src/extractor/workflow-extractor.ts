@@ -3,6 +3,7 @@ import { getSupabaseClient } from '../clients/supabase.js';
 import type { GHLWorkflow, GHLWorkflowStep } from '../types/ghl.js';
 import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
+import { updateLastSynced } from './entity-syncer.js';
 
 export interface SyncResult {
   workflows_synced: number;
@@ -257,7 +258,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
       console.log(`[WorkflowSync] ${noNodesCount}/${workflows.length} workflows had no parseable nodes (internal API format unrecognized)`);
     }
 
-    // Update sync log
+    // Update sync log and sync state
     if (syncLog) {
       await supabase.from('sync_log').update({
         status: 'completed',
@@ -265,6 +266,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         completed_at: nowET(),
       }).eq('id', syncLog.id);
     }
+    await updateLastSynced('workflows');
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
