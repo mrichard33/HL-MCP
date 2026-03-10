@@ -105,7 +105,7 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
 
     await updateLastSynced('contacts');
     await logSyncComplete(syncLogId, contacts.length);
-    console.error(`[EntitySync] Contacts synced: ${contacts.length}`);
+    console.log(`[EntitySync] Contacts synced: ${contacts.length}`);
     return { synced: contacts.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -162,7 +162,7 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
 
     await updateLastSynced('opportunities');
     await logSyncComplete(syncLogId, opportunities.length);
-    console.error(`[EntitySync] Opportunities synced: ${opportunities.length}`);
+    console.log(`[EntitySync] Opportunities synced: ${opportunities.length}`);
     return { synced: opportunities.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -227,7 +227,7 @@ export async function syncAppointments(options?: {
 
     await updateLastSynced('appointments');
     await logSyncComplete(syncLogId, synced);
-    console.error(`[EntitySync] Appointments synced: ${synced}`);
+    console.log(`[EntitySync] Appointments synced: ${synced}`);
     return { synced, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -263,7 +263,7 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 
     await updateLastSynced('pipelines');
     await logSyncComplete(syncLogId, rows.length);
-    console.error(`[EntitySync] Pipelines synced: ${rows.length}`);
+    console.log(`[EntitySync] Pipelines synced: ${rows.length}`);
     return { synced: rows.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -278,7 +278,7 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 
 const BATCH_SIZE = 3;
 const BATCH_DELAY_MS = 3000; // 3s pause between batches to stay under GHL rate limits
-const MAX_CONTACTS_PER_SYNC = 100; // Limit per run to avoid timeouts
+const MAX_CONTACTS_PER_SYNC = 200; // Limit per run to avoid timeouts
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
 function toISODate(value: string | number | null | undefined): string | null {
@@ -356,12 +356,12 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
     if (contactError) throw new Error(`Failed to fetch contacts: ${contactError.message}`);
     if (!contacts?.length) {
-      console.error('[EntitySync] No contacts found in Supabase — sync contacts first');
+      console.warn('[EntitySync] No contacts found in Supabase — sync contacts first');
       await logSyncComplete(syncLogId, 0);
       return { synced_conversations: 0, synced_messages: 0, errors: [] };
     }
 
-    console.error(`[EntitySync] Syncing conversations for ${contacts.length} contacts (batch size: ${BATCH_SIZE})...`);
+    console.log(`[EntitySync] Syncing conversations for ${contacts.length} contacts (batch size: ${BATCH_SIZE})...`);
 
     let totalConversations = 0;
     let totalMessages = 0;
@@ -389,7 +389,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                   ghl_conversation_id: conv.id,
                   ghl_contact_id: conv.contactId,
                   ghl_location_id: conv.locationId || null,
-                  type: conv.type || 'sms',
+                  type: conv.type || null,
                   last_message_at: toISODate(conv.lastMessageDate),
                   unread_count: conv.unreadCount || 0,
                   synced_at: now,
@@ -403,17 +403,9 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
               }
               convCount++;
 
-              // Fetch and upsert messages for this conversation
+              // Fetch and upsert messages for this conversation (with pagination)
               try {
-                const msgResponse = await ghl.getMessages(conv.id);
-
-                // Handle various response shapes from GHL API
-                // Confirmed shape: { messages: { lastMessageId, nextPage, messages: [...] }, traceId }
-                const messageList = Array.isArray(msgResponse.messages)
-                  ? msgResponse.messages
-                  : Array.isArray((msgResponse as any).messages?.messages)
-                    ? (msgResponse as any).messages.messages
-                    : [];
+                const messageList = await ghl.getAllMessages(conv.id, 5);
                 for (const msg of messageList) {
                   const { error: msgError } = await supabase.from('messages').upsert(
                     {
@@ -465,12 +457,12 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     // Create lead events for any newly synced messages
     const eventsCreated = await createLeadEventsForRecentMessages();
     if (eventsCreated > 0) {
-      console.error(`[EntitySync] Created ${eventsCreated} lead events for recent messages`);
+      console.log(`[EntitySync] Created ${eventsCreated} lead events for recent messages`);
     }
 
     await updateLastSynced('conversations');
     await logSyncComplete(syncLogId, totalConversations + totalMessages);
-    console.error(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}`);
+    console.log(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}`);
 
     if (errors.length > 0) {
       console.error(`[EntitySync] ${errors.length} errors during conversation sync:`);
@@ -592,7 +584,7 @@ export async function computeFunnelProgression(): Promise<{ computed: number; er
     }
 
     await logSyncComplete(syncLogId, computed);
-    console.error(`[EntitySync] Funnel progression computed for ${computed} contacts`);
+    console.log(`[EntitySync] Funnel progression computed for ${computed} contacts`);
     return { computed, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
