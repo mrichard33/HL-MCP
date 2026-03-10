@@ -3,7 +3,7 @@ import { getSupabaseClient } from '../clients/supabase.js';
 import type { GHLWorkflow, GHLWorkflowStep, GHLWorkflowTrigger, GHLWorkflowAction } from '../types/ghl.js';
 import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
-import { updateLastSynced } from './entity-syncer.js';
+import { updateLastSynced, softDeleteMissing } from './entity-syncer.js';
 
 export interface SyncResult {
   workflows_synced: number;
@@ -84,7 +84,10 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     'created_at', 'updated_at', 'createdTs', 'updatedTs', 'timestamp',
     'modifiedAt', 'modified_at', 'lastModified', 'dateCreated', 'dateUpdated',
     'dateAdded', 'dateModified', 'version', 'order', 'priority',
+    'value',  // Raw backend trigger 'value' is always a timestamp, not meaningful
   ]);
+  // ISO 8601 timestamp pattern to skip values that look like dates
+  const isoTimestampRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
   for (const [key, val] of Object.entries(trigger)) {
     if (skipKeys.has(key)) continue;
     if (val && typeof val === 'object' && !Array.isArray(val)) continue;
@@ -93,7 +96,7 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     }
     if (val !== null && val !== undefined && val !== '' && typeof val !== 'boolean') {
       const str = String(val).trim();
-      if (str && str !== 'undefined' && str !== 'null') return str;
+      if (str && str !== 'undefined' && str !== 'null' && !isoTimestampRe.test(str)) return str;
     }
   }
 
@@ -511,6 +514,10 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
     if (noNodesCount > 0) {
       console.log(`[WorkflowSync] ${noNodesCount}/${workflows.length} workflows had no parseable nodes (internal API format unrecognized)`);
     }
+
+    // Soft-delete workflows no longer in GHL
+    const activeWorkflowIds = workflows.map((w) => w.id);
+    await softDeleteMissing('workflows', 'ghl_workflow_id', activeWorkflowIds, ghl.getLocationId());
 
     // Update sync log and sync state
     if (syncLog) {

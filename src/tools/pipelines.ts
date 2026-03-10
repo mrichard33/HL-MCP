@@ -12,7 +12,7 @@ export const pipelineTools = {
     handler: async (args: { useCache?: boolean }) => {
       if (args.useCache) {
         const supabase = getSupabaseClient();
-        const { data, error } = await supabase.from('pipelines').select('*');
+        const { data, error } = await supabase.from('pipelines').select('*').is('deleted_at', null);
         if (error) throw new Error(`Supabase error: ${error.message}`);
         return { pipelines: data, source: 'cache' };
       }
@@ -34,7 +34,7 @@ export const pipelineTools = {
     handler: async (args: { pipelineId?: string; stageId?: string; status?: string; limit?: number; useCache?: boolean }) => {
       if (args.useCache) {
         const supabase = getSupabaseClient();
-        let qb = supabase.from('opportunities').select('*').limit(args.limit || 20);
+        let qb = supabase.from('opportunities').select('*').is('deleted_at', null).limit(args.limit || 20);
         if (args.pipelineId) qb = qb.eq('ghl_pipeline_id', args.pipelineId);
         if (args.stageId) qb = qb.eq('ghl_stage_id', args.stageId);
         if (args.status) qb = qb.eq('status', args.status);
