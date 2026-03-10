@@ -43,6 +43,8 @@ export interface GHLOpportunity {
   customFields?: Record<string, unknown>[];
   dateAdded?: string;
   dateUpdated?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface GHLWorkflowStep {

@@ -123,8 +123,8 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
       source: (payload.source as string) || null,
       assigned_to: (payload.assignedTo as string) || null,
       custom_fields: payload.customFields || {},
-      date_added: (payload.dateAdded as string) || null,
-      date_updated: (payload.dateUpdated as string) || now,
+      date_added: (payload.dateAdded as string) || (payload.createdAt as string) || null,
+      date_updated: (payload.dateUpdated as string) || (payload.updatedAt as string) || now,
       synced_at: now,
       updated_at: now,
     },
@@ -132,7 +132,7 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
   );
 
   const eventType = payload.previousStageId ? 'pipeline_stage_changed' : 'opportunity_created';
-  const stableTs = (payload.dateUpdated || payload.dateAdded || now) as string;
+  const stableTs = (payload.dateUpdated || payload.updatedAt || payload.dateAdded || payload.createdAt || now) as string;
   await createLeadEvent(contactId, eventType, id, stableTs, payload);
 }
 

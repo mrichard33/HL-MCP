@@ -148,15 +148,15 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
             source: o.source || null,
             assigned_to: o.assignedTo || null,
             custom_fields: o.customFields || {},
-            date_added: o.dateAdded || null,
-            date_updated: o.dateUpdated || now,
+            date_added: o.dateAdded || o.createdAt || null,
+            date_updated: o.dateUpdated || o.updatedAt || now,
             synced_at: now,
             updated_at: now,
           },
           { onConflict: 'ghl_opportunity_id' },
         );
 
-        const stableTs = o.dateUpdated || o.dateAdded;
+        const stableTs = o.dateUpdated || o.updatedAt || o.dateAdded || o.createdAt;
         if (stableTs) {
           await createLeadEvent(o.contactId, 'opportunity_updated', o.id, stableTs, o);
         }
