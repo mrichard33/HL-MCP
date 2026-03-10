@@ -117,9 +117,8 @@ export function parseNodeGraph(rawJson: Record<string, unknown>): ParsedWorkflow
   const edges = findEdges(rawJson);
 
   if (nodes.length === 0) {
-    // Only log at debug level — this is expected for public API fallback responses
     const workflowName = (rawJson.name as string) || (rawJson._id as string) || 'unknown';
-    console.warn(`[NodeGraphParser] No nodes found for workflow "${workflowName}" (public API fallback — node graph requires internal API)`);
+    console.warn(`[NodeGraphParser] No nodes found for workflow "${workflowName}" — unexpected internal API response format`);
 
     // Try to extract from legacy flat structure (public API format)
     if (Array.isArray(rawJson.triggers)) {
