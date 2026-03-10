@@ -1,6 +1,6 @@
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
-import type { GHLWorkflow, GHLWorkflowStep } from '../types/ghl.js';
+import type { GHLWorkflow, GHLWorkflowStep, GHLWorkflowTrigger } from '../types/ghl.js';
 import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
 import { updateLastSynced } from './entity-syncer.js';
@@ -26,6 +26,53 @@ function toDelayMinutes(delay?: number, unit?: string): number {
     case 'seconds': return Math.ceil(delay / 60);
     default: return delay; // assume minutes
   }
+}
+
+/**
+ * Extracts a meaningful trigger value from a trigger object by checking
+ * multiple possible GHL field names for the trigger's configuration value.
+ */
+function extractTriggerValue(trigger: Record<string, unknown>): string | null {
+  const directFields = [
+    'value', 'triggerValue', 'filterValue',
+    'formId', 'formName',
+    'tagId', 'tagName',
+    'pipelineId', 'pipelineName',
+    'stageId', 'stageName',
+    'pipelineStageId',
+    'surveyId', 'surveyName',
+    'calendarId', 'calendarName',
+    'webhookUrl',
+    'customFieldId', 'customFieldName',
+    'membershipId', 'membershipName',
+    'invoiceId',
+    'campaignId', 'campaignName',
+  ];
+
+  for (const field of directFields) {
+    const val = trigger[field];
+    if (val && typeof val === 'string' && val.trim()) {
+      return val.trim();
+    }
+  }
+
+  // Check nested data object (from node-graph-parser raw nodes)
+  if (trigger.data && typeof trigger.data === 'object') {
+    const data = trigger.data as Record<string, unknown>;
+    for (const field of directFields) {
+      const val = data[field];
+      if (val && typeof val === 'string' && val.trim()) {
+        return val.trim();
+      }
+    }
+  }
+
+  // Fallback: serialize filters if present
+  if (trigger.filters && Array.isArray(trigger.filters) && trigger.filters.length > 0) {
+    return JSON.stringify(trigger.filters);
+  }
+
+  return null;
 }
 
 /**
@@ -94,6 +141,21 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           parsedConnections = parsed.connections;
           if (parsed.triggers.length === 0 && parsed.steps.length === 0 && parsed.actions.length === 0) {
             noNodesCount++;
+            // Fallback: try public API individual endpoint for structured data
+            try {
+              const publicDetail = await ghl.getWorkflow(workflowSummary.id);
+              if (publicDetail.steps && publicDetail.steps.length > 0) {
+                parsed.steps = publicDetail.steps as GHLWorkflowStep[];
+              }
+              if (publicDetail.triggers && publicDetail.triggers.length > 0) {
+                parsed.triggers = publicDetail.triggers as GHLWorkflowTrigger[];
+              }
+              if (publicDetail.actions && publicDetail.actions.length > 0) {
+                parsed.actions = publicDetail.actions as GHLWorkflow['actions'] & GHLWorkflowTrigger[];
+              }
+            } catch {
+              // Public API fallback is best-effort
+            }
           }
 
           // Fetch triggers from the dedicated backend trigger endpoint
@@ -106,7 +168,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
               id: (t.id || t._id) as string | undefined,
               type: (t.type || t.triggerType || t.event) as string | undefined,
               name: (t.name || t.triggerName || t.type) as string | undefined,
-              value: (t.value || t.triggerValue) as string | undefined,
+              value: extractTriggerValue(t as Record<string, unknown>) || undefined,
               filters: Array.isArray(t.filters) ? t.filters as Record<string, unknown>[] : undefined,
               ...t,
             }));
@@ -128,9 +190,20 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
             actions: parsed.actions.length > 0 ? parsed.actions : (fullJson.actions as GHLWorkflow['actions']) || workflowSummary.actions || [],
           };
         } else {
-          // No internal API available — use summary data directly (no redundant API calls)
-          workflowDetail = workflowSummary;
-          fullJson = JSON.parse(JSON.stringify(workflowSummary));
+          // No internal API — call public API individual endpoint for more detail
+          try {
+            const publicDetail = await ghl.getWorkflow(workflowSummary.id);
+            workflowDetail = {
+              ...workflowSummary,
+              ...publicDetail,
+              id: workflowSummary.id,
+            };
+            fullJson = JSON.parse(JSON.stringify(publicDetail));
+          } catch (err) {
+            console.warn(`[WorkflowSync] Public API fallback failed for ${workflowSummary.id}: ${err instanceof Error ? err.message : String(err)}`);
+            workflowDetail = workflowSummary;
+            fullJson = JSON.parse(JSON.stringify(workflowSummary));
+          }
         }
 
         // Store the complete raw JSON (from internal API if available)
@@ -251,7 +324,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           await supabase.from('workflow_triggers').insert({
             workflow_id: workflowDetail.id,
             trigger_event: trigger.type || trigger.name || 'unknown',
-            trigger_value: trigger.value || null,
+            trigger_value: extractTriggerValue(trigger as unknown as Record<string, unknown>),
             raw_json: trigger,
           });
           result.triggers_synced++;
