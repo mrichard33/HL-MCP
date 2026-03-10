@@ -270,100 +270,85 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
   }
 }
 
-// ---- Conversation & Message Sync (every 15 min) ----
+// ---- Conversation & Message Sync (every 15 min) — via n8n webhook proxy ----
+
+/**
+ * Create lead events for recently synced messages that don't yet have events.
+ * Queries messages from the last 20 minutes and checks against lead_events.
+ */
+async function createLeadEventsForRecentMessages(): Promise<number> {
+  const supabase = getSupabaseClient();
+  const cutoff = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+
+  const { data: recentMessages, error } = await supabase
+    .from('messages')
+    .select('ghl_message_id, ghl_conversation_id, ghl_contact_id, direction, type, body, status, sent_at')
+    .gte('sent_at', cutoff);
+
+  if (error || !recentMessages?.length) return 0;
+
+  let created = 0;
+  for (const msg of recentMessages) {
+    try {
+      const msgType = msg.type || 'sms';
+      let eventType: string;
+      if (msg.direction === 'inbound') {
+        eventType = msgType === 'email' ? 'email_received' : 'sms_received';
+      } else {
+        eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
+      }
+      await createLeadEvent(msg.ghl_contact_id, eventType, msg.ghl_message_id, msg.sent_at || new Date().toISOString(), msg);
+      created++;
+    } catch {
+      // Duplicate events are expected (deduped by event_hash) — ignore
+    }
+  }
+
+  return created;
+}
 
 export async function syncConversationsAndMessages(): Promise<{ synced_conversations: number; synced_messages: number; errors: string[] }> {
-  const ghl = new GHLClient();
-  const supabase = getSupabaseClient();
-  const errors: string[] = [];
+  const webhookUrl = process.env.N8N_SYNC_CONVERSATIONS_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.warn('[EntitySync] N8N_SYNC_CONVERSATIONS_WEBHOOK_URL not set — skipping conversations/messages sync. ' +
+      'Create an n8n workflow with GHL OAuth to sync conversations and set the webhook URL.');
+    return { synced_conversations: 0, synced_messages: 0, errors: ['n8n webhook not configured'] };
+  }
+
   const syncLogId = await logSyncStart('conversations');
 
-  let syncedConversations = 0;
-  let syncedMessages = 0;
-
   try {
-    // GHL conversations/search requires contactId — iterate by contact
-    const contacts = await ghl.getAllContacts();
-    const now = new Date().toISOString();
+    console.error('[EntitySync] Triggering n8n conversations/messages sync webhook...');
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ triggered_by: 'mcp-server', timestamp: new Date().toISOString() }),
+    });
 
-    for (const contact of contacts) {
-      try {
-        const conversations = await ghl.getAllConversations(contact.id);
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`n8n webhook error ${response.status}: ${errorBody}`);
+    }
 
-        for (const conv of conversations) {
-          try {
-            await supabase.from('conversations').upsert(
-              {
-                ghl_conversation_id: conv.id,
-                ghl_contact_id: conv.contactId,
-                ghl_location_id: conv.locationId || null,
-                type: conv.type || 'sms',
-                last_message_at: conv.lastMessageDate || null,
-                unread_count: conv.unreadCount || 0,
-                synced_at: now,
-              },
-              { onConflict: 'ghl_conversation_id' },
-            );
-            syncedConversations++;
+    const result = await response.json() as Record<string, unknown>;
+    const syncedConversations = (result.synced_conversations as number) || 0;
+    const syncedMessages = (result.synced_messages as number) || 0;
 
-            // Fetch and sync messages for this conversation
-            try {
-              const { messages } = await ghl.getMessages(conv.id);
-              for (const msg of messages || []) {
-                try {
-                  await supabase.from('messages').upsert(
-                    {
-                      ghl_message_id: msg.id,
-                      ghl_conversation_id: msg.conversationId || conv.id,
-                      ghl_contact_id: msg.contactId || conv.contactId || null,
-                      direction: msg.direction || 'outbound',
-                      type: msg.type || 'sms',
-                      body: msg.body || null,
-                      status: msg.status || 'delivered',
-                      sent_at: msg.dateAdded || now,
-                    },
-                    { onConflict: 'ghl_message_id' },
-                  );
-                  syncedMessages++;
-
-                  // Create lead event for the message
-                  const msgType = msg.type || 'sms';
-                  let eventType: string;
-                  if (msg.direction === 'inbound') {
-                    eventType = msgType === 'email' ? 'email_received' : 'sms_received';
-                  } else {
-                    eventType = msgType === 'email' ? 'email_sent' : 'sms_sent';
-                  }
-                  await createLeadEvent(msg.contactId || conv.contactId, eventType, msg.id, msg.dateAdded || now, msg);
-                } catch (err) {
-                  errors.push(`Message ${msg.id}: ${err instanceof Error ? err.message : String(err)}`);
-                }
-              }
-            } catch (err) {
-              errors.push(`Messages for conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          } catch (err) {
-            errors.push(`Conversation ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-
-        // Small delay between contacts to avoid rate limiting
-        await new Promise(r => setTimeout(r, 100));
-      } catch (err) {
-        errors.push(`Conversations for contact ${contact.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    // Create lead events for any newly synced messages
+    const eventsCreated = await createLeadEventsForRecentMessages();
+    if (eventsCreated > 0) {
+      console.error(`[EntitySync] Created ${eventsCreated} lead events for recent messages`);
     }
 
     await updateLastSynced('conversations');
     await logSyncComplete(syncLogId, syncedConversations + syncedMessages);
     console.error(`[EntitySync] Conversations synced: ${syncedConversations}, Messages synced: ${syncedMessages}`);
-    return { synced_conversations: syncedConversations, synced_messages: syncedMessages, errors };
+    return { synced_conversations: syncedConversations, synced_messages: syncedMessages, errors: [] };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    errors.push(`Fatal: ${msg}`);
     await logSyncFailed(syncLogId, msg);
     console.error(`[EntitySync] Conversation sync failed: ${msg}`);
-    return { synced_conversations: 0, synced_messages: 0, errors };
+    return { synced_conversations: 0, synced_messages: 0, errors: [msg] };
   }
 }
 

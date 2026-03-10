@@ -4,7 +4,7 @@ import { getSupabaseClient } from '../clients/supabase.js';
 
 export const conversationTools = {
   list_conversations: {
-    description: 'List conversations from GoHighLevel, optionally filtered by contact.',
+    description: 'List conversations from GoHighLevel, optionally filtered by contact. Note: live GHL API calls require OAuth — use useCache=true to query synced data from Supabase.',
     inputSchema: z.object({
       contactId: z.string().optional().describe('Filter by contact ID'),
       limit: z.number().optional().default(20),
@@ -40,7 +40,7 @@ export const conversationTools = {
   },
 
   get_messages: {
-    description: 'Get messages in a conversation.',
+    description: 'Get messages in a conversation. Note: live GHL API calls require OAuth — messages are synced to Supabase via n8n.',
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
     }),

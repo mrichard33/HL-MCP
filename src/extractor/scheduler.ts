@@ -86,6 +86,17 @@ export function startScheduledSync(): void {
     );
   }
 
+  // Diagnostic: n8n webhook for conversations/messages sync
+  const hasN8nWebhook = !!process.env.N8N_SYNC_CONVERSATIONS_WEBHOOK_URL;
+  if (hasN8nWebhook) {
+    console.error('[Scheduler] n8n conversations webhook configured — conversations/messages sync enabled');
+  } else {
+    console.error(
+      '[Scheduler] n8n conversations webhook NOT configured — conversations/messages will NOT sync. ' +
+      'Set N8N_SYNC_CONVERSATIONS_WEBHOOK_URL to enable.',
+    );
+  }
+
   // Run initial sync with first-run detection
   (async () => {
     const firstRun = await isFirstRun();
