@@ -276,8 +276,8 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 
 // ---- Conversation & Message Sync (every 15 min) — direct GHL OAuth calls ----
 
-const BATCH_SIZE = 5;
-const BATCH_DELAY_MS = 2000; // 2s pause between batches to stay under GHL rate limits
+const BATCH_SIZE = 3;
+const BATCH_DELAY_MS = 3000; // 3s pause between batches to stay under GHL rate limits
 const MAX_CONTACTS_PER_SYNC = 100; // Limit per run to avoid timeouts
 
 /** Small helper to pause between batches. */
@@ -372,7 +372,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
             for (const conv of conversations) {
               // Upsert conversation
-              await supabase.from('conversations').upsert(
+              const { error: convError } = await supabase.from('conversations').upsert(
                 {
                   ghl_conversation_id: conv.id,
                   ghl_contact_id: conv.contactId,
@@ -385,28 +385,25 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                 },
                 { onConflict: 'ghl_conversation_id' },
               );
+              if (convError) {
+                errors.push(`Conv upsert ${conv.id}: ${convError.message}`);
+                continue; // skip messages for this conversation
+              }
               convCount++;
 
               // Fetch and upsert messages for this conversation
               try {
                 const msgResponse = await ghl.getMessages(conv.id);
 
-                // Debug: log response shape on first conversation to diagnose API format
-                if (convCount === 1 && i === 0) {
-                  console.error(`[EntitySync] DEBUG getMessages response keys: ${JSON.stringify(Object.keys(msgResponse))}`);
-                  if (msgResponse.messages && !Array.isArray(msgResponse.messages)) {
-                    console.error(`[EntitySync] DEBUG messages type: ${typeof msgResponse.messages}, keys: ${JSON.stringify(Object.keys(msgResponse.messages as any))}`);
-                  }
-                }
-
                 // Handle various response shapes from GHL API
+                // Confirmed shape: { messages: { lastMessageId, nextPage, messages: [...] }, traceId }
                 const messageList = Array.isArray(msgResponse.messages)
                   ? msgResponse.messages
                   : Array.isArray((msgResponse as any).messages?.messages)
                     ? (msgResponse as any).messages.messages
                     : [];
                 for (const msg of messageList) {
-                  await supabase.from('messages').upsert(
+                  const { error: msgError } = await supabase.from('messages').upsert(
                     {
                       ghl_message_id: msg.id,
                       ghl_conversation_id: msg.conversationId || conv.id,
@@ -419,6 +416,10 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                     },
                     { onConflict: 'ghl_message_id' },
                   );
+                  if (msgError) {
+                    errors.push(`Msg upsert ${msg.id}: ${msgError.message}`);
+                    continue;
+                  }
                   msgCount++;
                 }
               } catch (msgErr) {

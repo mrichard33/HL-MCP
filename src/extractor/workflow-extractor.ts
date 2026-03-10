@@ -60,6 +60,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
   try {
     // 1. Fetch all workflows (summary list from public API)
     const workflows = await ghl.getWorkflows();
+    let noNodesCount = 0;
 
     for (const workflowSummary of workflows) {
       try {
@@ -75,6 +76,9 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           fullJson = internalJson;
           const parsed = parseNodeGraph(fullJson);
           parsedConnections = parsed.connections;
+          if (parsed.triggers.length === 0 && parsed.steps.length === 0 && parsed.actions.length === 0) {
+            noNodesCount++;
+          }
 
           // Fetch triggers from the dedicated backend trigger endpoint
           const backendTriggers = await ghl.getWorkflowTriggers(workflowSummary.id);
@@ -247,6 +251,10 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         const msg = err instanceof Error ? err.message : String(err);
         result.errors.push(`Workflow ${workflowSummary.id}: ${msg}`);
       }
+    }
+
+    if (noNodesCount > 0) {
+      console.warn(`[WorkflowSync] ${noNodesCount}/${workflows.length} workflows had no parseable nodes (internal API format unrecognized)`);
     }
 
     // Update sync log
