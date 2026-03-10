@@ -13,6 +13,7 @@ interface DiagnosticsReport {
     supabase_connection: DiagnosticResult;
     ghl_credentials: DiagnosticResult;
     ghl_api_reachable: DiagnosticResult;
+    ghl_oauth_tokens: DiagnosticResult;
     scheduled_sync_enabled: DiagnosticResult;
     table_row_counts: Record<string, number>;
     env_vars_present: Record<string, boolean>;
@@ -35,6 +36,7 @@ const KEY_TABLES = [
   'pipelines',
   'sync_log',
   'lead_events',
+  'ghl_oauth_tokens',
 ] as const;
 
 const ENV_VARS = [
@@ -134,7 +136,42 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
     }
   }
 
-  // 5. Check scheduled sync (enabled by default, only disabled with explicit "false")
+  // 5. Check OAuth token status
+  let oauthTokenCheck: DiagnosticResult;
+  if (!envVarsPresent.GHL_OAUTH_CLIENT_ID || !envVarsPresent.GHL_OAUTH_CLIENT_SECRET) {
+    oauthTokenCheck = { status: 'warning', message: 'GHL_OAUTH_CLIENT_ID / GHL_OAUTH_CLIENT_SECRET not set — conversations/messages sync disabled' };
+    hasWarning = true;
+  } else {
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from('ghl_oauth_tokens')
+        .select('location_id, expires_at')
+        .eq('location_id', process.env.GHL_LOCATION_ID || 'default')
+        .single();
+
+      if (error || !data) {
+        oauthTokenCheck = { status: 'error', message: 'No OAuth tokens found in database. Visit /crm-oauth/authorize to complete the one-time setup.' };
+        hasError = true;
+        recommendations.push('OAuth credentials are set but no tokens are stored. Visit /crm-oauth/authorize to authorize.');
+      } else {
+        const expiresAt = new Date(data.expires_at).getTime();
+        const isExpired = Date.now() > expiresAt;
+        oauthTokenCheck = {
+          status: isExpired ? 'warning' : 'ok',
+          message: isExpired
+            ? `Token expired at ${data.expires_at}. Will auto-refresh on next API call.`
+            : `Token valid for location ${data.location_id}, expires ${data.expires_at}`,
+        };
+        if (isExpired) hasWarning = true;
+      }
+    } catch {
+      oauthTokenCheck = { status: 'warning', message: 'Could not check OAuth tokens (table may not exist — run migration 004)' };
+      hasWarning = true;
+    }
+  }
+
+  // 6. Check scheduled sync (enabled by default, only disabled with explicit "false")
   let syncCheck: DiagnosticResult;
   if (process.env.ENABLE_SCHEDULED_SYNC === 'false') {
     syncCheck = { status: 'warning', message: 'Scheduled sync is explicitly disabled' };
@@ -197,6 +234,7 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
       supabase_connection: supabaseCheck,
       ghl_credentials: ghlCredentialsCheck,
       ghl_api_reachable: ghlApiCheck,
+      ghl_oauth_tokens: oauthTokenCheck,
       scheduled_sync_enabled: syncCheck,
       table_row_counts: tableCounts,
       env_vars_present: envVarsPresent,

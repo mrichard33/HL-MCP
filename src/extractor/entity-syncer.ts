@@ -411,7 +411,9 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
               }
             }
           } catch (err) {
-            errors.push(`Contact ${contactId}: ${err instanceof Error ? err.message : String(err)}`);
+            const errMsg = err instanceof Error ? err.message : String(err);
+            errors.push(`Contact ${contactId}: ${errMsg}`);
+            console.error(`[EntitySync] Failed to sync conversations for contact ${contactId}: ${errMsg}`);
           }
 
           return { convCount, msgCount };
@@ -443,7 +445,13 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     console.error(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}`);
 
     if (errors.length > 0) {
-      console.error(`[EntitySync] ${errors.length} errors during conversation sync`);
+      console.error(`[EntitySync] ${errors.length} errors during conversation sync:`);
+      for (const e of errors.slice(0, 10)) {
+        console.error(`  - ${e}`);
+      }
+      if (errors.length > 10) {
+        console.error(`  ... and ${errors.length - 10} more`);
+      }
     }
 
     return { synced_conversations: totalConversations, synced_messages: totalMessages, errors };
