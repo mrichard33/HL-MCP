@@ -98,6 +98,42 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
 }
 
 /**
+ * Extracts a meaningful action target from template attributes based on the action type.
+ */
+function extractActionTargetFromAttrs(actionType: string, attrs: Record<string, unknown>): string | undefined {
+  switch (actionType) {
+    case 'email':
+      return (attrs.subject || attrs.from_email || attrs.template_id) as string || undefined;
+    case 'sms':
+      return attrs.body ? String(attrs.body).substring(0, 100) : undefined;
+    case 'add_contact_tag':
+    case 'remove_contact_tag':
+      return Array.isArray(attrs.tags) ? attrs.tags.join(', ') : undefined;
+    case 'goto':
+      return (attrs.targetNodeId as string) || undefined;
+    case 'if_else':
+      return (attrs.conditionName as string) || undefined;
+    case 'create_opportunity':
+      return (attrs.pipelineId || attrs.pipeline) as string || undefined;
+    case 'assign_user':
+      return (attrs.userId || attrs.assignedTo) as string || undefined;
+    case 'task-notification':
+      return (attrs.title || attrs.taskName) as string || undefined;
+    case 'transition':
+      return (attrs.targetStageId || attrs.stageId || attrs.stageName) as string || undefined;
+    case 'wait': {
+      if (attrs.startAfter && typeof attrs.startAfter === 'object') {
+        const sa = attrs.startAfter as Record<string, unknown>;
+        return `${sa.value || ''} ${sa.type || 'minutes'}`;
+      }
+      return undefined;
+    }
+    default:
+      return (attrs.target || attrs.to || attrs.recipient) as string || undefined;
+  }
+}
+
+/**
  * Extracts workflow steps, actions, and connections from the GHL internal API's
  * `workflowData.templates` format. Templates are a flat array of step/action
  * objects linked via `next` fields (string for sequential, array for branches).
@@ -126,8 +162,8 @@ function extractFromTemplates(templates: Record<string, unknown>[]): {
       name,
       delay: undefined,
       delayUnit: undefined,
-      templateId: (attrs.template_id as string) || undefined,
-      condition: type === 'if_else' ? (attrs.conditionName as string) || undefined : undefined,
+      templateId: (attrs.template_id || attrs.templateId) as string || undefined,
+      condition: type === 'if_else' ? (attrs.conditionName || attrs.condition) as string || undefined : undefined,
     };
 
     // Extract delay for wait steps
@@ -140,12 +176,12 @@ function extractFromTemplates(templates: Record<string, unknown>[]): {
     Object.assign(step, { raw: tmpl, stepOrder: order + 1 });
     steps.push(step);
 
-    // Create action entry
+    // Create action entry with type-aware target extraction
     const action: GHLWorkflowAction = {
       id,
       type,
       name,
-      target: (attrs.to || attrs.recipient || attrs.from_email) as string || undefined,
+      target: extractActionTargetFromAttrs(type, attrs),
     };
     Object.assign(action, { raw: tmpl });
     actions.push(action);
@@ -447,11 +483,15 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         }
 
         // 8. Extract top-level actions (not step-level)
+        // In the GHL templates format, each template is both a step and an action (1:1),
+        // so we link actions to their corresponding steps by matching IDs.
+        const stepIds = new Set(steps.map(s => (s as GHLWorkflowStep).id));
         const topActions = workflowDetail.actions || [];
         for (const action of topActions) {
+          const actionStepId = action.id && stepIds.has(action.id) ? action.id : null;
           await supabase.from('workflow_actions').insert({
             workflow_id: workflowDetail.id,
-            step_id: null,
+            step_id: actionStepId,
             action_type: action.type || 'unknown',
             action_target: action.target || null,
             raw_json: action,
