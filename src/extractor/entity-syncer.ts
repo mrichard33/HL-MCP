@@ -537,41 +537,62 @@ const FUNNEL_STAGES = [
 
 type FunnelStage = typeof FUNNEL_STAGES[number];
 
-function deriveFunnelStage(eventTypes: string[]): { stage: FunnelStage; history: { stage: string; entered_at: string }[] } {
-  const typeSet = new Set(eventTypes);
-  const now = nowET();
+function deriveFunnelStage(events: { event_type: string; event_time: string }[]): { stage: FunnelStage; history: { stage: string; entered_at: string }[] } {
+  // Build a map of event_type → earliest event_time
+  const earliestByType = new Map<string, string>();
+  for (const e of events) {
+    const existing = earliestByType.get(e.event_type);
+    if (!existing || e.event_time < existing) {
+      earliestByType.set(e.event_type, e.event_time);
+    }
+  }
+
   const history: { stage: string; entered_at: string }[] = [];
   let currentStage: FunnelStage = 'lead_created';
 
-  // Build progression
-  history.push({ stage: 'lead_created', entered_at: now });
+  // Find the earliest event overall for lead_created timestamp
+  const allTimes = events.map(e => e.event_time).filter(Boolean);
+  const earliestOverall = allTimes.length > 0 ? allTimes.sort()[0] : nowET();
+  history.push({ stage: 'lead_created', entered_at: earliestOverall });
 
-  if (typeSet.has('sms_sent') || typeSet.has('email_sent')) {
-    currentStage = 'contacted';
-    history.push({ stage: 'contacted', entered_at: now });
-  }
-
-  if (typeSet.has('sms_received') || typeSet.has('email_received') || typeSet.has('email_replied') || typeSet.has('sms_replied')) {
-    currentStage = 'engaged';
-    history.push({ stage: 'engaged', entered_at: now });
-  }
-
-  if (typeSet.has('appointment_booked')) {
-    currentStage = 'appointment_booked';
-    history.push({ stage: 'appointment_booked', entered_at: now });
-  }
-
-  if (typeSet.has('appointment_showed')) {
-    currentStage = 'appointment_showed';
-    history.push({ stage: 'appointment_showed', entered_at: now });
-  }
-
-  if (typeSet.has('opportunity_won') || typeSet.has('pipeline_stage_changed')) {
-    // Check if there's a "won" event
-    if (typeSet.has('opportunity_won')) {
-      currentStage = 'won';
-      history.push({ stage: 'won', entered_at: now });
+  // Helper: find earliest time among multiple event types
+  const earliestAmong = (...types: string[]): string | null => {
+    let earliest: string | null = null;
+    for (const t of types) {
+      const time = earliestByType.get(t);
+      if (time && (!earliest || time < earliest)) earliest = time;
     }
+    return earliest;
+  };
+
+  const contactedAt = earliestAmong('sms_sent', 'email_sent');
+  if (contactedAt) {
+    currentStage = 'contacted';
+    history.push({ stage: 'contacted', entered_at: contactedAt });
+  }
+
+  const engagedAt = earliestAmong('sms_received', 'email_received', 'email_replied', 'sms_replied');
+  if (engagedAt) {
+    currentStage = 'engaged';
+    history.push({ stage: 'engaged', entered_at: engagedAt });
+  }
+
+  const bookedAt = earliestAmong('appointment_booked');
+  if (bookedAt) {
+    currentStage = 'appointment_booked';
+    history.push({ stage: 'appointment_booked', entered_at: bookedAt });
+  }
+
+  const showedAt = earliestAmong('appointment_showed');
+  if (showedAt) {
+    currentStage = 'appointment_showed';
+    history.push({ stage: 'appointment_showed', entered_at: showedAt });
+  }
+
+  const wonAt = earliestAmong('opportunity_won');
+  if (wonAt) {
+    currentStage = 'won';
+    history.push({ stage: 'won', entered_at: wonAt });
   }
 
   return { stage: currentStage, history };
@@ -599,14 +620,17 @@ export async function computeFunnelProgression(): Promise<{ computed: number; er
 
     for (const contactId of contactIds) {
       try {
-        // Get all events for this contact
+        // Get all events for this contact with timestamps
         const { data: events } = await supabase
           .from('lead_events')
-          .select('event_type')
+          .select('event_type, event_time')
           .eq('contact_id', contactId);
 
-        const eventTypes = (events || []).map((e: { event_type: unknown }) => e.event_type as string);
-        const { stage, history } = deriveFunnelStage(eventTypes);
+        const eventList = (events || []).map((e: { event_type: unknown; event_time: unknown }) => ({
+          event_type: e.event_type as string,
+          event_time: e.event_time as string,
+        }));
+        const { stage, history } = deriveFunnelStage(eventList);
 
         await supabase.from('contact_funnel_progression').upsert(
           {
