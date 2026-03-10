@@ -68,7 +68,7 @@ async function saveTokenToSupabase(
   expiresAt: number,
 ): Promise<void> {
   const supabase = getSupabaseClient();
-  await supabase.from('ghl_oauth_tokens').upsert(
+  const { error } = await supabase.from('ghl_oauth_tokens').upsert(
     {
       location_id: process.env.GHL_LOCATION_ID || 'default',
       access_token: accessToken,
@@ -78,6 +78,9 @@ async function saveTokenToSupabase(
     },
     { onConflict: 'location_id' },
   );
+  if (error) {
+    throw new Error(`Failed to save OAuth tokens to Supabase: ${error.message}`);
+  }
 }
 
 // ---- Token Refresh ----

@@ -90,13 +90,14 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
   );
 
   const eventType = payload.dateAdded && !payload.dateUpdated ? 'contact_created' : 'contact_updated';
-  await createLeadEvent(id, eventType, id, now, payload);
+  const stableTs = (payload.dateUpdated || payload.dateAdded || now) as string;
+  await createLeadEvent(id, eventType, id, stableTs, payload);
 
   // Track tag changes as separate events
   if (payload.tags && Array.isArray(payload.tags)) {
     const action = payload.action as string | undefined;
     if (action === 'tag_added' || action === 'tag_removed') {
-      await createLeadEvent(id, action, id, now, payload);
+      await createLeadEvent(id, action, id, stableTs, payload);
     }
   }
 }
@@ -130,7 +131,8 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
   );
 
   const eventType = payload.previousStageId ? 'pipeline_stage_changed' : 'opportunity_created';
-  await createLeadEvent(contactId, eventType, id, now, payload);
+  const stableTs = (payload.dateUpdated || payload.dateAdded || now) as string;
+  await createLeadEvent(contactId, eventType, id, stableTs, payload);
 }
 
 async function handleAppointmentWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -164,7 +166,8 @@ async function handleAppointmentWebhook(payload: Record<string, unknown>): Promi
   else if (status === 'cancelled') eventType = 'appointment_cancelled';
   else if (payload.dateUpdated) eventType = 'appointment_updated';
 
-  await createLeadEvent(contactId, eventType, id, now, payload);
+  const stableTs = (payload.startTime || now) as string;
+  await createLeadEvent(contactId, eventType, id, stableTs, payload);
 }
 
 async function handleMessageWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -206,7 +209,8 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
     eventType = 'email_clicked';
   }
 
-  await createLeadEvent(contactId, eventType, id, now, payload);
+  const stableTs = (payload.dateAdded || now) as string;
+  await createLeadEvent(contactId, eventType, id, stableTs, payload);
 }
 
 async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -227,7 +231,8 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
     { onConflict: 'ghl_workflow_id' },
   );
 
-  await createLeadEvent(contactId, 'workflow_executed', id, now, payload);
+  const stableTs = (payload.dateAdded || now) as string;
+  await createLeadEvent(contactId, 'workflow_executed', id, stableTs, payload);
 }
 
 // ---- Main webhook router ----
