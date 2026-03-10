@@ -84,7 +84,10 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     'created_at', 'updated_at', 'createdTs', 'updatedTs', 'timestamp',
     'modifiedAt', 'modified_at', 'lastModified', 'dateCreated', 'dateUpdated',
     'dateAdded', 'dateModified', 'version', 'order', 'priority',
+    'value',  // Raw backend trigger 'value' is always a timestamp, not meaningful
   ]);
+  // ISO 8601 timestamp pattern to skip values that look like dates
+  const isoTimestampRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
   for (const [key, val] of Object.entries(trigger)) {
     if (skipKeys.has(key)) continue;
     if (val && typeof val === 'object' && !Array.isArray(val)) continue;
@@ -93,7 +96,7 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     }
     if (val !== null && val !== undefined && val !== '' && typeof val !== 'boolean') {
       const str = String(val).trim();
-      if (str && str !== 'undefined' && str !== 'null') return str;
+      if (str && str !== 'undefined' && str !== 'null' && !isoTimestampRe.test(str)) return str;
     }
   }
 
