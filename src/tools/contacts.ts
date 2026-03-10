@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
+import { nowET } from '../utils/timezone.js';
 
 export const contactTools = {
   search_contacts: {
@@ -117,7 +118,7 @@ export const contactTools = {
           custom_fields: c.customFields || {},
           date_added: c.dateAdded,
           date_updated: c.dateUpdated,
-          synced_at: new Date().toISOString(),
+          synced_at: nowET(),
         }));
 
         const { error } = await supabase.from('contacts').upsert(rows, { onConflict: 'ghl_contact_id' });
@@ -125,14 +126,14 @@ export const contactTools = {
 
         if (syncLog) {
           await supabase.from('sync_log').update({
-            status: 'completed', records_synced: rows.length, completed_at: new Date().toISOString(),
+            status: 'completed', records_synced: rows.length, completed_at: nowET(),
           }).eq('id', syncLog.id);
         }
         return { synced: rows.length, status: 'completed' };
       } catch (err) {
         if (syncLog) {
           await supabase.from('sync_log').update({
-            status: 'failed', error_message: err instanceof Error ? err.message : String(err), completed_at: new Date().toISOString(),
+            status: 'failed', error_message: err instanceof Error ? err.message : String(err), completed_at: nowET(),
           }).eq('id', syncLog.id);
         }
         throw err;

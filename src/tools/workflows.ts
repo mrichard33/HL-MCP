@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { extractAndSyncWorkflows } from '../extractor/workflow-extractor.js';
+import { nowET } from '../utils/timezone.js';
 import {
   syncContacts,
   syncOpportunities,
@@ -96,7 +97,7 @@ export const workflowTools = {
         steps_total: args.stepsTotal || 0,
         error_message: args.errorMessage,
         execution_data: args.executionData || {},
-        completed_at: args.status !== 'running' ? new Date().toISOString() : null,
+        completed_at: args.status !== 'running' ? nowET() : null,
       }).select().single();
 
       if (error) throw new Error(`Supabase error: ${error.message}`);
@@ -112,10 +113,10 @@ export const workflowTools = {
     }),
     handler: async (args: { workflowId?: string; days?: number }) => {
       const supabase = getSupabaseClient();
-      const since = new Date();
-      since.setDate(since.getDate() - (args.days || 30));
+      const sinceDate = new Date();
+      sinceDate.setDate(sinceDate.getDate() - (args.days || 30));
 
-      let qb = supabase.from('workflow_executions').select('*').gte('started_at', since.toISOString());
+      let qb = supabase.from('workflow_executions').select('*').gte('started_at', sinceDate.toISOString());
       if (args.workflowId) qb = qb.eq('ghl_workflow_id', args.workflowId);
 
       const { data, error } = await qb;

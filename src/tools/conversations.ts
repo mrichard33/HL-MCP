@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
+import { nowET } from '../utils/timezone.js';
 
 export const conversationTools = {
   list_conversations: {
@@ -85,7 +86,7 @@ export const conversationTools = {
         type: c.type || 'sms',
         last_message_at: c.lastMessageDate,
         unread_count: c.unreadCount || 0,
-        synced_at: new Date().toISOString(),
+        synced_at: nowET(),
       }));
 
       const { error } = await supabase.from('conversations').upsert(rows, { onConflict: 'ghl_conversation_id' });

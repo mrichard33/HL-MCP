@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { extractAndSyncWorkflows } from './workflow-extractor.js';
+import { toET } from '../utils/timezone.js';
 import {
   syncContacts,
   syncOpportunities,
@@ -86,14 +87,14 @@ export function startScheduledSync(): void {
     );
   }
 
-  // Diagnostic: n8n webhook for conversations/messages sync
-  const hasN8nWebhook = !!process.env.N8N_SYNC_CONVERSATIONS_WEBHOOK_URL;
-  if (hasN8nWebhook) {
-    console.error('[Scheduler] n8n conversations webhook configured — conversations/messages sync enabled');
+  // Diagnostic: GHL OAuth for conversations/messages sync
+  const hasGhlOAuth = !!(process.env.GHL_OAUTH_CLIENT_ID && process.env.GHL_OAUTH_CLIENT_SECRET);
+  if (hasGhlOAuth) {
+    console.error('[Scheduler] GHL OAuth configured — conversations/messages sync enabled');
   } else {
     console.error(
-      '[Scheduler] n8n conversations webhook NOT configured — conversations/messages will NOT sync. ' +
-      'Set N8N_SYNC_CONVERSATIONS_WEBHOOK_URL to enable.',
+      '[Scheduler] GHL OAuth NOT configured — conversations/messages will NOT sync. ' +
+      'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /ghl-oauth/authorize.',
     );
   }
 
@@ -127,8 +128,8 @@ export function startScheduledSync(): void {
     setTimeout(() => runJob('appointments', () => {
       if (firstRun) {
         return syncAppointments({
-          startTime: new Date(Date.now() - 365 * 86_400_000).toISOString(),
-          endTime: new Date(Date.now() + 60 * 86_400_000).toISOString(),
+          startTime: toET(Date.now() - 365 * 86_400_000),
+          endTime: toET(Date.now() + 60 * 86_400_000),
         });
       }
       return syncAppointments();
