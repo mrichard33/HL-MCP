@@ -95,9 +95,11 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
           { onConflict: 'ghl_contact_id' },
         );
 
-        const eventType = c.dateAdded === c.dateUpdated ? 'contact_created' : 'contact_updated';
-        const stableTs = c.dateUpdated || c.dateAdded || now;
-        await createLeadEvent(c.id, eventType, c.id, stableTs, c);
+        const stableTs = c.dateUpdated || c.dateAdded;
+        if (stableTs) {
+          const eventType = c.dateAdded === c.dateUpdated ? 'contact_created' : 'contact_updated';
+          await createLeadEvent(c.id, eventType, c.id, stableTs, c);
+        }
       } catch (err) {
         errors.push(`Contact ${c.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -153,8 +155,10 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
           { onConflict: 'ghl_opportunity_id' },
         );
 
-        const stableTs = o.dateUpdated || o.dateAdded || now;
-        await createLeadEvent(o.contactId, 'opportunity_updated', o.id, stableTs, o);
+        const stableTs = o.dateUpdated || o.dateAdded;
+        if (stableTs) {
+          await createLeadEvent(o.contactId, 'opportunity_updated', o.id, stableTs, o);
+        }
       } catch (err) {
         errors.push(`Opportunity ${o.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -220,8 +224,9 @@ export async function syncAppointments(options?: {
                           apt.status === 'noshow' ? 'appointment_noshow' :
                           apt.status === 'cancelled' ? 'appointment_cancelled' :
                           'appointment_booked';
-        const stableTs = apt.startTime || now;
-        await createLeadEvent(apt.contactId, eventType, apt.id, stableTs, apt);
+        if (apt.startTime) {
+          await createLeadEvent(apt.contactId, eventType, apt.id, apt.startTime, apt);
+        }
         synced++;
       } catch (err) {
         errors.push(`Appointment ${apt.id}: ${err instanceof Error ? err.message : String(err)}`);

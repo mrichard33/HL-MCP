@@ -258,7 +258,7 @@ export async function handleWebhook(
 
   try {
     await handler(body);
-    console.error(`[Webhook] Processed ${pathname} successfully`);
+    console.log(`[Webhook] Processed ${pathname} successfully`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Webhook] Error processing ${pathname}: ${msg}`);

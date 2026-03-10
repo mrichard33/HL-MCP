@@ -311,12 +311,12 @@ async function startHttpServer(port: number) {
   });
 
   httpServer.listen(port, () => {
-    console.error(`HL Workflow Intelligence MCP server running on http://0.0.0.0:${port}`);
-    console.error(`  Health check:  http://0.0.0.0:${port}/`);
-    console.error(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
-    console.error(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
-    console.error(`  Diagnostics:   http://0.0.0.0:${port}/diagnostics`);
-    console.error(`  CRM OAuth:     http://0.0.0.0:${port}/crm-oauth/authorize`);
+    console.log(`HL Workflow Intelligence MCP server running on http://0.0.0.0:${port}`);
+    console.log(`  Health check:  http://0.0.0.0:${port}/`);
+    console.log(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
+    console.log(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
+    console.log(`  Diagnostics:   http://0.0.0.0:${port}/diagnostics`);
+    console.log(`  CRM OAuth:     http://0.0.0.0:${port}/crm-oauth/authorize`);
   });
 }
 
@@ -324,7 +324,7 @@ async function startStdioServer() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('HL Workflow Intelligence MCP server running on stdio');
+  console.log('HL Workflow Intelligence MCP server running on stdio');
 }
 
 async function main() {
