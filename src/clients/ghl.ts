@@ -507,8 +507,32 @@ export class GHLClient {
 
   // ---- Messages ----
 
-  async getMessages(conversationId: string): Promise<{ messages: GHLMessage[] }> {
-    return this.requestWithOAuth(`/conversations/${conversationId}/messages`);
+  async getMessages(conversationId: string, params?: { lastMessageId?: string }): Promise<{ messages: unknown }> {
+    const reqParams: Record<string, string> = {};
+    if (params?.lastMessageId) reqParams.lastMessageId = params.lastMessageId;
+    return this.requestWithOAuth(`/conversations/${conversationId}/messages`, { params: reqParams });
+  }
+
+  /**
+   * Fetch ALL messages for a conversation using pagination.
+   * GHL API returns: { messages: { lastMessageId, nextPage, messages: [...] }, traceId }
+   */
+  async getAllMessages(conversationId: string, maxPages = 5): Promise<GHLMessage[]> {
+    const all: GHLMessage[] = [];
+    let lastMessageId: string | undefined;
+
+    for (let page = 0; page < maxPages; page++) {
+      const raw = await this.getMessages(conversationId, { lastMessageId });
+      // Handle nested response shape
+      const inner = (raw.messages as any)?.messages ?? raw.messages;
+      const msgs: GHLMessage[] = Array.isArray(inner) ? inner : [];
+      all.push(...msgs);
+
+      const nextPage = (raw.messages as any)?.nextPage;
+      lastMessageId = (raw.messages as any)?.lastMessageId;
+      if (!nextPage || !lastMessageId || msgs.length === 0) break;
+    }
+    return all;
   }
 
   async sendMessage(data: {

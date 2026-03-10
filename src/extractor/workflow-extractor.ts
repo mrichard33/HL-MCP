@@ -254,7 +254,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
     }
 
     if (noNodesCount > 0) {
-      console.warn(`[WorkflowSync] ${noNodesCount}/${workflows.length} workflows had no parseable nodes (internal API format unrecognized)`);
+      console.log(`[WorkflowSync] ${noNodesCount}/${workflows.length} workflows had no parseable nodes (internal API format unrecognized)`);
     }
 
     // Update sync log

@@ -28,10 +28,10 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
   const startTime = Date.now();
 
   try {
-    console.error(`[Scheduler] Starting ${name}...`);
+    console.log(`[Scheduler] Starting ${name}...`);
     await fn();
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.error(`[Scheduler] ${name} completed in ${duration}s`);
+    console.log(`[Scheduler] ${name} completed in ${duration}s`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Scheduler] ${name} failed: ${msg}`);
@@ -74,14 +74,14 @@ async function isFirstRun(): Promise<boolean> {
  * - Funnel progression: every hour
  */
 export function startScheduledSync(): void {
-  console.error('[Scheduler] Starting scheduled sync jobs');
+  console.log('[Scheduler] Starting scheduled sync jobs');
 
   // One-time diagnostic: Firebase auth status affects workflow data quality
   const hasFirebaseAuth = !!(process.env.GHL_FIREBASE_API_KEY && process.env.GHL_FIREBASE_REFRESH_TOKEN);
   if (hasFirebaseAuth) {
-    console.error('[Scheduler] Firebase auth configured — workflows will use internal API for full node graph data');
+    console.log('[Scheduler] Firebase auth configured — workflows will use internal API for full node graph data');
   } else {
-    console.error(
+    console.warn(
       '[Scheduler] Firebase auth NOT configured — workflow sync will use public API (no steps/node graphs). ' +
       'Set GHL_FIREBASE_API_KEY and GHL_FIREBASE_REFRESH_TOKEN for full data.',
     );
@@ -90,9 +90,9 @@ export function startScheduledSync(): void {
   // Diagnostic: GHL OAuth for conversations/messages sync
   const hasGhlOAuth = !!(process.env.GHL_OAUTH_CLIENT_ID && process.env.GHL_OAUTH_CLIENT_SECRET);
   if (hasGhlOAuth) {
-    console.error('[Scheduler] GHL OAuth configured — conversations/messages sync enabled');
+    console.log('[Scheduler] GHL OAuth configured — conversations/messages sync enabled');
   } else {
-    console.error(
+    console.warn(
       '[Scheduler] GHL OAuth NOT configured — conversations/messages will NOT sync. ' +
       'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /crm-oauth/authorize.',
     );
@@ -102,13 +102,13 @@ export function startScheduledSync(): void {
   (async () => {
     const firstRun = await isFirstRun();
     if (firstRun) {
-      console.error('[Scheduler] First run detected — performing full historical backfill');
+      console.log('[Scheduler] First run detected — performing full historical backfill');
     }
 
     // Run workflow sync immediately
     runJob('workflows', async () => {
       const result = await extractAndSyncWorkflows();
-      console.error(
+      console.log(
         `[Scheduler] Workflows: ${result.workflows_synced} synced, ` +
         `${result.steps_synced} steps, ${result.triggers_synced} triggers, ` +
         `${result.actions_synced} actions, ${result.snapshots_created} snapshots`,
@@ -137,7 +137,7 @@ export function startScheduledSync(): void {
 
     setTimeout(() => runJob('conversations', async () => {
       const result = await syncConversationsAndMessages();
-      console.error(
+      console.log(
         `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
       );
     }), 25_000);
@@ -150,7 +150,7 @@ export function startScheduledSync(): void {
   cron.schedule('*/10 * * * *', () => {
     runJob('workflows', async () => {
       const result = await extractAndSyncWorkflows();
-      console.error(
+      console.log(
         `[Scheduler] Workflows: ${result.workflows_synced} synced, ${result.snapshots_created} snapshots`,
       );
     });
@@ -175,7 +175,7 @@ export function startScheduledSync(): void {
   cron.schedule('*/15 * * * *', () => {
     runJob('conversations', async () => {
       const result = await syncConversationsAndMessages();
-      console.error(
+      console.log(
         `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
       );
     });
@@ -185,9 +185,9 @@ export function startScheduledSync(): void {
     runJob('funnel_progression', computeFunnelProgression);
   });
 
-  console.error('[Scheduler] Cron jobs registered:');
-  console.error('  */10 * * * * — workflows');
-  console.error('  */15 * * * * — contacts, opportunities, appointments, conversations/messages');
-  console.error('  */30 * * * * — pipelines');
-  console.error('  0 * * * *    — funnel progression');
+  console.log('[Scheduler] Cron jobs registered:');
+  console.log('  */10 * * * * — workflows');
+  console.log('  */15 * * * * — contacts, opportunities, appointments, conversations/messages');
+  console.log('  */30 * * * * — pipelines');
+  console.log('  0 * * * *    — funnel progression');
 }

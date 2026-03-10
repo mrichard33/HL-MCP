@@ -93,7 +93,7 @@ export const conversationTools = {
         ghl_conversation_id: c.id,
         ghl_contact_id: c.contactId,
         ghl_location_id: c.locationId,
-        type: c.type || 'sms',
+        type: c.type || null,
         last_message_at: toISODate(c.lastMessageDate),
         unread_count: c.unreadCount || 0,
         synced_at: nowET(),
