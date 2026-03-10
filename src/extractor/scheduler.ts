@@ -94,7 +94,7 @@ export function startScheduledSync(): void {
   } else {
     console.error(
       '[Scheduler] GHL OAuth NOT configured — conversations/messages will NOT sync. ' +
-      'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /ghl-oauth/authorize.',
+      'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /crm-oauth/authorize.',
     );
   }
 
