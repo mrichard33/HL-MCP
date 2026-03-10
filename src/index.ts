@@ -135,10 +135,10 @@ async function startHttpServer(port: number) {
       return;
     }
 
-    // ---- GHL OAuth one-time setup routes ----
+    // ---- CRM OAuth one-time setup routes ----
 
-    // Step 1: Redirect user to GHL consent screen
-    if (url.pathname === '/ghl-oauth/authorize' && req.method === 'GET') {
+    // Step 1: Redirect user to CRM consent screen
+    if (url.pathname === '/crm-oauth/authorize' && req.method === 'GET') {
       if (!isGhlOAuthConfigured()) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET must be set in .env' }));
@@ -146,15 +146,15 @@ async function startHttpServer(port: number) {
       }
       const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
       const host = req.headers.host || `localhost:${port}`;
-      const redirectUri = `${proto}://${host}/ghl-oauth/callback`;
+      const redirectUri = `${proto}://${host}/crm-oauth/callback`;
       const authorizeUrl = getGhlAuthorizeUrl(redirectUri);
       res.writeHead(302, { Location: authorizeUrl });
       res.end();
       return;
     }
 
-    // Step 2: GHL redirects back here with ?code=...
-    if (url.pathname === '/ghl-oauth/callback' && req.method === 'GET') {
+    // Step 2: CRM redirects back here with ?code=...
+    if (url.pathname === '/crm-oauth/callback' && req.method === 'GET') {
       const code = url.searchParams.get('code');
       if (!code) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -163,11 +163,11 @@ async function startHttpServer(port: number) {
       }
       const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
       const host = req.headers.host || `localhost:${port}`;
-      const redirectUri = `${proto}://${host}/ghl-oauth/callback`;
+      const redirectUri = `${proto}://${host}/crm-oauth/callback`;
       try {
         await exchangeGhlCode(code, redirectUri);
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<h1>GHL OAuth Connected!</h1><p>Conversations and messages will now sync directly. You can close this tab.</p>');
+        res.end('<h1>CRM OAuth Connected!</h1><p>Conversations and messages will now sync directly. You can close this tab.</p>');
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
@@ -316,7 +316,7 @@ async function startHttpServer(port: number) {
     console.error(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
     console.error(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
     console.error(`  Diagnostics:   http://0.0.0.0:${port}/diagnostics`);
-    console.error(`  GHL OAuth:     http://0.0.0.0:${port}/ghl-oauth/authorize`);
+    console.error(`  CRM OAuth:     http://0.0.0.0:${port}/crm-oauth/authorize`);
   });
 }
 

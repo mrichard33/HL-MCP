@@ -6,8 +6,8 @@
  *
  * One-time setup:
  *   1. Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET in .env
- *   2. Visit GET /ghl-oauth/authorize — redirects to GHL consent screen
- *   3. GHL redirects back to /ghl-oauth/callback with an auth code
+ *   2. Visit GET /crm-oauth/authorize — redirects to GHL consent screen
+ *   3. GHL redirects back to /crm-oauth/callback with an auth code
  *   4. The callback exchanges the code for tokens and stores them
  *
  * After that, getOAuthAccessToken() auto-refreshes as needed.
@@ -129,7 +129,7 @@ export async function getOAuthAccessToken(): Promise<string> {
 
   if (!cachedToken) {
     throw new Error(
-      'GHL OAuth not authorized yet. Visit /ghl-oauth/authorize to complete the one-time setup.',
+      'GHL OAuth not authorized yet. Visit /crm-oauth/authorize to complete the one-time setup.',
     );
   }
 

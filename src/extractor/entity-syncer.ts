@@ -325,7 +325,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   // Check if OAuth is configured
   if (!ghl.isOAuthConfigured) {
     console.warn('[EntitySync] GHL OAuth not configured — skipping conversations/messages sync. ' +
-      'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /ghl-oauth/authorize.');
+      'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /crm-oauth/authorize.');
     return { synced_conversations: 0, synced_messages: 0, errors: ['GHL OAuth not configured'] };
   }
 
