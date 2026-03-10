@@ -20,7 +20,7 @@ export const workflowTools = {
     handler: async (args: { useCache?: boolean }) => {
       if (args.useCache) {
         const supabase = getSupabaseClient();
-        const { data, error } = await supabase.from('workflows').select('*');
+        const { data, error } = await supabase.from('workflows').select('*').is('deleted_at', null);
         if (error) throw new Error(`Supabase error: ${error.message}`);
         return { workflows: data, source: 'cache' };
       }

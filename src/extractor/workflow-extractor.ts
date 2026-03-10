@@ -3,7 +3,7 @@ import { getSupabaseClient } from '../clients/supabase.js';
 import type { GHLWorkflow, GHLWorkflowStep, GHLWorkflowTrigger, GHLWorkflowAction } from '../types/ghl.js';
 import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
-import { updateLastSynced } from './entity-syncer.js';
+import { updateLastSynced, softDeleteMissing } from './entity-syncer.js';
 
 export interface SyncResult {
   workflows_synced: number;
@@ -514,6 +514,10 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
     if (noNodesCount > 0) {
       console.log(`[WorkflowSync] ${noNodesCount}/${workflows.length} workflows had no parseable nodes (internal API format unrecognized)`);
     }
+
+    // Soft-delete workflows no longer in GHL
+    const activeWorkflowIds = workflows.map((w) => w.id);
+    await softDeleteMissing('workflows', 'ghl_workflow_id', activeWorkflowIds, ghl.getLocationId());
 
     // Update sync log and sync state
     if (syncLog) {

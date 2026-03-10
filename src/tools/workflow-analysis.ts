@@ -23,6 +23,7 @@ export const workflowAnalysisTools = {
       const { data, error } = await supabase
         .from('workflows')
         .select('ghl_workflow_id, name, status, trigger_type')
+        .is('deleted_at', null)
         .order('name');
 
       if (error) throw new Error(`Supabase error: ${error.message}`);

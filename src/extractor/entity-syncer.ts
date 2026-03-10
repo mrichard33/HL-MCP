@@ -61,6 +61,72 @@ async function logSyncFailed(syncLogId: string | null, errorMessage: string): Pr
   }).eq('id', syncLogId);
 }
 
+// ---- Soft-Delete Helper ----
+
+/**
+ * Soft-delete records in Supabase that are no longer present in the GHL API response.
+ * Sets deleted_at timestamp on records whose GHL ID is not in the provided set,
+ * and clears deleted_at on records that reappear.
+ */
+export async function softDeleteMissing(
+  table: string,
+  ghlIdColumn: string,
+  activeGhlIds: string[],
+  locationId: string,
+): Promise<{ deleted: number; restored: number }> {
+  const supabase = getSupabaseClient();
+  const now = nowET();
+
+  // Restore any previously soft-deleted records that are back in the API response
+  let restored = 0;
+  if (activeGhlIds.length > 0) {
+    const { data: restoredRows } = await supabase
+      .from(table)
+      .update({ deleted_at: null, updated_at: now })
+      .in(ghlIdColumn, activeGhlIds)
+      .not('deleted_at', 'is', null)
+      .select(ghlIdColumn);
+    restored = restoredRows?.length || 0;
+  }
+
+  // Get all active GHL IDs currently in Supabase for this location
+  let query = supabase
+    .from(table)
+    .select(ghlIdColumn)
+    .is('deleted_at', null);
+
+  // Only filter by location if the table has the column (most do)
+  if (locationId) {
+    query = query.eq('ghl_location_id', locationId);
+  }
+
+  const { data: existingRows } = await query;
+  if (!existingRows?.length) return { deleted: 0, restored };
+
+  const activeSet = new Set(activeGhlIds);
+  const toDelete = existingRows
+    .map((r: Record<string, unknown>) => r[ghlIdColumn] as string)
+    .filter((id: string) => !activeSet.has(id));
+
+  if (toDelete.length === 0) return { deleted: 0, restored };
+
+  const { data: deletedRows } = await supabase
+    .from(table)
+    .update({ deleted_at: now, updated_at: now })
+    .in(ghlIdColumn, toDelete)
+    .select(ghlIdColumn);
+
+  const deleted = deletedRows?.length || 0;
+  if (deleted > 0) {
+    console.log(`[EntitySync] Soft-deleted ${deleted} records from ${table}`);
+  }
+  if (restored > 0) {
+    console.log(`[EntitySync] Restored ${restored} previously deleted records in ${table}`);
+  }
+
+  return { deleted, restored };
+}
+
 // ---- Contact Sync (every 15 min) ----
 
 export async function syncContacts(): Promise<{ synced: number; errors: string[] }> {
@@ -105,6 +171,10 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
         errors.push(`Contact ${c.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    // Soft-delete contacts no longer in GHL
+    const activeContactIds = contacts.map((c) => c.id);
+    await softDeleteMissing('contacts', 'ghl_contact_id', activeContactIds, ghl.getLocationId());
 
     await updateLastSynced('contacts');
     await logSyncComplete(syncLogId, contacts.length);
@@ -164,6 +234,10 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
         errors.push(`Opportunity ${o.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    // Soft-delete opportunities no longer in GHL
+    const activeOppIds = opportunities.map((o) => o.id);
+    await softDeleteMissing('opportunities', 'ghl_opportunity_id', activeOppIds, ghl.getLocationId());
 
     await updateLastSynced('opportunities');
     await logSyncComplete(syncLogId, opportunities.length);
@@ -231,6 +305,10 @@ export async function syncAppointments(options?: {
       }
     }
 
+    // Soft-delete appointments no longer in GHL (within the synced time window)
+    const activeAptIds = events.map((a) => a.id);
+    await softDeleteMissing('appointments', 'ghl_appointment_id', activeAptIds, ghl.getLocationId());
+
     await updateLastSynced('appointments');
     await logSyncComplete(syncLogId, synced);
     console.log(`[EntitySync] Appointments synced: ${synced}`);
@@ -267,6 +345,10 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 
     const { error } = await supabase.from('pipelines').upsert(rows, { onConflict: 'ghl_pipeline_id' });
     if (error) throw new Error(`Supabase error: ${error.message}`);
+
+    // Soft-delete pipelines no longer in GHL
+    const activePipelineIds = pipelines.map((p) => p.id);
+    await softDeleteMissing('pipelines', 'ghl_pipeline_id', activePipelineIds, locationId);
 
     await updateLastSynced('pipelines');
     await logSyncComplete(syncLogId, rows.length);
@@ -348,10 +430,11 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   const syncLogId = await logSyncStart('conversations');
 
   try {
-    // Get all contact IDs
+    // Get all contact IDs (exclude soft-deleted)
     const { data: allContacts, error: allError } = await supabase
       .from('contacts')
       .select('ghl_contact_id')
+      .is('deleted_at', null)
       .order('date_added', { ascending: true });
     if (allError) throw new Error(`Failed to fetch contacts: ${allError.message}`);
     if (!allContacts?.length) {
@@ -379,6 +462,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
       const { data: recentContacts } = await supabase
         .from('contacts')
         .select('ghl_contact_id')
+        .is('deleted_at', null)
         .order('date_updated', { ascending: false })
         .limit(MAX_CONTACTS_PER_SYNC);
       contacts = recentContacts || allContacts.slice(0, MAX_CONTACTS_PER_SYNC);
@@ -689,6 +773,10 @@ export async function syncCustomFields(): Promise<{ synced: number; errors: stri
       }
     }
 
+    // Soft-delete custom fields no longer in GHL
+    const activeFieldIds = customFields.map((cf) => cf.id);
+    await softDeleteMissing('custom_fields', 'ghl_field_id', activeFieldIds, ghl.getLocationId());
+
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('custom_fields');
     console.log(`[EntitySync] Custom fields synced: ${synced}`);
@@ -736,6 +824,10 @@ export async function syncCustomValues(): Promise<{ synced: number; errors: stri
       }
     }
 
+    // Soft-delete custom values no longer in GHL
+    const activeValueIds = customValues.map((cv) => cv.id);
+    await softDeleteMissing('custom_values', 'ghl_value_id', activeValueIds, ghl.getLocationId());
+
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('custom_values');
     console.log(`[EntitySync] Custom values synced: ${synced}`);
@@ -780,6 +872,10 @@ export async function syncTags(): Promise<{ synced: number; errors: string[] }> 
         errors.push(`Tag ${tag.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    // Soft-delete tags no longer in GHL
+    const activeTagIds = tags.map((t) => t.id);
+    await softDeleteMissing('tags', 'ghl_tag_id', activeTagIds, ghl.getLocationId());
 
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('tags');
@@ -844,6 +940,10 @@ export async function syncTriggerLinks(): Promise<{ synced: number; errors: stri
         errors.push(`Link ${link.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    // Soft-delete trigger links no longer in GHL
+    const activeLinkIds = links.map((l) => l.id);
+    await softDeleteMissing('trigger_links', 'ghl_link_id', activeLinkIds, ghl.getLocationId());
 
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('trigger_links');

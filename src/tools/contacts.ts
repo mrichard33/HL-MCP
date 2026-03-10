@@ -14,7 +14,7 @@ export const contactTools = {
     handler: async (args: { query?: string; limit?: number; useCache?: boolean }) => {
       if (args.useCache) {
         const supabase = getSupabaseClient();
-        let qb = supabase.from('contacts').select('*').limit(args.limit || 20);
+        let qb = supabase.from('contacts').select('*').is('deleted_at', null).limit(args.limit || 20);
         if (args.query) {
           qb = qb.or(
             `first_name.ilike.%${args.query}%,last_name.ilike.%${args.query}%,email.ilike.%${args.query}%,phone.ilike.%${args.query}%`

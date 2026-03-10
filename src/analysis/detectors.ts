@@ -234,10 +234,11 @@ export async function detectDeadWorkflows(): Promise<DeadWorkflow[]> {
   const supabase = getSupabaseClient();
   const deadWorkflows: DeadWorkflow[] = [];
 
-  // Get all workflows
+  // Get all workflows (exclude soft-deleted)
   const { data: workflows } = await supabase
     .from('workflows')
-    .select('ghl_workflow_id, name, status');
+    .select('ghl_workflow_id, name, status')
+    .is('deleted_at', null);
 
   if (!workflows) return [];
 
@@ -248,10 +249,11 @@ export async function detectDeadWorkflows(): Promise<DeadWorkflow[]> {
 
   if (!triggers) return [];
 
-  // Get known pipeline stages
+  // Get known pipeline stages (exclude soft-deleted)
   const { data: pipelines } = await supabase
     .from('pipelines')
-    .select('stages');
+    .select('stages')
+    .is('deleted_at', null);
 
   const knownStageIds = new Set<string>();
   if (pipelines) {
@@ -265,10 +267,11 @@ export async function detectDeadWorkflows(): Promise<DeadWorkflow[]> {
     }
   }
 
-  // Get known tags from contacts
+  // Get known tags from contacts (exclude soft-deleted)
   const { data: contacts } = await supabase
     .from('contacts')
-    .select('tags');
+    .select('tags')
+    .is('deleted_at', null);
 
   const knownTags = new Set<string>();
   if (contacts) {

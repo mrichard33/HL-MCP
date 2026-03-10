@@ -24,7 +24,7 @@ export const conversationTools = {
     handler: async (args: { contactId?: string; limit?: number; useCache?: boolean }) => {
       if (args.useCache) {
         const supabase = getSupabaseClient();
-        let qb = supabase.from('conversations').select('*').limit(args.limit || 20);
+        let qb = supabase.from('conversations').select('*').is('deleted_at', null).limit(args.limit || 20);
         if (args.contactId) qb = qb.eq('ghl_contact_id', args.contactId);
         const { data, error } = await qb;
         if (error) throw new Error(`Supabase error: ${error.message}`);
