@@ -580,6 +580,11 @@ export class GHLClient {
     endTime?: string;
   }): Promise<GHLAppointment[]> {
     const calendars = await this.getCalendars();
+    if (calendars.length === 0) {
+      console.warn('[GHL] No calendars found for location — cannot fetch appointments. Verify GHL_LOCATION_ID and calendar permissions.');
+      return [];
+    }
+    console.log(`[GHL] Fetching appointments from ${calendars.length} calendar(s)...`);
     const all: GHLAppointment[] = [];
 
     for (const calendar of calendars) {
