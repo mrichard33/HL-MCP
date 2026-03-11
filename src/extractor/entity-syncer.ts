@@ -429,6 +429,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   }
 
   const syncLogId = await logSyncStart('conversations');
+  const msgSyncLogId = await logSyncStart('messages');
 
   try {
     // Get all contact IDs (exclude soft-deleted)
@@ -459,15 +460,33 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
       contacts = unsyncedContacts.slice(0, MAX_CONTACTS_PER_SYNC);
       console.log(`[EntitySync] Backfill: syncing ${contacts.length} of ${unsyncedContacts.length} remaining unsynced contacts (${allContacts.length} total)`);
     } else {
-      // All contacts covered — incremental mode
-      const { data: recentContacts } = await supabase
-        .from('contacts')
-        .select('ghl_contact_id')
+      // All contacts covered — incremental mode (round-robin by oldest synced_at)
+      // Prioritize contacts whose conversations were checked longest ago,
+      // ensuring all contacts are periodically re-checked for new messages.
+      const { data: staleConversations } = await supabase
+        .from('conversations')
+        .select('ghl_contact_id, synced_at')
         .is('deleted_at', null)
-        .order('date_updated', { ascending: false })
+        .order('synced_at', { ascending: true })
         .limit(MAX_CONTACTS_PER_SYNC);
-      contacts = recentContacts || allContacts.slice(0, MAX_CONTACTS_PER_SYNC);
-      console.log(`[EntitySync] Incremental: refreshing ${contacts.length} most recently updated contacts`);
+
+      if (staleConversations && staleConversations.length > 0) {
+        // Deduplicate contact IDs (a contact may have multiple conversations)
+        const seen = new Set<string>();
+        contacts = [];
+        for (const row of staleConversations) {
+          if (!seen.has(row.ghl_contact_id)) {
+            seen.add(row.ghl_contact_id);
+            contacts.push({ ghl_contact_id: row.ghl_contact_id });
+          }
+          if (contacts.length >= MAX_CONTACTS_PER_SYNC) break;
+        }
+        const oldestSyncedAt = staleConversations[0]?.synced_at || 'unknown';
+        console.log(`[EntitySync] Incremental (round-robin): refreshing ${contacts.length} contacts, oldest synced_at: ${oldestSyncedAt}`);
+      } else {
+        contacts = allContacts.slice(0, MAX_CONTACTS_PER_SYNC);
+        console.log(`[EntitySync] Incremental: refreshing ${contacts.length} contacts (fallback to all contacts)`);
+      }
     }
 
     let totalConversations = 0;
@@ -579,7 +598,9 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     }
 
     await updateLastSynced('conversations');
-    await logSyncComplete(syncLogId, totalConversations + totalMessages);
+    await updateLastSynced('messages');
+    await logSyncComplete(syncLogId, totalConversations);
+    await logSyncComplete(msgSyncLogId, totalMessages);
     console.log(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}`);
 
     if (errors.length > 0) {
@@ -596,6 +617,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await logSyncFailed(syncLogId, msg);
+    await logSyncFailed(msgSyncLogId, msg);
     console.error(`[EntitySync] Conversation sync failed: ${msg}`);
     return { synced_conversations: 0, synced_messages: 0, errors: [msg] };
   }
