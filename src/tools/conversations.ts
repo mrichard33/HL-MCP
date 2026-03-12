@@ -66,7 +66,7 @@ export const conversationTools = {
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
       contactId: z.string().describe('GHL contact ID'),
-      type: z.enum(['SMS', 'Email', 'WhatsApp', 'GMB', 'IG', 'FB']).default('SMS'),
+      type: z.enum(['SMS', 'Email', 'WhatsApp', 'GMB', 'IG', 'FB', 'Live_Chat']).default('SMS'),
       message: z.string().describe('Message body'),
     }),
     handler: async (args: { conversationId: string; contactId: string; type: string; message: string }) => {

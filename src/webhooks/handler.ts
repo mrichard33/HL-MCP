@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
+import { normalizeDirection, extractMessageBody } from '../utils/normalize.js';
 
 /**
  * Creates a deterministic event hash for deduplication.
@@ -169,7 +170,7 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
   const supabase = getSupabaseClient();
   const id = (payload.id || payload.messageId) as string;
   const contactId = payload.contactId as string | undefined;
-  const direction = (payload.direction as string) || 'outbound';
+  const direction = normalizeDirection(payload.direction as string | number | undefined);
   const msgType = (payload.type as string) || 'sms';
   const now = nowET();
 
@@ -180,7 +181,7 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
       ghl_contact_id: contactId || null,
       direction,
       type: msgType,
-      body: (payload.body || payload.message) as string || null,
+      body: extractMessageBody(payload),
       status: (payload.status as string) || 'delivered',
       sent_at: (payload.dateAdded as string) || now,
     },

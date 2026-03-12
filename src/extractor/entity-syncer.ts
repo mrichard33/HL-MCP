@@ -3,6 +3,7 @@ import { getSupabaseClient } from '../clients/supabase.js';
 import { createLeadEvent } from '../webhooks/handler.js';
 import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
+import { normalizeDirection } from '../utils/normalize.js';
 
 // ---- Sync State Helpers ----
 
@@ -549,9 +550,9 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                       ghl_message_id: msg.id,
                       ghl_conversation_id: msg.conversationId || conv.id,
                       ghl_contact_id: msg.contactId || contactId,
-                      direction: msg.direction || 'outbound',
+                      direction: normalizeDirection(msg.direction),
                       type: msg.type || 'sms',
-                      body: msg.body || null,
+                      body: msg.body || msg.message || msg.text || null,
                       status: msg.status || 'delivered',
                       sent_at: toISODate(msg.dateAdded) || now,
                     },

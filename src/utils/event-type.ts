@@ -19,10 +19,22 @@ export function deriveAppointmentEventType(status?: string): string {
 }
 
 export function deriveMessageEventType(data: { direction?: string; type?: string; status?: string }): string {
-  const msgType = data.type || 'sms';
+  const msgType = (data.type || 'sms').toLowerCase();
+
   if (data.status === 'opened') return 'email_opened';
   if (data.status === 'clicked') return 'email_clicked';
-  if (data.status === 'delivered') return msgType === 'email' ? 'email_delivered' : 'sms_delivered';
-  if (data.direction === 'inbound') return msgType === 'email' ? 'email_received' : 'sms_received';
-  return msgType === 'email' ? 'email_sent' : 'sms_sent';
+
+  if (msgType === 'email') {
+    if (data.status === 'delivered') return 'email_delivered';
+    return data.direction === 'inbound' ? 'email_received' : 'email_sent';
+  }
+
+  // Live chat / web chat widget
+  if (msgType === 'live_chat' || msgType === 'livechat') {
+    return data.direction === 'inbound' ? 'chat_received' : 'chat_sent';
+  }
+
+  // SMS and all other channel types (WhatsApp, FB, IG, GMB)
+  if (data.status === 'delivered') return 'sms_delivered';
+  return data.direction === 'inbound' ? 'sms_received' : 'sms_sent';
 }
