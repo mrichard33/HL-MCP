@@ -28,6 +28,8 @@ interface RequestOptions {
 
 // Firebase token cache
 let cachedFirebaseToken: { idToken: string; expiresAt: number } | null = null;
+// Cache Firebase token errors to avoid hammering the endpoint on repeated failures
+let cachedFirebaseTokenError: { message: string; expiresAt: number } | null = null;
 
 export class GHLClient {
   private apiKey: string;
@@ -163,6 +165,11 @@ export class GHLClient {
       return cachedFirebaseToken.idToken;
     }
 
+    // Return cached error if a recent refresh attempt failed (5-min TTL)
+    if (cachedFirebaseTokenError && Date.now() < cachedFirebaseTokenError.expiresAt) {
+      throw new Error(`Firebase token refresh failed (cached): ${cachedFirebaseTokenError.message}`);
+    }
+
     const url = `${FIREBASE_TOKEN_URL}?key=${this.firebaseApiKey}`;
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
@@ -177,7 +184,10 @@ export class GHLClient {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      throw new Error(`Firebase token error ${response.status}: ${errorBody}`);
+      const errorMsg = `Firebase token error ${response.status}: ${errorBody}`;
+      // Cache the failure for 5 minutes to avoid hammering the endpoint
+      cachedFirebaseTokenError = { message: errorMsg, expiresAt: Date.now() + 300_000 };
+      throw new Error(errorMsg);
     }
 
     const data = await response.json() as FirebaseTokenResponse;
@@ -187,6 +197,8 @@ export class GHLClient {
       idToken: data.id_token,
       expiresAt: Date.now() + expiresInMs,
     };
+    // Clear any previous error cache on success
+    cachedFirebaseTokenError = null;
 
     return data.id_token;
   }
@@ -383,24 +395,29 @@ export class GHLClient {
       return null;
     }
 
-    const idToken = await this.getFirebaseToken();
-    const url = `${BACKEND_BASE_URL}/workflow/${this.locationId}/${workflowId}?includeScheduledPauseInfo=true`;
+    try {
+      const idToken = await this.getFirebaseToken();
+      const url = `${BACKEND_BASE_URL}/workflow/${this.locationId}/${workflowId}?includeScheduledPauseInfo=true`;
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        channel: 'APP',
-        'token-id': idToken,
-      },
-    });
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          channel: 'APP',
+          'token-id': idToken,
+        },
+      });
 
-    if (!response.ok) {
-      console.error(`[GHL] Internal API failed for workflow ${workflowId} (${response.status})`);
+      if (!response.ok) {
+        console.error(`[GHL] Internal API failed for workflow ${workflowId} (${response.status})`);
+        return null;
+      }
+
+      return response.json() as Promise<Record<string, unknown>>;
+    } catch (err) {
+      console.error(`[GHL] Firebase auth failed for workflow detail ${workflowId}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
-
-    return response.json() as Promise<Record<string, unknown>>;
   }
 
   /**

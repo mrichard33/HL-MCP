@@ -255,6 +255,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
     // 1. Fetch all workflows (summary list from public API)
     const workflows = await ghl.getWorkflows();
     let noNodesCount = 0;
+    let firebaseFailureLogged = false;
 
     for (const workflowSummary of workflows) {
       try {
@@ -264,6 +265,27 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         let parsedConnections: Array<{ fromStep: string; toStep: string; condition?: string }> = [];
 
         const internalJson = await ghl.getWorkflowDetail(workflowSummary.id);
+
+        if (!internalJson && ghl.isFirebaseAuthConfigured) {
+          // Firebase auth is configured but failed at runtime (expired/invalid token).
+          // Update basic metadata only — preserve existing trigger_type, trigger_config,
+          // actions, and raw_json in the database since the public API cannot provide them.
+          if (!firebaseFailureLogged) {
+            console.error('[WorkflowSync] Firebase auth failed — updating metadata only, preserving existing trigger/action data. Check GHL_FIREBASE_REFRESH_TOKEN.');
+            firebaseFailureLogged = true;
+          }
+          await supabase.from('workflows').upsert({
+            ghl_workflow_id: workflowSummary.id,
+            ghl_location_id: workflowSummary.locationId,
+            name: workflowSummary.name,
+            status: workflowSummary.status,
+            version: workflowSummary.version || 1,
+            synced_at: nowET(),
+            deleted_at: null,
+          }, { onConflict: 'ghl_workflow_id' });
+          result.workflows_synced++;
+          continue;
+        }
 
         if (internalJson) {
           // Internal API returned data — parse the full node graph
@@ -379,6 +401,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
           actions: workflowDetail.actions && workflowDetail.actions.length > 0 ? workflowDetail.actions : [],
           raw_json: rawJson,
           synced_at: nowET(),
+          deleted_at: null,
         }, { onConflict: 'ghl_workflow_id' });
         result.workflows_synced++;
 
