@@ -101,9 +101,11 @@ export interface GHLMessage {
   id: string;
   conversationId: string;
   contactId?: string;
-  direction: 'inbound' | 'outbound';
+  direction: 'inbound' | 'outbound' | number;
   type?: string;
   body?: string;
+  message?: string;
+  text?: string;
   status?: string;
   dateAdded?: string;
 }
