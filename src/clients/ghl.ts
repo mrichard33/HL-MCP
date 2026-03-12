@@ -450,6 +450,11 @@ export class GHLClient {
 
       const data = await response.json();
 
+      // Diagnostic: log raw trigger response shape for debugging
+      const dataType = Array.isArray(data) ? `Array[${data.length}]` : typeof data;
+      const dataKeys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data).join(',') : 'N/A';
+      console.log(`[GHL] Trigger API response for ${workflowId}: type=${dataType}, keys=${dataKeys}`);
+
       // Response may be an array directly or wrapped in an object
       if (Array.isArray(data)) return data;
       if (data && typeof data === 'object') {
