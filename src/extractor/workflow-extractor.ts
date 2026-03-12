@@ -87,11 +87,14 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     'value',  // Raw backend trigger 'value' is always a timestamp, not meaningful
     'entity', 'scope', 'source', 'category', 'channel',
     'status', 'active', 'enabled', 'deleted', 'archived',
+    'location_id', 'workflow_id', 'contact_id', 'trigger_id',
   ]);
   // Generic values that are not meaningful as trigger values
   const genericValues = new Set(['workflow', 'trigger', 'action', 'contact', 'true', 'false']);
   // ISO 8601 timestamp pattern to skip values that look like dates
   const isoTimestampRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+  // GHL object IDs are long alphanumeric strings — not meaningful as trigger values
+  const ghlIdRe = /^[a-zA-Z0-9]{15,}$/;
   for (const [key, val] of Object.entries(trigger)) {
     if (skipKeys.has(key)) continue;
     if (val && typeof val === 'object' && !Array.isArray(val)) continue;
@@ -100,7 +103,7 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     }
     if (val !== null && val !== undefined && val !== '' && typeof val !== 'boolean') {
       const str = String(val).trim();
-      if (str && str !== 'undefined' && str !== 'null' && !isoTimestampRe.test(str) && !genericValues.has(str.toLowerCase())) return str;
+      if (str && str !== 'undefined' && str !== 'null' && !isoTimestampRe.test(str) && !genericValues.has(str.toLowerCase()) && !ghlIdRe.test(str)) return str;
     }
   }
 
