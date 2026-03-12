@@ -13,6 +13,7 @@ interface DiagnosticsReport {
     supabase_connection: DiagnosticResult;
     ghl_credentials: DiagnosticResult;
     ghl_api_reachable: DiagnosticResult;
+    firebase_auth: DiagnosticResult;
     ghl_oauth_tokens: DiagnosticResult;
     scheduled_sync_enabled: DiagnosticResult;
     table_row_counts: Record<string, number>;
@@ -136,7 +137,44 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
     }
   }
 
-  // 5. Check OAuth token status
+  // 5. Check Firebase auth (active token refresh test)
+  let firebaseAuthCheck: DiagnosticResult;
+  if (!envVarsPresent.GHL_FIREBASE_API_KEY || !envVarsPresent.GHL_FIREBASE_REFRESH_TOKEN) {
+    firebaseAuthCheck = { status: 'warning', message: 'Firebase auth not configured (GHL_FIREBASE_API_KEY / GHL_FIREBASE_REFRESH_TOKEN missing). Workflow trigger/action data requires Firebase auth.' };
+    hasWarning = true;
+  } else {
+    try {
+      const { GHLClient } = await import('./clients/ghl.js');
+      const ghl = new GHLClient();
+      // Attempt to fetch a workflow detail to test Firebase auth end-to-end
+      // First get a workflow ID from the public API
+      const workflows = await ghl.getWorkflows();
+      if (workflows.length === 0) {
+        firebaseAuthCheck = { status: 'warning', message: 'Firebase credentials set but no workflows to test against' };
+        hasWarning = true;
+      } else {
+        const testResult = await ghl.getWorkflowDetail(workflows[0].id);
+        if (testResult) {
+          firebaseAuthCheck = { status: 'ok', message: 'Firebase auth working — internal API returned workflow detail' };
+        } else {
+          firebaseAuthCheck = { status: 'error', message: 'Firebase auth failed — token refresh may have failed. Check GHL_FIREBASE_REFRESH_TOKEN.' };
+          hasError = true;
+          recommendations.push(
+            'Firebase auth is configured but the token refresh is failing. The GHL_FIREBASE_REFRESH_TOKEN may have expired. ' +
+            'Workflow trigger_type, trigger_config, actions, and raw_json will NOT update until this is fixed. ' +
+            'Obtain a new refresh token from the GHL Firebase session.',
+          );
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      firebaseAuthCheck = { status: 'error', message: `Firebase auth test failed: ${msg}` };
+      hasError = true;
+      recommendations.push(`Firebase auth error: ${msg}. Workflow detail data will not sync.`);
+    }
+  }
+
+  // 6. Check OAuth token status
   let oauthTokenCheck: DiagnosticResult;
   if (!envVarsPresent.GHL_OAUTH_CLIENT_ID || !envVarsPresent.GHL_OAUTH_CLIENT_SECRET) {
     oauthTokenCheck = { status: 'warning', message: 'GHL_OAUTH_CLIENT_ID / GHL_OAUTH_CLIENT_SECRET not set — conversations/messages sync disabled' };
@@ -171,7 +209,7 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
     }
   }
 
-  // 6. Check scheduled sync (enabled by default, only disabled with explicit "false")
+  // 7. Check scheduled sync (enabled by default, only disabled with explicit "false")
   let syncCheck: DiagnosticResult;
   if (process.env.ENABLE_SCHEDULED_SYNC === 'false') {
     syncCheck = { status: 'warning', message: 'Scheduled sync is explicitly disabled' };
@@ -184,17 +222,7 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
     syncCheck = { status: 'ok', message: 'Scheduled sync is enabled (runs every 15 minutes)' };
   }
 
-  // 6. Firebase auth check
-  if (!envVarsPresent.GHL_FIREBASE_API_KEY || !envVarsPresent.GHL_FIREBASE_REFRESH_TOKEN) {
-    hasWarning = true;
-    recommendations.push(
-      'Firebase auth is not configured (GHL_FIREBASE_API_KEY / GHL_FIREBASE_REFRESH_TOKEN). ' +
-      'Without it, workflow extraction falls back to the public API which has less detail. ' +
-      'This is optional but recommended for full workflow intelligence.',
-    );
-  }
-
-  // 7. Table-specific recommendations
+  // 8. Table-specific recommendations
   const emptyTables = Object.entries(tableCounts).filter(([, count]) => count === 0).map(([name]) => name);
   if (emptyTables.length > 0) {
     const autoSyncTables = emptyTables.filter(t => t !== 'workflow_executions');
@@ -234,6 +262,7 @@ export async function runDiagnostics(): Promise<DiagnosticsReport> {
       supabase_connection: supabaseCheck,
       ghl_credentials: ghlCredentialsCheck,
       ghl_api_reachable: ghlApiCheck,
+      firebase_auth: firebaseAuthCheck,
       ghl_oauth_tokens: oauthTokenCheck,
       scheduled_sync_enabled: syncCheck,
       table_row_counts: tableCounts,
