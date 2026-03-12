@@ -85,7 +85,11 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     'modifiedAt', 'modified_at', 'lastModified', 'dateCreated', 'dateUpdated',
     'dateAdded', 'dateModified', 'version', 'order', 'priority',
     'value',  // Raw backend trigger 'value' is always a timestamp, not meaningful
+    'entity', 'scope', 'source', 'category', 'channel',
+    'status', 'active', 'enabled', 'deleted', 'archived',
   ]);
+  // Generic values that are not meaningful as trigger values
+  const genericValues = new Set(['workflow', 'trigger', 'action', 'contact', 'true', 'false']);
   // ISO 8601 timestamp pattern to skip values that look like dates
   const isoTimestampRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
   for (const [key, val] of Object.entries(trigger)) {
@@ -96,7 +100,7 @@ function extractTriggerValue(trigger: Record<string, unknown>): string | null {
     }
     if (val !== null && val !== undefined && val !== '' && typeof val !== 'boolean') {
       const str = String(val).trim();
-      if (str && str !== 'undefined' && str !== 'null' && !isoTimestampRe.test(str)) return str;
+      if (str && str !== 'undefined' && str !== 'null' && !isoTimestampRe.test(str) && !genericValues.has(str.toLowerCase())) return str;
     }
   }
 
@@ -542,11 +546,33 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         for (const trigger of triggers) {
           await supabase.from('workflow_triggers').insert({
             workflow_id: workflowDetail.id,
-            trigger_event: trigger.type || trigger.name || 'unknown',
+            trigger_event: trigger.type || trigger.name || (trigger as Record<string, unknown>).triggerName as string || (trigger as Record<string, unknown>).event as string || 'unknown',
             trigger_value: extractTriggerValue(trigger as unknown as Record<string, unknown>),
             raw_json: trigger,
           });
           result.triggers_synced++;
+        }
+
+        // Backfill workflows.trigger_type and trigger_config from workflow_triggers data
+        if (triggers.length > 0) {
+          const { data: insertedTriggers } = await supabase
+            .from('workflow_triggers')
+            .select('trigger_event, raw_json')
+            .eq('workflow_id', workflowDetail.id);
+
+          if (insertedTriggers && insertedTriggers.length > 0) {
+            const { error: triggerUpdateError } = await supabase
+              .from('workflows')
+              .update({
+                trigger_type: insertedTriggers[0].trigger_event,
+                trigger_config: insertedTriggers.map(t => t.raw_json),
+              })
+              .eq('ghl_workflow_id', workflowDetail.id);
+
+            if (triggerUpdateError) {
+              console.error(`[WorkflowSync] Failed to backfill trigger data for "${workflowDetail.name}": ${triggerUpdateError.message}`);
+            }
+          }
         }
 
         // 8. Extract top-level actions (not step-level)
@@ -564,6 +590,25 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
             raw_json: action,
           });
           result.actions_synced++;
+        }
+
+        // Backfill workflows.actions from workflow_actions data
+        if (topActions.length > 0) {
+          const { data: insertedActions } = await supabase
+            .from('workflow_actions')
+            .select('action_type, action_target, raw_json')
+            .eq('workflow_id', workflowDetail.id);
+
+          if (insertedActions && insertedActions.length > 0) {
+            const { error: actionsUpdateError } = await supabase
+              .from('workflows')
+              .update({ actions: insertedActions.map(a => a.raw_json) })
+              .eq('ghl_workflow_id', workflowDetail.id);
+
+            if (actionsUpdateError) {
+              console.error(`[WorkflowSync] Failed to backfill actions for "${workflowDetail.name}": ${actionsUpdateError.message}`);
+            }
+          }
         }
 
       } catch (err) {
