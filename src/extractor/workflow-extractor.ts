@@ -274,7 +274,7 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
             console.error('[WorkflowSync] Firebase auth failed — updating metadata only, preserving existing trigger/action data. Check GHL_FIREBASE_REFRESH_TOKEN.');
             firebaseFailureLogged = true;
           }
-          await supabase.from('workflows').upsert({
+          const { error: metaUpsertError } = await supabase.from('workflows').upsert({
             ghl_workflow_id: workflowSummary.id,
             ghl_location_id: workflowSummary.locationId,
             name: workflowSummary.name,
@@ -283,7 +283,11 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
             synced_at: nowET(),
             deleted_at: null,
           }, { onConflict: 'ghl_workflow_id' });
-          result.workflows_synced++;
+          if (metaUpsertError) {
+            result.errors.push(`Workflow ${workflowSummary.id} metadata upsert failed: ${metaUpsertError.message}`);
+          } else {
+            result.workflows_synced++;
+          }
           continue;
         }
 
@@ -358,6 +362,11 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
               : (fullJson.triggers as GHLWorkflow['triggers']) || workflowSummary.triggers || [];
           }
 
+          // Diagnostic: log trigger/action counts for first workflow per sync cycle
+          if (result.workflows_synced === 0) {
+            console.log(`[WorkflowSync] Trigger diagnostics for "${workflowSummary.name}": backendTriggers=${backendTriggers.length}, parsedTriggers=${parsed.triggers.length}, mergedTriggers=${mergedTriggers.length}, parsedActions=${parsed.actions.length}`);
+          }
+
           // Build a GHLWorkflow from parsed data
           workflowDetail = {
             id: workflowSummary.id,
@@ -390,19 +399,48 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
         const rawJson = JSON.parse(JSON.stringify(fullJson));
 
         // 3. Upsert workflow with raw JSON
-        await supabase.from('workflows').upsert({
+        // If we have no trigger data from any source, preserve existing DB values
+        let upsertTriggerType: string | null = workflowDetail.triggers?.[0]?.type || null;
+        let upsertTriggerConfig: unknown = workflowDetail.triggers && workflowDetail.triggers.length > 0 ? workflowDetail.triggers : [];
+        let upsertActions: unknown = workflowDetail.actions && workflowDetail.actions.length > 0 ? workflowDetail.actions : [];
+
+        if (!workflowDetail.triggers?.length || !workflowDetail.actions?.length) {
+          const { data: existing } = await supabase
+            .from('workflows')
+            .select('trigger_type, trigger_config, actions')
+            .eq('ghl_workflow_id', workflowDetail.id)
+            .single();
+
+          if (existing) {
+            if (!workflowDetail.triggers?.length && existing.trigger_type) {
+              console.warn(`[WorkflowSync] No trigger data for "${workflowDetail.name}" — preserving existing DB values`);
+              upsertTriggerType = existing.trigger_type;
+              upsertTriggerConfig = existing.trigger_config;
+            }
+            if (!workflowDetail.actions?.length && existing.actions && Array.isArray(existing.actions) && existing.actions.length > 0) {
+              console.warn(`[WorkflowSync] No action data for "${workflowDetail.name}" — preserving existing DB values`);
+              upsertActions = existing.actions;
+            }
+          }
+        }
+
+        const { error: upsertError } = await supabase.from('workflows').upsert({
           ghl_workflow_id: workflowDetail.id,
           ghl_location_id: workflowDetail.locationId,
           name: workflowDetail.name,
           status: workflowDetail.status,
           version: workflowDetail.version || 1,
-          trigger_type: workflowDetail.triggers?.[0]?.type || null,
-          trigger_config: workflowDetail.triggers && workflowDetail.triggers.length > 0 ? workflowDetail.triggers : {},
-          actions: workflowDetail.actions && workflowDetail.actions.length > 0 ? workflowDetail.actions : [],
+          trigger_type: upsertTriggerType,
+          trigger_config: upsertTriggerConfig,
+          actions: upsertActions,
           raw_json: rawJson,
           synced_at: nowET(),
           deleted_at: null,
         }, { onConflict: 'ghl_workflow_id' });
+        if (upsertError) {
+          result.errors.push(`Workflow ${workflowDetail.id} upsert failed: ${upsertError.message}`);
+          continue;
+        }
         result.workflows_synced++;
 
         // 4. Check for version changes and create snapshot
