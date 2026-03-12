@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
+import { normalizeDirection } from '../utils/normalize.js';
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
 function toISODate(value: string | number | null | undefined): string | null {
@@ -11,6 +12,36 @@ function toISODate(value: string | number | null | undefined): string | null {
     return new Date(n).toISOString();
   }
   return typeof value === 'string' ? value : null;
+}
+
+/** Upsert an array of raw GHL messages into the Supabase messages table. */
+async function persistMessages(
+  messages: Record<string, unknown>[],
+  conversationId: string,
+): Promise<number> {
+  if (!messages.length) return 0;
+  const supabase = getSupabaseClient();
+  const now = nowET();
+  let count = 0;
+
+  for (const msg of messages) {
+    const { error } = await supabase.from('messages').upsert(
+      {
+        ghl_message_id: msg.id as string,
+        ghl_conversation_id: (msg.conversationId as string) || conversationId,
+        ghl_contact_id: (msg.contactId as string) || null,
+        direction: normalizeDirection(msg.direction as string | number | undefined),
+        type: (msg.type as string) || 'sms',
+        body: (msg.body || msg.message || msg.text) as string || null,
+        status: (msg.status as string) || 'delivered',
+        sent_at: toISODate(msg.dateAdded as string | number | undefined) || now,
+      },
+      { onConflict: 'ghl_message_id' },
+    );
+    if (!error) count++;
+  }
+
+  return count;
 }
 
 export const conversationTools = {
@@ -51,13 +82,34 @@ export const conversationTools = {
   },
 
   get_messages: {
-    description: 'Get messages in a conversation. Uses OAuth tokens automatically when configured.',
+    description: 'Get messages in a conversation. Fetches from the live GHL API and persists to Supabase. Use useCache=true to query from Supabase instead.',
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
+      useCache: z.boolean().optional().default(false).describe('Query from Supabase cache instead of live API'),
     }),
-    handler: async (args: { conversationId: string }) => {
+    handler: async (args: { conversationId: string; useCache?: boolean }) => {
+      if (args.useCache) {
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('ghl_conversation_id', args.conversationId)
+          .is('deleted_at', null)
+          .order('sent_at', { ascending: true });
+        if (error) throw new Error(`Supabase error: ${error.message}`);
+        return { messages: data, source: 'cache' };
+      }
+
       const ghl = new GHLClient();
-      return ghl.getMessages(args.conversationId);
+      const raw = await ghl.getAllMessages(args.conversationId);
+
+      // Persist fetched messages to Supabase
+      const persisted = await persistMessages(
+        raw as unknown as Record<string, unknown>[],
+        args.conversationId,
+      );
+
+      return { messages: raw, persisted, source: 'ghl_api' };
     },
   },
 
@@ -76,7 +128,7 @@ export const conversationTools = {
   },
 
   sync_conversations: {
-    description: 'Sync conversations from GoHighLevel to Supabase cache.',
+    description: 'Sync conversations and their messages from GoHighLevel to Supabase cache.',
     inputSchema: z.object({
       contactId: z.string().optional(),
       limit: z.number().optional().default(50),
@@ -87,6 +139,7 @@ export const conversationTools = {
       }
       const ghl = new GHLClient();
       const supabase = getSupabaseClient();
+      const now = nowET();
 
       const { conversations } = await ghl.getConversations({ contactId: args.contactId, limit: args.limit });
       const rows = conversations.map((c) => ({
@@ -96,13 +149,28 @@ export const conversationTools = {
         type: c.type || null,
         last_message_at: toISODate(c.lastMessageDate),
         unread_count: c.unreadCount || 0,
-        synced_at: nowET(),
+        synced_at: now,
       }));
 
       const { error } = await supabase.from('conversations').upsert(rows, { onConflict: 'ghl_conversation_id' });
       if (error) throw new Error(`Supabase error: ${error.message}`);
 
-      return { synced: rows.length, status: 'completed' };
+      // Also fetch and persist messages for each synced conversation
+      let totalMessages = 0;
+      for (const conv of conversations) {
+        try {
+          const messageList = await ghl.getAllMessages(conv.id, 5);
+          const persisted = await persistMessages(
+            messageList as unknown as Record<string, unknown>[],
+            conv.id,
+          );
+          totalMessages += persisted;
+        } catch (err) {
+          console.error(`[sync_conversations] Failed to sync messages for conv ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      return { synced_conversations: rows.length, synced_messages: totalMessages, status: 'completed' };
     },
   },
 };
