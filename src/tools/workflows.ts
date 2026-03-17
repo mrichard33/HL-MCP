@@ -13,7 +13,7 @@ import {
 
 export const workflowTools = {
   list_workflows: {
-    description: 'List all workflows. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
+    description: '[HighLevel MCP — Workflow & Automation] List all workflows. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
     inputSchema: z.object({
       forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
@@ -31,18 +31,22 @@ export const workflowTools = {
   },
 
   sync_workflows: {
-    description: 'Full sync of workflows from GoHighLevel to Supabase — fetches complete workflow JSON with all steps, triggers, actions, and connections.',
-    inputSchema: z.object({}),
-    handler: async () => {
-      const result = await extractAndSyncWorkflows();
+    description: '[HighLevel MCP — Workflow & Automation] Full sync of workflows from GoHighLevel to Supabase — fetches complete workflow JSON with all steps, triggers, actions, and connections. Use batchSize to limit concurrent processing and prevent API failures.',
+    inputSchema: z.object({
+      batchSize: z.number().optional().default(0).describe('Number of workflows to process per batch (0 = all at once). Use 5-10 for large accounts to prevent API rate limiting.'),
+    }),
+    handler: async (args: { batchSize?: number }) => {
+      const result = await extractAndSyncWorkflows({ batchSize: args.batchSize || 0 });
       return {
         workflows_synced: result.workflows_synced,
+        workflows_total: result.workflows_total,
         steps_synced: result.steps_synced,
         triggers_synced: result.triggers_synced,
         actions_synced: result.actions_synced,
         connections_synced: result.connections_synced,
         snapshots_created: result.snapshots_created,
         errors: result.errors,
+        failed_workflow_ids: result.failed_workflow_ids,
         status: result.errors.length === 0 ? 'completed' : 'completed_with_errors',
       };
     },
@@ -148,28 +152,79 @@ export const workflowTools = {
   },
 
   inspect_workflow_raw_json: {
-    description: 'Inspect the raw JSON structure of a workflow stored in Supabase. Useful for debugging workflow data extraction.',
+    description: '[HighLevel MCP — Workflow & Automation] Inspect the raw JSON structure of a workflow. By default reads from Supabase cache. Set useCache=false to fetch live data directly from the HighLevel API (bypasses stale cache).',
     inputSchema: z.object({
       workflowId: z.string().describe('GHL workflow ID'),
+      useCache: z.boolean().optional().default(true).describe('If true (default), read from Supabase cache. If false, fetch live data from HighLevel API and optionally update cache.'),
+      updateCache: z.boolean().optional().default(true).describe('When useCache=false, whether to update the Supabase cache with the live data (default: true).'),
     }),
-    handler: async (args: { workflowId: string }) => {
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase
-        .from('workflows')
-        .select('ghl_workflow_id, name, trigger_type, trigger_config, actions, raw_json')
-        .eq('ghl_workflow_id', args.workflowId)
-        .single();
+    handler: async (args: { workflowId: string; useCache?: boolean; updateCache?: boolean }) => {
+      const useCache = args.useCache !== false;
+      const updateCache = args.updateCache !== false;
 
-      if (error) throw new Error(`Supabase error: ${error.message}`);
-      if (!data) throw new Error(`Workflow ${args.workflowId} not found`);
+      let raw: Record<string, unknown>;
+      let source: string;
+      let name: string | undefined;
+      let triggerType: string | null = null;
+      let triggerConfig: unknown = null;
+      let actions: unknown = null;
 
-      const raw = (data.raw_json || {}) as Record<string, unknown>;
+      if (useCache) {
+        // Read from Supabase cache
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase
+          .from('workflows')
+          .select('ghl_workflow_id, name, trigger_type, trigger_config, actions, raw_json')
+          .eq('ghl_workflow_id', args.workflowId)
+          .single();
+
+        if (error) throw new Error(`Supabase error: ${error.message}`);
+        if (!data) throw new Error(`Workflow ${args.workflowId} not found in cache. Try useCache=false to fetch live data.`);
+
+        raw = (data.raw_json || {}) as Record<string, unknown>;
+        source = 'supabase_cache';
+        name = data.name;
+        triggerType = data.trigger_type;
+        triggerConfig = data.trigger_config;
+        actions = data.actions;
+      } else {
+        // Fetch live data from HighLevel API
+        const ghl = new GHLClient();
+        const detail = await ghl.getWorkflowDetail(args.workflowId);
+        if (detail) {
+          raw = detail;
+          source = 'highlevel_internal_api';
+        } else {
+          // Fallback to public API
+          const publicData = await ghl.getWorkflow(args.workflowId);
+          raw = JSON.parse(JSON.stringify(publicData));
+          source = 'highlevel_public_api';
+        }
+        name = (raw.name as string) || undefined;
+        triggerType = (raw.triggerType as string) || null;
+        triggerConfig = raw.triggers || null;
+        actions = raw.actions || null;
+
+        // Optionally update Supabase cache
+        if (updateCache) {
+          const supabase = getSupabaseClient();
+          await supabase.from('workflows').upsert({
+            ghl_workflow_id: args.workflowId,
+            name: name || 'Unknown',
+            raw_json: raw,
+            synced_at: nowET(),
+            deleted_at: null,
+          }, { onConflict: 'ghl_workflow_id' });
+        }
+      }
+
       return {
-        workflow_id: data.ghl_workflow_id,
-        name: data.name,
-        current_trigger_type: data.trigger_type,
-        current_trigger_config: data.trigger_config,
-        current_actions: data.actions,
+        workflow_id: args.workflowId,
+        name,
+        source,
+        current_trigger_type: triggerType,
+        current_trigger_config: triggerConfig,
+        current_actions: actions,
         raw_json_top_level_keys: Object.keys(raw),
         raw_json_structure: Object.fromEntries(
           Object.entries(raw).map(([k, v]) => [
@@ -184,8 +239,64 @@ export const workflowTools = {
     },
   },
 
+  refresh_workflow: {
+    description: '[HighLevel MCP — Workflow & Automation] Refresh a single workflow by fetching live data from the HighLevel API and updating the Supabase cache. Use this instead of running a full sync when you need fresh data for one workflow.',
+    inputSchema: z.object({
+      workflowId: z.string().describe('GHL workflow ID to refresh'),
+    }),
+    handler: async (args: { workflowId: string }) => {
+      const ghl = new GHLClient();
+      const supabase = getSupabaseClient();
+
+      // Fetch from internal API first, fallback to public API
+      let rawJson: Record<string, unknown>;
+      let source: string;
+      const detail = await ghl.getWorkflowDetail(args.workflowId);
+      if (detail) {
+        rawJson = detail;
+        source = 'highlevel_internal_api';
+      } else {
+        const publicData = await ghl.getWorkflow(args.workflowId);
+        rawJson = JSON.parse(JSON.stringify(publicData));
+        source = 'highlevel_public_api';
+      }
+
+      const name = (rawJson.name as string) || 'Unknown';
+      const status = (rawJson.status as string) || 'unknown';
+      const version = (rawJson.version as number) || 1;
+      const locationId = (rawJson.locationId as string) || ghl.getLocationId();
+
+      // Update the Supabase cache
+      const { error: upsertError } = await supabase.from('workflows').upsert({
+        ghl_workflow_id: args.workflowId,
+        ghl_location_id: locationId,
+        name,
+        status,
+        version,
+        raw_json: rawJson,
+        synced_at: nowET(),
+        deleted_at: null,
+      }, { onConflict: 'ghl_workflow_id' });
+
+      if (upsertError) {
+        throw new Error(`Failed to update cache: ${upsertError.message}`);
+      }
+
+      return {
+        workflow_id: args.workflowId,
+        name,
+        status,
+        version,
+        source,
+        cache_updated: true,
+        refreshed_at: nowET(),
+        raw_json_top_level_keys: Object.keys(rawJson),
+      };
+    },
+  },
+
   sync_all_entities: {
-    description: 'Run a full sync of all entities (contacts, opportunities, appointments, pipelines, conversations, messages) from GoHighLevel to Supabase.',
+    description: '[HighLevel MCP — Sync] Run a full sync of all entities (contacts, opportunities, appointments, pipelines, conversations, messages) from GoHighLevel to Supabase.',
     inputSchema: z.object({}),
     handler: async () => {
       const results: Record<string, unknown> = {};
@@ -230,6 +341,58 @@ export const workflowTools = {
       }
 
       return results;
+    },
+  },
+
+  get_email_template: {
+    description: '[HighLevel MCP — Email Templates] Fetch the full content of an email template from HighLevel by its template ID. Returns HTML body, subject, preview text, sender info, and timestamps. Use this to verify email content referenced in workflows.',
+    inputSchema: z.object({
+      templateId: z.string().describe('The email template ID (found in workflow step template_id fields)'),
+    }),
+    handler: async (args: { templateId: string }) => {
+      const ghl = new GHLClient();
+      const template = await ghl.getEmailTemplate(args.templateId);
+
+      return {
+        template_id: args.templateId,
+        name: template.name || template.templateName || null,
+        subject: template.subject || null,
+        preview_text: template.previewText || template.preview_text || null,
+        from_name: template.fromName || template.from_name || null,
+        from_email: template.fromEmail || template.from_email || null,
+        html_body: template.html || template.body || template.htmlBody || null,
+        created_at: template.createdAt || template.created_at || null,
+        updated_at: template.updatedAt || template.updated_at || null,
+        raw: template,
+      };
+    },
+  },
+
+  list_email_templates: {
+    description: '[HighLevel MCP — Email Templates] List all email templates available in the HighLevel location. Returns template IDs, names, subjects, and timestamps for quick reference.',
+    inputSchema: z.object({
+      limit: z.number().optional().default(50).describe('Maximum number of templates to return (default: 50)'),
+      offset: z.number().optional().default(0).describe('Offset for pagination (default: 0)'),
+    }),
+    handler: async (args: { limit?: number; offset?: number }) => {
+      const ghl = new GHLClient();
+      const result = await ghl.getEmailTemplates({
+        limit: args.limit || 50,
+        offset: args.offset || 0,
+      });
+
+      const templates = result.templates.map((t: Record<string, unknown>) => ({
+        template_id: t.id || t._id,
+        name: t.name || t.templateName || null,
+        subject: t.subject || null,
+        updated_at: t.updatedAt || t.updated_at || null,
+      }));
+
+      return {
+        templates,
+        count: templates.length,
+        total: result.total || templates.length,
+      };
     },
   },
 };

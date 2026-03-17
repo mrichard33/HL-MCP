@@ -678,6 +678,34 @@ export class GHLClient {
     return res.links || [];
   }
 
+  // ---- Email Templates ----
+
+  /** Fetch a single email template by ID. */
+  async getEmailTemplate(templateId: string): Promise<Record<string, unknown>> {
+    const res = await this.request<Record<string, unknown>>(
+      `/emails/builder/${templateId}`,
+    );
+    return res;
+  }
+
+  /** List all email templates for the location. */
+  async getEmailTemplates(params?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ templates: Record<string, unknown>[]; total?: number }> {
+    const reqParams: Record<string, string> = {
+      locationId: this.locationId,
+    };
+    if (params?.limit) reqParams.limit = String(params.limit);
+    if (params?.offset) reqParams.offset = String(params.offset);
+
+    const res = await this.request<{ templates: Record<string, unknown>[]; total?: number }>(
+      '/emails/builder',
+      { params: reqParams },
+    );
+    return { templates: res.templates || [], total: res.total };
+  }
+
   /** Expose locationId for use by other modules. */
   getLocationId(): string {
     return this.locationId;

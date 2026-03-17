@@ -7,12 +7,18 @@ import { updateLastSynced, softDeleteMissing } from './entity-syncer.js';
 
 export interface SyncResult {
   workflows_synced: number;
+  workflows_total: number;
   steps_synced: number;
   triggers_synced: number;
   actions_synced: number;
   connections_synced: number;
   snapshots_created: number;
   errors: string[];
+  failed_workflow_ids: string[];
+}
+
+export interface SyncOptions {
+  batchSize?: number;
 }
 
 /**
@@ -147,9 +153,61 @@ function extractActionTargetFromAttrs(actionType: string, attrs: Record<string, 
 }
 
 /**
+ * Recursively traverses templates to find all nodes including those inside
+ * IF/ELSE branches, following next pointers and branch paths.
+ */
+function collectAllTemplateNodes(templates: Record<string, unknown>[]): Record<string, unknown>[] {
+  const templateMap = new Map<string, Record<string, unknown>>();
+  for (const tmpl of templates) {
+    const id = (tmpl.id || tmpl._id) as string;
+    if (id) templateMap.set(id, tmpl);
+  }
+
+  const visited = new Set<string>();
+  const result: Record<string, unknown>[] = [];
+
+  function visit(id: string) {
+    if (!id || visited.has(id)) return;
+    visited.add(id);
+    const tmpl = templateMap.get(id);
+    if (!tmpl) return;
+    result.push(tmpl);
+
+    const next = tmpl.next;
+    if (typeof next === 'string' && next) {
+      visit(next);
+    } else if (Array.isArray(next)) {
+      for (const branchTarget of next) {
+        if (typeof branchTarget === 'string' && branchTarget) {
+          visit(branchTarget);
+        }
+      }
+    }
+
+    const attrs = (tmpl.attributes || {}) as Record<string, unknown>;
+    if (Array.isArray(attrs.branches)) {
+      for (const branch of attrs.branches) {
+        const b = branch as Record<string, unknown>;
+        if (typeof b.nextStep === 'string') visit(b.nextStep);
+        if (typeof b.target === 'string') visit(b.target);
+        if (typeof b.id === 'string') visit(b.id);
+      }
+    }
+  }
+
+  for (const tmpl of templates) {
+    const id = (tmpl.id || tmpl._id) as string;
+    if (id) visit(id);
+  }
+
+  return result;
+}
+
+/**
  * Extracts workflow steps, actions, and connections from the GHL internal API's
  * `workflowData.templates` format. Templates are a flat array of step/action
  * objects linked via `next` fields (string for sequential, array for branches).
+ * Now traverses all branch paths to include IF/ELSE child nodes.
  */
 function extractFromTemplates(templates: Record<string, unknown>[]): {
   steps: GHLWorkflowStep[];
@@ -160,7 +218,10 @@ function extractFromTemplates(templates: Record<string, unknown>[]): {
   const actions: GHLWorkflowAction[] = [];
   const connections: Array<{ fromStep: string; toStep: string; condition?: string }> = [];
 
-  for (const tmpl of templates) {
+  // Collect all nodes including those inside branches
+  const allTemplates = collectAllTemplateNodes(templates);
+
+  for (const tmpl of allTemplates) {
     const id = (tmpl.id || tmpl._id) as string;
     if (!id) continue;
     const type = (tmpl.type as string) || 'unknown';
@@ -237,18 +298,21 @@ function extractFromTemplates(templates: Record<string, unknown>[]): {
  * Populates: workflows, workflow_steps, workflow_triggers, workflow_actions,
  * workflow_connections, and workflow_snapshots tables.
  */
-export async function extractAndSyncWorkflows(): Promise<SyncResult> {
+export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promise<SyncResult> {
   const ghl = new GHLClient();
   const supabase = getSupabaseClient();
+  const batchSize = options.batchSize || 0;
 
   const result: SyncResult = {
     workflows_synced: 0,
+    workflows_total: 0,
     steps_synced: 0,
     triggers_synced: 0,
     actions_synced: 0,
     connections_synced: 0,
     snapshots_created: 0,
     errors: [],
+    failed_workflow_ids: [],
   };
 
   // Log sync start
@@ -261,10 +325,18 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
   try {
     // 1. Fetch all workflows (summary list from public API)
     const workflows = await ghl.getWorkflows();
+    result.workflows_total = workflows.length;
     let noNodesCount = 0;
     let firebaseFailureLogged = false;
 
-    for (const workflowSummary of workflows) {
+    for (let wIdx = 0; wIdx < workflows.length; wIdx++) {
+      const workflowSummary = workflows[wIdx];
+
+      // Batch delay: pause between batches to avoid API rate limiting
+      if (batchSize > 0 && wIdx > 0 && wIdx % batchSize === 0) {
+        console.log(`[WorkflowSync] Batch pause after ${wIdx}/${workflows.length} workflows...`);
+        await new Promise(r => setTimeout(r, 2000));
+      }
       try {
         // 2. Fetch full workflow detail from internal API (requires Firebase auth)
         let workflowDetail: GHLWorkflow;
@@ -616,7 +688,19 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
 
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        result.errors.push(`Workflow ${workflowSummary.id}: ${msg}`);
+        const stack = err instanceof Error ? err.stack : undefined;
+        // Extract HTTP status code from error message if present
+        const httpStatusMatch = msg.match(/error (\d{3})/i);
+        const httpStatus = httpStatusMatch ? httpStatusMatch[1] : undefined;
+        const errorDetail = [
+          `Workflow ${workflowSummary.id} ("${workflowSummary.name}")`,
+          httpStatus ? `HTTP ${httpStatus}` : undefined,
+          msg,
+          `(${result.workflows_synced} workflows synced before failure)`,
+          stack ? `Stack: ${stack.split('\n').slice(0, 3).join(' | ')}` : undefined,
+        ].filter(Boolean).join(' — ');
+        result.errors.push(errorDetail);
+        result.failed_workflow_ids.push(workflowSummary.id);
       }
     }
 
@@ -640,12 +724,22 @@ export async function extractAndSyncWorkflows(): Promise<SyncResult> {
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    result.errors.push(`Fatal: ${msg}`);
+    const stack = err instanceof Error ? err.stack : undefined;
+    const httpStatusMatch = msg.match(/error (\d{3})/i);
+    const httpStatus = httpStatusMatch ? httpStatusMatch[1] : undefined;
+    const fatalDetail = [
+      'Fatal sync error',
+      httpStatus ? `HTTP ${httpStatus}` : undefined,
+      msg,
+      `(${result.workflows_synced}/${result.workflows_total} workflows synced before failure)`,
+      stack ? `Stack: ${stack.split('\n').slice(0, 5).join(' | ')}` : undefined,
+    ].filter(Boolean).join(' — ');
+    result.errors.push(fatalDetail);
 
     if (syncLog) {
       await supabase.from('sync_log').update({
         status: 'failed',
-        error_message: msg,
+        error_message: fatalDetail,
         completed_at: nowET(),
       }).eq('id', syncLog.id);
     }
