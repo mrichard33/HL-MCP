@@ -5,16 +5,16 @@ import { nowET } from '../utils/timezone.js';
 
 export const pipelineTools = {
   list_pipelines: {
-    description: 'List all pipelines and their stages from GoHighLevel.',
+    description: 'List all pipelines and their stages. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
     inputSchema: z.object({
-      useCache: z.boolean().optional().default(false).describe('Read from Supabase cache'),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { useCache?: boolean }) => {
-      if (args.useCache) {
+    handler: async (args: { forceLive?: boolean }) => {
+      if (!args.forceLive) {
         const supabase = getSupabaseClient();
         const { data, error } = await supabase.from('pipelines').select('*').is('deleted_at', null);
         if (error) throw new Error(`Supabase error: ${error.message}`);
-        return { pipelines: data, source: 'cache' };
+        return { pipelines: data, source: 'supabase' };
       }
       const ghl = new GHLClient();
       const pipelines = await ghl.getPipelines();
@@ -23,16 +23,16 @@ export const pipelineTools = {
   },
 
   get_opportunities: {
-    description: 'Get opportunities (deals) from a pipeline, optionally filtered by stage or status.',
+    description: 'Get opportunities (deals) from a pipeline, optionally filtered by stage or status. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
     inputSchema: z.object({
       pipelineId: z.string().optional().describe('Filter by pipeline ID'),
       stageId: z.string().optional().describe('Filter by stage ID'),
       status: z.enum(['open', 'won', 'lost', 'abandoned']).optional(),
       limit: z.number().optional().default(20),
-      useCache: z.boolean().optional().default(false),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { pipelineId?: string; stageId?: string; status?: string; limit?: number; useCache?: boolean }) => {
-      if (args.useCache) {
+    handler: async (args: { pipelineId?: string; stageId?: string; status?: string; limit?: number; forceLive?: boolean }) => {
+      if (!args.forceLive) {
         const supabase = getSupabaseClient();
         let qb = supabase.from('opportunities').select('*').is('deleted_at', null).limit(args.limit || 20);
         if (args.pipelineId) qb = qb.eq('ghl_pipeline_id', args.pipelineId);
@@ -40,7 +40,7 @@ export const pipelineTools = {
         if (args.status) qb = qb.eq('status', args.status);
         const { data, error } = await qb;
         if (error) throw new Error(`Supabase error: ${error.message}`);
-        return { opportunities: data, source: 'cache' };
+        return { opportunities: data, source: 'supabase' };
       }
       const ghl = new GHLClient();
       const result = await ghl.getOpportunities({
