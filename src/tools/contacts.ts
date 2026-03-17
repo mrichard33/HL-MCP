@@ -5,14 +5,14 @@ import { nowET } from '../utils/timezone.js';
 
 export const contactTools = {
   search_contacts: {
-    description: 'Search for contacts in GoHighLevel. Optionally searches Supabase cache.',
+    description: 'Search for contacts. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
     inputSchema: z.object({
       query: z.string().optional().describe('Search query (name, email, phone)'),
       limit: z.number().optional().default(20).describe('Max results to return'),
-      useCache: z.boolean().optional().default(false).describe('Search Supabase cache instead of GHL API'),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { query?: string; limit?: number; useCache?: boolean }) => {
-      if (args.useCache) {
+    handler: async (args: { query?: string; limit?: number; forceLive?: boolean }) => {
+      if (!args.forceLive) {
         const supabase = getSupabaseClient();
         let qb = supabase.from('contacts').select('*').is('deleted_at', null).limit(args.limit || 20);
         if (args.query) {
@@ -22,7 +22,7 @@ export const contactTools = {
         }
         const { data, error } = await qb;
         if (error) throw new Error(`Supabase error: ${error.message}`);
-        return { contacts: data, source: 'cache' };
+        return { contacts: data, source: 'supabase' };
       }
       const ghl = new GHLClient();
       const result = await ghl.getContacts({ query: args.query, limit: args.limit });
@@ -31,13 +31,28 @@ export const contactTools = {
   },
 
   get_contact: {
-    description: 'Get a single contact by GHL contact ID.',
+    description: 'Get a single contact by ID. Checks Supabase first (primary source), falls back to GHL API if not found. Set forceLive=true to skip Supabase.',
     inputSchema: z.object({
       contactId: z.string().describe('GoHighLevel contact ID'),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { contactId: string }) => {
+    handler: async (args: { contactId: string; forceLive?: boolean }) => {
+      if (!args.forceLive) {
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase
+          .from('contacts')
+          .select('*')
+          .eq('ghl_contact_id', args.contactId)
+          .is('deleted_at', null)
+          .single();
+        if (!error && data) {
+          return { contact: data, source: 'supabase' };
+        }
+        // Not found in Supabase — fall back to GHL API
+      }
       const ghl = new GHLClient();
-      return ghl.getContact(args.contactId);
+      const contact = await ghl.getContact(args.contactId);
+      return { contact, source: 'ghl_api' };
     },
   },
 

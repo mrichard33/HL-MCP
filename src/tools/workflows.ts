@@ -13,16 +13,16 @@ import {
 
 export const workflowTools = {
   list_workflows: {
-    description: 'List all workflows from GoHighLevel.',
+    description: 'List all workflows. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
     inputSchema: z.object({
-      useCache: z.boolean().optional().default(false).describe('Read from Supabase cache'),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { useCache?: boolean }) => {
-      if (args.useCache) {
+    handler: async (args: { forceLive?: boolean }) => {
+      if (!args.forceLive) {
         const supabase = getSupabaseClient();
         const { data, error } = await supabase.from('workflows').select('*').is('deleted_at', null);
         if (error) throw new Error(`Supabase error: ${error.message}`);
-        return { workflows: data, source: 'cache' };
+        return { workflows: data, source: 'supabase' };
       }
       const ghl = new GHLClient();
       const workflows = await ghl.getWorkflows();

@@ -46,23 +46,23 @@ async function persistMessages(
 
 export const conversationTools = {
   list_conversations: {
-    description: 'List conversations from GoHighLevel, optionally filtered by contact. Uses OAuth tokens automatically when configured. Use useCache=true to query synced data from Supabase.',
+    description: 'List conversations, optionally filtered by contact. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly (requires contactId for live API).',
     inputSchema: z.object({
       contactId: z.string().optional().describe('Filter by contact ID'),
       limit: z.number().optional().default(20),
-      useCache: z.boolean().optional().default(false),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { contactId?: string; limit?: number; useCache?: boolean }) => {
-      if (args.useCache) {
+    handler: async (args: { contactId?: string; limit?: number; forceLive?: boolean }) => {
+      if (!args.forceLive) {
         const supabase = getSupabaseClient();
         let qb = supabase.from('conversations').select('*').is('deleted_at', null).limit(args.limit || 20);
         if (args.contactId) qb = qb.eq('ghl_contact_id', args.contactId);
         const { data, error } = await qb;
         if (error) throw new Error(`Supabase error: ${error.message}`);
-        return { conversations: data, source: 'cache' };
+        return { conversations: data, source: 'supabase' };
       }
       if (!args.contactId) {
-        throw new Error('contactId is required for live GHL API calls — the conversations/search endpoint requires it. Use useCache=true to query from Supabase without a contactId.');
+        throw new Error('contactId is required for live GHL API calls — the conversations/search endpoint requires it.');
       }
       const ghl = new GHLClient();
       const result = await ghl.getConversations({ contactId: args.contactId, limit: args.limit });
@@ -71,24 +71,39 @@ export const conversationTools = {
   },
 
   get_conversation: {
-    description: 'Get a single conversation by ID.',
+    description: 'Get a single conversation by ID. Checks Supabase first (primary source), falls back to GHL API if not found. Set forceLive=true to skip Supabase.',
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { conversationId: string }) => {
+    handler: async (args: { conversationId: string; forceLive?: boolean }) => {
+      if (!args.forceLive) {
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase
+          .from('conversations')
+          .select('*')
+          .eq('ghl_conversation_id', args.conversationId)
+          .is('deleted_at', null)
+          .single();
+        if (!error && data) {
+          return { conversation: data, source: 'supabase' };
+        }
+        // Not found in Supabase — fall back to GHL API
+      }
       const ghl = new GHLClient();
-      return ghl.getConversation(args.conversationId);
+      const conversation = await ghl.getConversation(args.conversationId);
+      return { conversation, source: 'ghl_api' };
     },
   },
 
   get_messages: {
-    description: 'Get messages in a conversation. Fetches from the live GHL API and persists to Supabase. Use useCache=true to query from Supabase instead.',
+    description: 'Get messages in a conversation. Queries Supabase by default (primary source). Set forceLive=true to fetch from the GHL API (also persists fetched messages to Supabase).',
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
-      useCache: z.boolean().optional().default(false).describe('Query from Supabase cache instead of live API'),
+      forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and fetch from GHL API directly'),
     }),
-    handler: async (args: { conversationId: string; useCache?: boolean }) => {
-      if (args.useCache) {
+    handler: async (args: { conversationId: string; forceLive?: boolean }) => {
+      if (!args.forceLive) {
         const supabase = getSupabaseClient();
         const { data, error } = await supabase
           .from('messages')
@@ -97,7 +112,7 @@ export const conversationTools = {
           .is('deleted_at', null)
           .order('sent_at', { ascending: true });
         if (error) throw new Error(`Supabase error: ${error.message}`);
-        return { messages: data, source: 'cache' };
+        return { messages: data, source: 'supabase' };
       }
 
       const ghl = new GHLClient();
