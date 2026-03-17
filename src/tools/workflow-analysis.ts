@@ -16,8 +16,8 @@ import {
 } from '../analysis/graph.js';
 
 /**
- * Recursively traverses a templates array to extract all nodes including
- * those inside IF/ELSE branches. Follows `next` pointers and branch paths.
+ * Iteratively traverses a templates array to extract all nodes including
+ * those inside IF/ELSE branches. Uses a queue to avoid stack overflow.
  */
 function traverseTemplatesDeep(
   templates: Record<string, unknown>[],
@@ -30,54 +30,51 @@ function traverseTemplatesDeep(
 
   const visited = new Set<string>();
   const result: Record<string, unknown>[] = [];
+  const queue: string[] = [];
 
-  function visit(id: string) {
-    if (!id || visited.has(id)) return;
+  for (const tmpl of templates) {
+    const id = (tmpl.id || tmpl._id) as string;
+    if (id) queue.push(id);
+  }
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (!id || visited.has(id)) continue;
     visited.add(id);
     const tmpl = templateMap.get(id);
-    if (!tmpl) return;
+    if (!tmpl) continue;
     result.push(tmpl);
 
-    // Follow sequential next pointer
     const next = tmpl.next;
     if (typeof next === 'string' && next) {
-      visit(next);
+      queue.push(next);
     } else if (Array.isArray(next)) {
-      // IF/ELSE branches — follow all branch targets
       for (const branchTarget of next) {
         if (typeof branchTarget === 'string' && branchTarget) {
-          visit(branchTarget);
+          queue.push(branchTarget);
         }
       }
     }
 
-    // Check attributes for branch children
     const attrs = (tmpl.attributes || {}) as Record<string, unknown>;
     if (Array.isArray(attrs.branches)) {
       for (const branch of attrs.branches) {
         const b = branch as Record<string, unknown>;
-        if (typeof b.nextStep === 'string') visit(b.nextStep);
-        if (typeof b.target === 'string') visit(b.target);
-        if (typeof b.id === 'string') visit(b.id);
+        if (typeof b.nextStep === 'string') queue.push(b.nextStep);
+        if (typeof b.target === 'string') queue.push(b.target);
+        if (typeof b.id === 'string') queue.push(b.id);
       }
     }
 
-    // Check data for branch children
     const data = (tmpl.data || {}) as Record<string, unknown>;
     if (Array.isArray(data.branches)) {
       for (const branch of data.branches) {
         const b = branch as Record<string, unknown>;
-        if (typeof b.nextStep === 'string') visit(b.nextStep);
-        if (typeof b.target === 'string') visit(b.target);
-        if (typeof b.id === 'string') visit(b.id);
+        if (typeof b.nextStep === 'string') queue.push(b.nextStep);
+        if (typeof b.target === 'string') queue.push(b.target);
+        if (typeof b.id === 'string') queue.push(b.id);
       }
     }
-  }
-
-  // Start traversal from all templates to catch any entry points
-  for (const tmpl of templates) {
-    const id = (tmpl.id || tmpl._id) as string;
-    if (id) visit(id);
   }
 
   return result;
@@ -101,7 +98,7 @@ export const workflowAnalysisTools = {
   },
 
   get_workflow_steps: {
-    description: 'Get all steps for a specific workflow, ordered by step sequence. Includes nodes inside IF/ELSE branches. Set includeFullTemplates=true to also return the raw workflowData.templates structure for complete branch analysis. Set forceLive=true to fetch directly from the HighLevel API instead of Supabase cache.',
+    description: 'Get all steps for a workflow including IF/ELSE branch nodes. Set forceLive=true for live GHL API. Set includeFullTemplates=true for raw templates.',
     inputSchema: z.object({
       workflowId: z.string().describe('The workflow ID to get steps for'),
       includeFullTemplates: z.boolean().optional().default(false).describe('Include the full workflowData.templates array with all branch nodes'),
@@ -297,7 +294,7 @@ export const workflowAnalysisTools = {
   },
 
   sync_workflow_intelligence: {
-    description: '[HighLevel MCP — Workflow & Automation] Run a full workflow extraction and sync from GoHighLevel to Supabase. Populates workflow steps, triggers, actions, connections, and snapshots for analysis.',
+    description: 'Full workflow extraction and sync from GHL to Supabase. Populates steps, triggers, actions, connections, snapshots.',
     inputSchema: z.object({}),
     handler: async () => {
       const result = await extractAndSyncWorkflows();
@@ -311,7 +308,7 @@ export const workflowAnalysisTools = {
   },
 
   get_workflow_diff: {
-    description: 'Compare workflow versions to detect what changed. Returns added, removed, and modified nodes, changed template IDs, and trigger configuration changes. Uses workflow snapshots stored during sync.',
+    description: 'Compare workflow versions to detect changes: added/removed/modified nodes, changed templates, trigger changes.',
     inputSchema: z.object({
       workflowId: z.string().describe('The workflow ID to compare versions for'),
       sinceVersion: z.number().optional().describe('Compare current version against this specific version number'),

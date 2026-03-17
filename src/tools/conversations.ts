@@ -46,7 +46,7 @@ async function persistMessages(
 
 export const conversationTools = {
   list_conversations: {
-    description: '[HighLevel MCP — CRM] List conversations, optionally filtered by contact. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly (requires contactId for live API). Note: For adding notes or direct CRM messaging, use the dedicated CRM MCP server tools instead.',
+    description: 'List conversations, optionally filtered by contact. Queries Supabase by default. Set forceLive=true for live GHL API (requires contactId).',
     inputSchema: z.object({
       contactId: z.string().optional().describe('Filter by contact ID'),
       limit: z.number().optional().default(20),
@@ -129,7 +129,7 @@ export const conversationTools = {
   },
 
   send_message: {
-    description: '[HighLevel MCP — CRM] Send a message in a conversation via GoHighLevel.',
+    description: 'Send a message in a conversation via GoHighLevel.',
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
       contactId: z.string().describe('GHL contact ID'),

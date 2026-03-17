@@ -13,7 +13,7 @@ import {
 
 export const workflowTools = {
   list_workflows: {
-    description: '[HighLevel MCP — Workflow & Automation] List all workflows. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
+    description: 'List all workflows. Queries Supabase by default. Set forceLive=true for live GHL API.',
     inputSchema: z.object({
       forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
@@ -31,7 +31,7 @@ export const workflowTools = {
   },
 
   sync_workflows: {
-    description: '[HighLevel MCP — Workflow & Automation] Full sync of workflows from GoHighLevel to Supabase — fetches complete workflow JSON with all steps, triggers, actions, and connections. Use batchSize to limit concurrent processing and prevent API failures.',
+    description: 'Full sync of workflows from GHL to Supabase with steps, triggers, actions, connections. Use batchSize to prevent API rate limiting.',
     inputSchema: z.object({
       batchSize: z.number().optional().default(0).describe('Number of workflows to process per batch (0 = all at once). Use 5-10 for large accounts to prevent API rate limiting.'),
     }),
@@ -152,7 +152,7 @@ export const workflowTools = {
   },
 
   inspect_workflow_raw_json: {
-    description: '[HighLevel MCP — Workflow & Automation] Inspect the raw JSON structure of a workflow. By default reads from Supabase cache. Set useCache=false to fetch live data directly from the HighLevel API (bypasses stale cache).',
+    description: 'Inspect raw JSON of a workflow. Reads from Supabase cache by default. Set useCache=false to fetch live from GHL API.',
     inputSchema: z.object({
       workflowId: z.string().describe('GHL workflow ID'),
       useCache: z.boolean().optional().default(true).describe('If true (default), read from Supabase cache. If false, fetch live data from HighLevel API and optionally update cache.'),
@@ -240,7 +240,7 @@ export const workflowTools = {
   },
 
   refresh_workflow: {
-    description: '[HighLevel MCP — Workflow & Automation] Refresh a single workflow by fetching live data from the HighLevel API and updating the Supabase cache. Use this instead of running a full sync when you need fresh data for one workflow.',
+    description: 'Refresh a single workflow from the GHL API and update the Supabase cache. Faster than a full sync.',
     inputSchema: z.object({
       workflowId: z.string().describe('GHL workflow ID to refresh'),
     }),
@@ -296,7 +296,7 @@ export const workflowTools = {
   },
 
   sync_all_entities: {
-    description: '[HighLevel MCP — Sync] Run a full sync of all entities (contacts, opportunities, appointments, pipelines, conversations, messages) from GoHighLevel to Supabase.',
+    description: 'Full sync of all entities (contacts, opportunities, appointments, pipelines, conversations, messages) from GHL to Supabase.',
     inputSchema: z.object({}),
     handler: async () => {
       const results: Record<string, unknown> = {};
@@ -345,7 +345,7 @@ export const workflowTools = {
   },
 
   get_email_template: {
-    description: '[HighLevel MCP — Email Templates] Fetch the full content of an email template from HighLevel by its template ID. Returns HTML body, subject, preview text, sender info, and timestamps. Use this to verify email content referenced in workflows.',
+    description: 'Fetch email template content by ID. Returns HTML body, subject, preview text, sender info.',
     inputSchema: z.object({
       templateId: z.string().describe('The email template ID (found in workflow step template_id fields)'),
     }),
@@ -369,7 +369,7 @@ export const workflowTools = {
   },
 
   list_email_templates: {
-    description: '[HighLevel MCP — Email Templates] List all email templates available in the HighLevel location. Returns template IDs, names, subjects, and timestamps for quick reference.',
+    description: 'List all email templates. Returns template IDs, names, subjects, and timestamps.',
     inputSchema: z.object({
       limit: z.number().optional().default(50).describe('Maximum number of templates to return (default: 50)'),
       offset: z.number().optional().default(0).describe('Offset for pagination (default: 0)'),
