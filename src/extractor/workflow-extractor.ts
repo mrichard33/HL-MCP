@@ -153,8 +153,9 @@ function extractActionTargetFromAttrs(actionType: string, attrs: Record<string, 
 }
 
 /**
- * Recursively traverses templates to find all nodes including those inside
+ * Iteratively traverses templates to find all nodes including those inside
  * IF/ELSE branches, following next pointers and branch paths.
+ * Uses a queue instead of recursion to avoid stack overflow on deep chains.
  */
 function collectAllTemplateNodes(templates: Record<string, unknown>[]): Record<string, unknown>[] {
   const templateMap = new Map<string, Record<string, unknown>>();
@@ -166,20 +167,28 @@ function collectAllTemplateNodes(templates: Record<string, unknown>[]): Record<s
   const visited = new Set<string>();
   const result: Record<string, unknown>[] = [];
 
-  function visit(id: string) {
-    if (!id || visited.has(id)) return;
+  // Seed queue with all template IDs
+  const queue: string[] = [];
+  for (const tmpl of templates) {
+    const id = (tmpl.id || tmpl._id) as string;
+    if (id) queue.push(id);
+  }
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (!id || visited.has(id)) continue;
     visited.add(id);
     const tmpl = templateMap.get(id);
-    if (!tmpl) return;
+    if (!tmpl) continue;
     result.push(tmpl);
 
     const next = tmpl.next;
     if (typeof next === 'string' && next) {
-      visit(next);
+      queue.push(next);
     } else if (Array.isArray(next)) {
       for (const branchTarget of next) {
         if (typeof branchTarget === 'string' && branchTarget) {
-          visit(branchTarget);
+          queue.push(branchTarget);
         }
       }
     }
@@ -188,16 +197,11 @@ function collectAllTemplateNodes(templates: Record<string, unknown>[]): Record<s
     if (Array.isArray(attrs.branches)) {
       for (const branch of attrs.branches) {
         const b = branch as Record<string, unknown>;
-        if (typeof b.nextStep === 'string') visit(b.nextStep);
-        if (typeof b.target === 'string') visit(b.target);
-        if (typeof b.id === 'string') visit(b.id);
+        if (typeof b.nextStep === 'string') queue.push(b.nextStep);
+        if (typeof b.target === 'string') queue.push(b.target);
+        if (typeof b.id === 'string') queue.push(b.id);
       }
     }
-  }
-
-  for (const tmpl of templates) {
-    const id = (tmpl.id || tmpl._id) as string;
-    if (id) visit(id);
   }
 
   return result;

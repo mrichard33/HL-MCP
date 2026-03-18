@@ -5,7 +5,7 @@ import { nowET } from '../utils/timezone.js';
 
 export const contactTools = {
   search_contacts: {
-    description: '[HighLevel MCP — CRM] Search for contacts. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly. Note: For CRM messaging operations (notes, direct messages), use the dedicated CRM MCP server tools instead.',
+    description: 'Search for contacts. Queries Supabase by default. Set forceLive=true for live GHL API.',
     inputSchema: z.object({
       query: z.string().optional().describe('Search query (name, email, phone)'),
       limit: z.number().optional().default(20).describe('Max results to return'),
@@ -31,7 +31,7 @@ export const contactTools = {
   },
 
   get_contact: {
-    description: '[HighLevel MCP — CRM] Get a single contact by ID. Checks Supabase first (primary source), falls back to GHL API if not found. Set forceLive=true to skip Supabase.',
+    description: 'Get a single contact by ID. Checks Supabase first, falls back to GHL API. Set forceLive=true to skip cache.',
     inputSchema: z.object({
       contactId: z.string().describe('GoHighLevel contact ID'),
       forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
