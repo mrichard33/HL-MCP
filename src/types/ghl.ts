@@ -224,3 +224,20 @@ export interface GHLLink {
   locationId?: string;
   [key: string]: unknown;
 }
+
+/**
+ * Template from GET /locations/:locationId/templates
+ * Covers email, SMS, and WhatsApp templates.
+ */
+export interface GHLTemplate {
+  id: string;
+  name: string;
+  type: 'sms' | 'email' | 'whatsapp';
+  body?: string;
+  subject?: string;
+  attachments?: unknown[];
+  locationId?: string;
+  dateAdded?: string;
+  dateUpdated?: string;
+  [key: string]: unknown;
+}
