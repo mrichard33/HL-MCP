@@ -3,6 +3,7 @@ import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
 import { normalizeDirection } from '../utils/normalize.js';
+import { syncConversationsAndMessages } from '../extractor/entity-syncer.js';
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
 function toISODate(value: string | number | null | undefined): string | null {
@@ -143,15 +144,25 @@ export const conversationTools = {
   },
 
   sync_conversations: {
-    description: 'Sync conversations and their messages from GoHighLevel to Supabase cache.',
+    description: 'Sync conversations and their messages from GoHighLevel to Supabase cache. If no contactId is provided, runs a bulk sync across all contacts (backfill mode for unsynced contacts, then incremental round-robin for already-synced ones).',
     inputSchema: z.object({
-      contactId: z.string().optional(),
+      contactId: z.string().optional().describe('Optional: sync a specific contact. If omitted, runs bulk sync across all contacts.'),
       limit: z.number().optional().default(50),
     }),
     handler: async (args: { contactId?: string; limit?: number }) => {
+      // If no contactId, run the full bulk sync from entity-syncer
       if (!args.contactId) {
-        throw new Error('contactId is required — the GHL conversations/search endpoint requires it.');
+        const result = await syncConversationsAndMessages();
+        return {
+          synced_conversations: result.synced_conversations,
+          synced_messages: result.synced_messages,
+          errors: result.errors.length > 0 ? result.errors.slice(0, 20) : 'none',
+          status: 'completed',
+          mode: 'bulk',
+        };
       }
+
+      // Single-contact sync
       const ghl = new GHLClient();
       const supabase = getSupabaseClient();
       const now = nowET();
@@ -174,7 +185,7 @@ export const conversationTools = {
       let totalMessages = 0;
       for (const conv of conversations) {
         try {
-          const messageList = await ghl.getAllMessages(conv.id, 5);
+          const messageList = await ghl.getAllMessages(conv.id);
           const persisted = await persistMessages(
             messageList as unknown as Record<string, unknown>[],
             conv.id,
@@ -185,7 +196,7 @@ export const conversationTools = {
         }
       }
 
-      return { synced_conversations: rows.length, synced_messages: totalMessages, status: 'completed' };
+      return { synced_conversations: rows.length, synced_messages: totalMessages, status: 'completed', mode: 'single_contact' };
     },
   },
 };

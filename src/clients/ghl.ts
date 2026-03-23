@@ -542,8 +542,11 @@ export class GHLClient {
   /**
    * Fetch ALL messages for a conversation using pagination.
    * GHL API returns: { messages: { lastMessageId, nextPage, messages: [...] }, traceId }
+   *
+   * Default maxPages increased to 20 to capture full conversation histories.
+   * At ~20 messages per page, this handles conversations up to ~400 messages.
    */
-  async getAllMessages(conversationId: string, maxPages = 5): Promise<GHLMessage[]> {
+  async getAllMessages(conversationId: string, maxPages = 20): Promise<GHLMessage[]> {
     const all: GHLMessage[] = [];
     let lastMessageId: string | undefined;
 
