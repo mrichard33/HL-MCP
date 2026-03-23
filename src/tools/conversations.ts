@@ -15,17 +15,28 @@ function toISODate(value: string | number | null | undefined): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** Upsert an array of raw GHL messages into the Supabase messages table. */
+/**
+ * Upsert an array of raw GHL messages into the Supabase messages table.
+ * Filters out system activity events (opportunity created, chat ended, etc.)
+ * that GHL injects into the conversation timeline — those are NOT real messages.
+ */
 async function persistMessages(
   messages: Record<string, unknown>[],
   conversationId: string,
-): Promise<number> {
-  if (!messages.length) return 0;
+): Promise<{ persisted: number; skipped: number }> {
+  if (!messages.length) return { persisted: 0, skipped: 0 };
   const supabase = getSupabaseClient();
   const now = nowET();
-  let count = 0;
+  let persisted = 0;
+  let skipped = 0;
 
   for (const msg of messages) {
+    // Skip system activity events — not real messages
+    if (!isRealMessage(msg)) {
+      skipped++;
+      continue;
+    }
+
     const { error } = await supabase.from('messages').upsert(
       {
         ghl_message_id: msg.id as string,
@@ -39,10 +50,10 @@ async function persistMessages(
       },
       { onConflict: 'ghl_message_id' },
     );
-    if (!error) count++;
+    if (!error) persisted++;
   }
 
-  return count;
+  return { persisted, skipped };
 }
 
 export const conversationTools = {
@@ -89,7 +100,6 @@ export const conversationTools = {
         if (!error && data) {
           return { conversation: data, source: 'supabase' };
         }
-        // Not found in Supabase — fall back to GHL API
       }
       const ghl = new GHLClient();
       const conversation = await ghl.getConversation(args.conversationId);
@@ -119,13 +129,13 @@ export const conversationTools = {
       const ghl = new GHLClient();
       const raw = await ghl.getAllMessages(args.conversationId);
 
-      // Persist fetched messages to Supabase
-      const persisted = await persistMessages(
+      // Persist real messages only (filters out system activity events)
+      const { persisted, skipped } = await persistMessages(
         raw as unknown as Record<string, unknown>[],
         args.conversationId,
       );
 
-      return { messages: raw, persisted, source: 'ghl_api' };
+      return { messages: raw, persisted, skipped_activity_events: skipped, source: 'ghl_api' };
     },
   },
 
@@ -181,8 +191,8 @@ export const conversationTools = {
       const { error } = await supabase.from('conversations').upsert(rows, { onConflict: 'ghl_conversation_id' });
       if (error) throw new Error(`Supabase error: ${error.message}`);
 
-      // Also fetch and persist messages for each synced conversation
       let totalMessages = 0;
+      let totalSkipped = 0;
       for (const conv of conversations) {
         try {
           const messageList = await ghl.getAllMessages(conv.id);
@@ -191,6 +201,7 @@ export const conversationTools = {
             conv.id,
           );
           totalMessages += persisted;
+          totalSkipped += skipped;
         } catch (err) {
           console.error(`[sync_conversations] Failed to sync messages for conv ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
         }
