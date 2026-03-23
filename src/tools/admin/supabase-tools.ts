@@ -60,17 +60,25 @@ export const supabaseAdminTools = {
       const supabase = getSupabaseClient();
       const results: Record<string, unknown> = {};
 
+      // Helper to safely extract error messages from Supabase errors
+      const errMsg = (err: unknown): string => {
+        if (err instanceof Error) return err.message;
+        if (err && typeof err === 'object' && 'message' in err) return String((err as { message: unknown }).message);
+        return String(err);
+      };
+
       // Last sync times from sync_state
+      // Column is entity_name (not entity_type) — verified against live schema
       try {
         const { data: syncState, error } = await supabase
           .from('sync_state')
-          .select('entity_type, last_synced_at')
+          .select('entity_name, last_synced_at, updated_at')
           .order('last_synced_at', { ascending: false });
         if (error) throw error;
         results.sync_state = syncState;
       } catch (err) {
         results.sync_state = {
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
           suggestion: 'Run supabase_list_tables to discover available tables.',
         };
       }
@@ -86,7 +94,7 @@ export const supabaseAdminTools = {
         results.recent_syncs = recentSyncs;
       } catch (err) {
         results.recent_syncs = {
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
           suggestion: 'Run supabase_list_tables to discover available tables.',
         };
       }
@@ -109,7 +117,7 @@ export const supabaseAdminTools = {
         };
       } catch (err) {
         results.failure_rate_24h = {
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         };
       }
 
@@ -134,7 +142,7 @@ export const supabaseAdminTools = {
         results.cache_counts = cacheCounts;
       } catch (err) {
         results.cache_counts = {
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         };
       }
 
