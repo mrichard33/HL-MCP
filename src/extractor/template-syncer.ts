@@ -29,15 +29,19 @@ async function fetchAllLocationTemplates(): Promise<GHLTemplate[]> {
   }
 
   const all: GHLTemplate[] = [];
-  const PAGE_SIZE = 100;
+  const PAGE_SIZE = 25; // GHL default is 25 — match it
   let skip = 0;
   let totalCount = Infinity;
+  let pageNum = 0;
 
   while (skip < totalCount) {
+    pageNum++;
     const url = new URL(`/locations/${locationId}/templates`, baseUrl);
     url.searchParams.set('originId', locationId);
     url.searchParams.set('limit', String(PAGE_SIZE));
     url.searchParams.set('skip', String(skip));
+
+    console.log(`[TemplateSync] Fetching page ${pageNum}: ${url.toString()}`);
 
     const response = await fetch(url.toString(), {
       method: 'GET',
@@ -49,27 +53,63 @@ async function fetchAllLocationTemplates(): Promise<GHLTemplate[]> {
       },
     });
 
+    const statusCode = response.status;
+    const rawBody = await response.text();
+
+    // Debug: log raw response for diagnosis
+    console.log(`[TemplateSync] Response status: ${statusCode}`);
+    console.log(`[TemplateSync] Response body (first 2000 chars): ${rawBody.substring(0, 2000)}`);
+
     if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`GHL Templates API ${response.status}: ${errorBody}`);
+      throw new Error(`GHL Templates API ${statusCode}: ${rawBody}`);
     }
 
-    const data = await response.json() as { templates: GHLTemplate[]; totalCount: number };
-    const templates = data.templates || [];
-    totalCount = data.totalCount || 0;
+    // Parse response — handle different possible shapes
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch {
+      throw new Error(`GHL Templates API returned invalid JSON: ${rawBody.substring(0, 500)}`);
+    }
+
+    // Log all top-level keys so we can see the actual response structure
+    console.log(`[TemplateSync] Response keys: ${Object.keys(parsed).join(', ')}`);
+
+    // Try multiple possible response shapes
+    let templates: GHLTemplate[] = [];
+    if (Array.isArray(parsed.templates)) {
+      templates = parsed.templates;
+    } else if (Array.isArray(parsed.data)) {
+      templates = parsed.data as GHLTemplate[];
+    } else if (Array.isArray(parsed)) {
+      templates = parsed as unknown as GHLTemplate[];
+    }
+
+    // Try multiple possible totalCount field names
+    if (totalCount === Infinity) {
+      totalCount = (
+        (parsed.totalCount as number) ||
+        (parsed.total as number) ||
+        (parsed.count as number) ||
+        0
+      );
+    }
+
+    console.log(`[TemplateSync] Page ${pageNum}: ${templates.length} templates, totalCount: ${totalCount}`);
 
     all.push(...templates);
-    skip += templates.length;
+    skip += PAGE_SIZE; // Always increment by PAGE_SIZE, not templates.length (to handle empty pages correctly)
 
-    // Safety: if API returns empty page, stop
-    if (templates.length === 0) break;
+    // Safety: stop after empty page or max pages
+    if (templates.length === 0 || pageNum > 50) break;
 
-    // Rate limit courtesy: small delay between pages
+    // Rate limit courtesy
     if (skip < totalCount) {
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 
+  console.log(`[TemplateSync] Total fetched: ${all.length} templates across ${pageNum} page(s)`);
   return all;
 }
 
@@ -117,7 +157,7 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
 
   try {
     const templates = await fetchAllLocationTemplates();
-    console.log(`[TemplateSync] Fetched ${templates.length} templates from GHL`);
+    console.log(`[TemplateSync] Processing ${templates.length} templates for upsert`);
 
     for (const t of templates) {
       try {
@@ -145,8 +185,10 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
     }
 
     // Soft-delete templates no longer in GHL
-    const activeIds = templates.map(t => t.id);
-    await softDeleteMissing('templates', 'ghl_template_id', activeIds, locationId);
+    if (templates.length > 0) {
+      const activeIds = templates.map(t => t.id);
+      await softDeleteMissing('templates', 'ghl_template_id', activeIds, locationId);
+    }
 
     await updateLastSynced('templates');
     await logSyncComplete(syncLogId, synced);
@@ -156,7 +198,7 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
     await logSyncFailed(syncLogId, msg);
-    console.error(`[TemplateSync] Template sync failed: ${msg}`);
+    console.error(`[TemplateSync] Template sync FAILED: ${msg}`);
     return { synced: 0, errors };
   }
 }
