@@ -44,7 +44,6 @@ export async function runSQL(queryText: string): Promise<unknown> {
 }
 
 export async function listTables(prefix?: string): Promise<unknown> {
-  // pg_stat_user_tables uses 'relname' (not 'tablename' — that's pg_tables)
   let innerQuery = `
     SELECT
       relname AS table_name,
@@ -57,14 +56,12 @@ export async function listTables(prefix?: string): Promise<unknown> {
   }
   innerQuery += ' ORDER BY relname';
 
-  // Wrap in json_agg so run_sql returns a single JSON array
   const query = `SELECT json_agg(t) FROM (${innerQuery}) t`;
   const result = await runSQL(query);
   return { tables: result };
 }
 
 export async function getTableSchema(tableName: string): Promise<unknown> {
-  // Validate table name to prevent SQL injection
   if (!/^[a-z_][a-z0-9_]*$/i.test(tableName)) {
     throw new Error('Invalid table name — must be alphanumeric with underscores only');
   }
@@ -90,7 +87,6 @@ export async function getTableSchema(tableName: string): Promise<unknown> {
     ORDER BY c.ordinal_position
   `;
 
-  // Wrap in json_agg so run_sql returns a single JSON array
   const query = `SELECT json_agg(t) FROM (${innerQuery}) t`;
   const result = await runSQL(query);
   return { table: tableName, columns: result };
