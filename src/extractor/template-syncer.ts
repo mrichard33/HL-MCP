@@ -6,6 +6,8 @@
  *
  * 2. Email Builder: GET /emails/builder
  *    → Designed email templates built in the GHL email builder
+ *    → IMPORTANT: Response key is "builders" not "templates"
+ *    → Do NOT pass originId or status params — they cause empty results
  *
  * Both are synced into the same Supabase `templates` table.
  */
@@ -62,7 +64,7 @@ async function fetchLocationTemplates(): Promise<GHLTemplate[]> {
     console.log(`[TemplateSync] [LocationTemplates] ${res.status}: ${rawBody.substring(0, 1000)}`);
 
     if (!res.ok) {
-      console.error(`[TemplateSync] [LocationTemplates] API error ${res.status}, skipping this source`);
+      console.error(`[TemplateSync] [LocationTemplates] API error ${res.status}, skipping`);
       break;
     }
 
@@ -74,10 +76,8 @@ async function fetchLocationTemplates(): Promise<GHLTemplate[]> {
       : Array.isArray(parsed.data) ? parsed.data as GHLTemplate[] : [];
 
     const total = (parsed.totalCount as number) || (parsed.total as number) || 0;
+    console.log(`[TemplateSync] [LocationTemplates] Page ${pageNum}: ${templates.length} items (total: ${total})`);
 
-    console.log(`[TemplateSync] [LocationTemplates] Page ${pageNum}: ${templates.length} templates (total: ${total})`);
-
-    // Tag each template with source
     for (const t of templates) { t._source = 'location_templates'; }
     all.push(...templates);
 
@@ -91,6 +91,10 @@ async function fetchLocationTemplates(): Promise<GHLTemplate[]> {
 
 // ────────────────────────────────────────────────────────────
 // Source 2: Email Builder  (GET /emails/builder)
+//
+// Response: { builders: [...], total: [{total: N}] }
+// Key is "builders" NOT "templates"
+// Do NOT pass originId or status — they cause empty results
 // ────────────────────────────────────────────────────────────
 
 async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
@@ -99,16 +103,16 @@ async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
   const PAGE_SIZE = 25;
   let offset = 0;
   let pageNum = 0;
-  let keepGoing = true;
+  let totalKnown = Infinity;
 
-  while (keepGoing) {
+  while (offset < totalKnown) {
     pageNum++;
+
+    // Only pass locationId + limit + offset — no originId, no status
     const url = new URL('/emails/builder', baseUrl);
     url.searchParams.set('locationId', locationId);
     url.searchParams.set('limit', String(PAGE_SIZE));
     url.searchParams.set('offset', String(offset));
-    url.searchParams.set('originId', locationId);
-    url.searchParams.set('status', 'published');
 
     console.log(`[TemplateSync] [EmailBuilder] Page ${pageNum}: ${url.toString()}`);
 
@@ -118,75 +122,83 @@ async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
     console.log(`[TemplateSync] [EmailBuilder] ${res.status}: ${rawBody.substring(0, 2000)}`);
 
     if (!res.ok) {
-      console.error(`[TemplateSync] [EmailBuilder] API error ${res.status}, skipping this source`);
+      console.error(`[TemplateSync] [EmailBuilder] API error ${res.status}, skipping`);
       break;
     }
 
     let parsed: Record<string, unknown>;
     try { parsed = JSON.parse(rawBody); } catch { break; }
 
-    // Log all top-level keys to understand the response structure
     const keys = Object.keys(parsed);
     console.log(`[TemplateSync] [EmailBuilder] Response keys: ${keys.join(', ')}`);
-    for (const key of keys) {
-      const val = parsed[key];
-      if (Array.isArray(val)) {
-        console.log(`[TemplateSync] [EmailBuilder]   ${key}: Array[${val.length}]${val.length > 0 ? ` first item keys: ${Object.keys(val[0]).join(',')}` : ''}`);
+
+    // Extract total — GHL returns it as [{total: N}] or a plain number
+    if (totalKnown === Infinity) {
+      const rawTotal = parsed.total || parsed.totalCount;
+      if (typeof rawTotal === 'number') {
+        totalKnown = rawTotal;
+      } else if (Array.isArray(rawTotal) && rawTotal.length > 0 && typeof rawTotal[0] === 'object') {
+        totalKnown = (rawTotal[0] as Record<string, number>).total || 0;
       } else {
-        console.log(`[TemplateSync] [EmailBuilder]   ${key}: ${typeof val} = ${JSON.stringify(val).substring(0, 200)}`);
+        totalKnown = 0;
       }
+      console.log(`[TemplateSync] [EmailBuilder] Total count: ${totalKnown}`);
     }
 
-    // Try all possible array locations in the response
-    let templates: GHLTemplate[] = [];
-    for (const key of keys) {
-      const val = parsed[key];
-      if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null && ('id' in val[0] || '_id' in val[0] || 'name' in val[0])) {
-        console.log(`[TemplateSync] [EmailBuilder] Found template array at key '${key}' with ${val.length} items`);
-        templates = val.map((item: Record<string, unknown>) => ({
-          id: (item.id || item._id) as string,
-          name: (item.name || item.templateName || 'Untitled') as string,
-          type: 'email' as const,
-          subject: (item.subject || null) as string | undefined,
-          body: (item.html || item.body || item.htmlBody || null) as string | undefined,
-          dateAdded: (item.createdAt || item.created_at || item.dateAdded || null) as string | undefined,
-          dateUpdated: (item.updatedAt || item.updated_at || item.dateUpdated || null) as string | undefined,
-          _source: 'email_builder',
-          _raw: item,
-        })) as GHLTemplate[];
+    // Find the template array — check "builders", "templates", "data", or any array with objects
+    let items: Record<string, unknown>[] = [];
+
+    // Check known keys first
+    for (const tryKey of ['builders', 'templates', 'data', 'emailTemplates', 'results']) {
+      const val = parsed[tryKey];
+      if (Array.isArray(val) && val.length > 0) {
+        console.log(`[TemplateSync] [EmailBuilder] Found data at key '${tryKey}': ${val.length} items`);
+        if (val.length > 0 && typeof val[0] === 'object') {
+          console.log(`[TemplateSync] [EmailBuilder] First item keys: ${Object.keys(val[0] as Record<string, unknown>).join(', ')}`);
+        }
+        items = val as Record<string, unknown>[];
         break;
       }
     }
 
-    // Also check if the response IS the array (no wrapping object)
-    if (templates.length === 0 && Array.isArray(parsed)) {
-      templates = (parsed as unknown as Record<string, unknown>[]).map((item) => ({
-        id: (item.id || item._id) as string,
-        name: (item.name || 'Untitled') as string,
-        type: 'email' as const,
-        _source: 'email_builder',
-        _raw: item,
-      })) as GHLTemplate[];
+    // Fallback: scan all keys for any array of objects with id/name
+    if (items.length === 0) {
+      for (const key of keys) {
+        const val = parsed[key];
+        if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
+          const firstKeys = Object.keys(val[0] as Record<string, unknown>);
+          if (firstKeys.includes('id') || firstKeys.includes('_id') || firstKeys.includes('name')) {
+            console.log(`[TemplateSync] [EmailBuilder] Auto-discovered data at key '${key}': ${val.length} items`);
+            items = val as Record<string, unknown>[];
+            break;
+          }
+        }
+      }
     }
+
+    // Map to GHLTemplate format
+    const templates: GHLTemplate[] = items.map((item) => ({
+      id: (item.id || item._id || '') as string,
+      name: (item.name || item.templateName || 'Untitled') as string,
+      type: 'email' as const,
+      subject: (item.subject || null) as string | undefined,
+      body: (item.html || item.body || item.htmlBody || null) as string | undefined,
+      dateAdded: (item.createdAt || item.created_at || item.dateAdded || null) as string | undefined,
+      dateUpdated: (item.updatedAt || item.updated_at || item.dateUpdated || null) as string | undefined,
+      _source: 'email_builder',
+      _raw: item,
+    })) as GHLTemplate[];
+
+    console.log(`[TemplateSync] [EmailBuilder] Page ${pageNum}: ${templates.length} templates mapped`);
 
     all.push(...templates);
     offset += PAGE_SIZE;
 
-    // Determine total from response
-    const rawTotal = parsed.total || parsed.totalCount || parsed.count;
-    let total = 0;
-    if (typeof rawTotal === 'number') {
-      total = rawTotal;
-    } else if (Array.isArray(rawTotal) && rawTotal.length > 0 && typeof rawTotal[0] === 'object') {
-      total = (rawTotal[0] as Record<string, number>).total || 0;
-    }
-
-    console.log(`[TemplateSync] [EmailBuilder] Page ${pageNum}: ${templates.length} templates (total: ${total})`);
-
-    if (templates.length === 0 || offset >= total || pageNum > 50) keepGoing = false;
-    if (keepGoing) await new Promise(r => setTimeout(r, 300));
+    if (templates.length === 0 || pageNum > 50) break;
+    await new Promise(r => setTimeout(r, 500));
   }
 
+  console.log(`[TemplateSync] [EmailBuilder] Total fetched: ${all.length} across ${pageNum} pages`);
   return all;
 }
 
@@ -237,7 +249,6 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
   let synced = 0;
 
   try {
-    // Fetch from BOTH sources
     console.log('[TemplateSync] === Starting dual-source template sync ===');
 
     const locationTemplates = await fetchLocationTemplates();
@@ -259,7 +270,6 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
 
     console.log(`[TemplateSync] Combined unique templates: ${allTemplates.length}`);
 
-    // Upsert to Supabase
     for (const t of allTemplates) {
       try {
         const raw = (t as Record<string, unknown>)._raw || t;
@@ -287,7 +297,6 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
       }
     }
 
-    // Only soft-delete if we actually found templates (avoid wiping on API failure)
     if (allTemplates.length > 0) {
       const activeIds = allTemplates.map(t => t.id || (t as Record<string, unknown>)._id as string).filter(Boolean);
       await softDeleteMissing('templates', 'ghl_template_id', activeIds, locationId);
