@@ -1,9 +1,13 @@
 /**
- * Template Sync — fetches email/SMS templates from GHL location templates API
- * and caches them in Supabase.
+ * Template Sync — fetches templates from BOTH GHL template endpoints:
  *
- * Uses GET /locations/:locationId/templates (API version 2021-07-28)
- * Paginated via skip/limit. Supports type filter (email, sms, whatsapp).
+ * 1. Location Templates: GET /locations/:locationId/templates
+ *    → SMS/email messaging templates (canned responses)
+ *
+ * 2. Email Builder: GET /emails/builder
+ *    → Designed email templates built in the GHL email builder
+ *
+ * Both are synced into the same Supabase `templates` table.
  */
 
 import { getSupabaseClient } from '../clients/supabase.js';
@@ -14,106 +18,181 @@ import type { GHLTemplate } from '../types/ghl.js';
 
 const DEFAULT_BASE_URL = 'https://services.leadconnectorhq.com';
 
-/**
- * Fetch all templates from GHL location templates API with pagination.
- * This uses the /locations/:locationId/templates endpoint, which
- * returns both email and SMS templates in a single paginated response.
- */
-async function fetchAllLocationTemplates(): Promise<GHLTemplate[]> {
+function getConfig() {
   const apiKey = process.env.GHL_API_KEY;
   const locationId = process.env.GHL_LOCATION_ID;
   const baseUrl = process.env.GHL_BASE_URL || DEFAULT_BASE_URL;
+  if (!apiKey || !locationId) throw new Error('GHL_API_KEY and GHL_LOCATION_ID are required');
+  return { apiKey, locationId, baseUrl };
+}
 
-  if (!apiKey || !locationId) {
-    throw new Error('GHL_API_KEY and GHL_LOCATION_ID are required for template sync');
-  }
+function authHeaders(apiKey: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    Version: '2021-07-28',
+    Accept: 'application/json',
+  };
+}
 
+// ────────────────────────────────────────────────────────────
+// Source 1: Location Templates  (GET /locations/:id/templates)
+// ────────────────────────────────────────────────────────────
+
+async function fetchLocationTemplates(): Promise<GHLTemplate[]> {
+  const { apiKey, locationId, baseUrl } = getConfig();
   const all: GHLTemplate[] = [];
-  const PAGE_SIZE = 25; // GHL default is 25 — match it
+  const PAGE_SIZE = 25;
   let skip = 0;
-  let totalCount = Infinity;
   let pageNum = 0;
 
-  while (skip < totalCount) {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
     pageNum++;
     const url = new URL(`/locations/${locationId}/templates`, baseUrl);
     url.searchParams.set('originId', locationId);
     url.searchParams.set('limit', String(PAGE_SIZE));
     url.searchParams.set('skip', String(skip));
 
-    console.log(`[TemplateSync] Fetching page ${pageNum}: ${url.toString()}`);
+    console.log(`[TemplateSync] [LocationTemplates] Page ${pageNum}: ${url.toString()}`);
 
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        Version: '2021-07-28',
-        Accept: 'application/json',
-      },
-    });
+    const res = await fetch(url.toString(), { headers: authHeaders(apiKey) });
+    const rawBody = await res.text();
 
-    const statusCode = response.status;
-    const rawBody = await response.text();
+    console.log(`[TemplateSync] [LocationTemplates] ${res.status}: ${rawBody.substring(0, 1000)}`);
 
-    // Debug: log raw response for diagnosis
-    console.log(`[TemplateSync] Response status: ${statusCode}`);
-    console.log(`[TemplateSync] Response body (first 2000 chars): ${rawBody.substring(0, 2000)}`);
-
-    if (!response.ok) {
-      throw new Error(`GHL Templates API ${statusCode}: ${rawBody}`);
+    if (!res.ok) {
+      console.error(`[TemplateSync] [LocationTemplates] API error ${res.status}, skipping this source`);
+      break;
     }
 
-    // Parse response — handle different possible shapes
     let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(rawBody);
-    } catch {
-      throw new Error(`GHL Templates API returned invalid JSON: ${rawBody.substring(0, 500)}`);
-    }
+    try { parsed = JSON.parse(rawBody); } catch { break; }
 
-    // Log all top-level keys so we can see the actual response structure
-    console.log(`[TemplateSync] Response keys: ${Object.keys(parsed).join(', ')}`);
+    const templates: GHLTemplate[] = Array.isArray(parsed.templates)
+      ? parsed.templates
+      : Array.isArray(parsed.data) ? parsed.data as GHLTemplate[] : [];
 
-    // Try multiple possible response shapes
-    let templates: GHLTemplate[] = [];
-    if (Array.isArray(parsed.templates)) {
-      templates = parsed.templates;
-    } else if (Array.isArray(parsed.data)) {
-      templates = parsed.data as GHLTemplate[];
-    } else if (Array.isArray(parsed)) {
-      templates = parsed as unknown as GHLTemplate[];
-    }
+    const total = (parsed.totalCount as number) || (parsed.total as number) || 0;
 
-    // Try multiple possible totalCount field names
-    if (totalCount === Infinity) {
-      totalCount = (
-        (parsed.totalCount as number) ||
-        (parsed.total as number) ||
-        (parsed.count as number) ||
-        0
-      );
-    }
+    console.log(`[TemplateSync] [LocationTemplates] Page ${pageNum}: ${templates.length} templates (total: ${total})`);
 
-    console.log(`[TemplateSync] Page ${pageNum}: ${templates.length} templates, totalCount: ${totalCount}`);
-
+    // Tag each template with source
+    for (const t of templates) { t._source = 'location_templates'; }
     all.push(...templates);
-    skip += PAGE_SIZE; // Always increment by PAGE_SIZE, not templates.length (to handle empty pages correctly)
 
-    // Safety: stop after empty page or max pages
-    if (templates.length === 0 || pageNum > 50) break;
-
-    // Rate limit courtesy
-    if (skip < totalCount) {
-      await new Promise(r => setTimeout(r, 500));
-    }
+    skip += PAGE_SIZE;
+    if (templates.length === 0 || skip >= total || pageNum > 50) break;
+    await new Promise(r => setTimeout(r, 300));
   }
 
-  console.log(`[TemplateSync] Total fetched: ${all.length} templates across ${pageNum} page(s)`);
   return all;
 }
 
-// ---- Sync Log Helpers (reuse pattern from entity-syncer) ----
+// ────────────────────────────────────────────────────────────
+// Source 2: Email Builder  (GET /emails/builder)
+// ────────────────────────────────────────────────────────────
+
+async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
+  const { apiKey, locationId, baseUrl } = getConfig();
+  const all: GHLTemplate[] = [];
+  const PAGE_SIZE = 25;
+  let offset = 0;
+  let pageNum = 0;
+  let keepGoing = true;
+
+  while (keepGoing) {
+    pageNum++;
+    const url = new URL('/emails/builder', baseUrl);
+    url.searchParams.set('locationId', locationId);
+    url.searchParams.set('limit', String(PAGE_SIZE));
+    url.searchParams.set('offset', String(offset));
+    url.searchParams.set('originId', locationId);
+    url.searchParams.set('status', 'published');
+
+    console.log(`[TemplateSync] [EmailBuilder] Page ${pageNum}: ${url.toString()}`);
+
+    const res = await fetch(url.toString(), { headers: authHeaders(apiKey) });
+    const rawBody = await res.text();
+
+    console.log(`[TemplateSync] [EmailBuilder] ${res.status}: ${rawBody.substring(0, 2000)}`);
+
+    if (!res.ok) {
+      console.error(`[TemplateSync] [EmailBuilder] API error ${res.status}, skipping this source`);
+      break;
+    }
+
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(rawBody); } catch { break; }
+
+    // Log all top-level keys to understand the response structure
+    const keys = Object.keys(parsed);
+    console.log(`[TemplateSync] [EmailBuilder] Response keys: ${keys.join(', ')}`);
+    for (const key of keys) {
+      const val = parsed[key];
+      if (Array.isArray(val)) {
+        console.log(`[TemplateSync] [EmailBuilder]   ${key}: Array[${val.length}]${val.length > 0 ? ` first item keys: ${Object.keys(val[0]).join(',')}` : ''}`);
+      } else {
+        console.log(`[TemplateSync] [EmailBuilder]   ${key}: ${typeof val} = ${JSON.stringify(val).substring(0, 200)}`);
+      }
+    }
+
+    // Try all possible array locations in the response
+    let templates: GHLTemplate[] = [];
+    for (const key of keys) {
+      const val = parsed[key];
+      if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null && ('id' in val[0] || '_id' in val[0] || 'name' in val[0])) {
+        console.log(`[TemplateSync] [EmailBuilder] Found template array at key '${key}' with ${val.length} items`);
+        templates = val.map((item: Record<string, unknown>) => ({
+          id: (item.id || item._id) as string,
+          name: (item.name || item.templateName || 'Untitled') as string,
+          type: 'email' as const,
+          subject: (item.subject || null) as string | undefined,
+          body: (item.html || item.body || item.htmlBody || null) as string | undefined,
+          dateAdded: (item.createdAt || item.created_at || item.dateAdded || null) as string | undefined,
+          dateUpdated: (item.updatedAt || item.updated_at || item.dateUpdated || null) as string | undefined,
+          _source: 'email_builder',
+          _raw: item,
+        })) as GHLTemplate[];
+        break;
+      }
+    }
+
+    // Also check if the response IS the array (no wrapping object)
+    if (templates.length === 0 && Array.isArray(parsed)) {
+      templates = (parsed as unknown as Record<string, unknown>[]).map((item) => ({
+        id: (item.id || item._id) as string,
+        name: (item.name || 'Untitled') as string,
+        type: 'email' as const,
+        _source: 'email_builder',
+        _raw: item,
+      })) as GHLTemplate[];
+    }
+
+    all.push(...templates);
+    offset += PAGE_SIZE;
+
+    // Determine total from response
+    const rawTotal = parsed.total || parsed.totalCount || parsed.count;
+    let total = 0;
+    if (typeof rawTotal === 'number') {
+      total = rawTotal;
+    } else if (Array.isArray(rawTotal) && rawTotal.length > 0 && typeof rawTotal[0] === 'object') {
+      total = (rawTotal[0] as Record<string, number>).total || 0;
+    }
+
+    console.log(`[TemplateSync] [EmailBuilder] Page ${pageNum}: ${templates.length} templates (total: ${total})`);
+
+    if (templates.length === 0 || offset >= total || pageNum > 50) keepGoing = false;
+    if (keepGoing) await new Promise(r => setTimeout(r, 300));
+  }
+
+  return all;
+}
+
+// ────────────────────────────────────────────────────────────
+// Sync Log Helpers
+// ────────────────────────────────────────────────────────────
 
 async function logSyncStart(entityType: string): Promise<string | null> {
   const supabase = getSupabaseClient();
@@ -145,7 +224,9 @@ async function logSyncFailed(syncLogId: string | null, errorMessage: string): Pr
   }).eq('id', syncLogId);
 }
 
-// ---- Main Sync Function ----
+// ────────────────────────────────────────────────────────────
+// Main Sync Function
+// ────────────────────────────────────────────────────────────
 
 export async function syncTemplates(): Promise<{ synced: number; errors: string[] }> {
   const supabase = getSupabaseClient();
@@ -156,21 +237,42 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
   let synced = 0;
 
   try {
-    const templates = await fetchAllLocationTemplates();
-    console.log(`[TemplateSync] Processing ${templates.length} templates for upsert`);
+    // Fetch from BOTH sources
+    console.log('[TemplateSync] === Starting dual-source template sync ===');
 
-    for (const t of templates) {
+    const locationTemplates = await fetchLocationTemplates();
+    console.log(`[TemplateSync] Location templates: ${locationTemplates.length}`);
+
+    const emailBuilderTemplates = await fetchEmailBuilderTemplates();
+    console.log(`[TemplateSync] Email builder templates: ${emailBuilderTemplates.length}`);
+
+    // Combine, deduplicating by ID
+    const seen = new Set<string>();
+    const allTemplates: GHLTemplate[] = [];
+    for (const t of [...locationTemplates, ...emailBuilderTemplates]) {
+      const id = t.id || (t as Record<string, unknown>)._id as string;
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        allTemplates.push(t);
+      }
+    }
+
+    console.log(`[TemplateSync] Combined unique templates: ${allTemplates.length}`);
+
+    // Upsert to Supabase
+    for (const t of allTemplates) {
       try {
+        const raw = (t as Record<string, unknown>)._raw || t;
         await supabase.from('templates').upsert(
           {
-            ghl_template_id: t.id,
+            ghl_template_id: t.id || (t as Record<string, unknown>)._id as string,
             ghl_location_id: locationId,
             name: t.name || 'Untitled',
             type: t.type || 'email',
             subject: t.subject || null,
             body: t.body || null,
             attachments: t.attachments || [],
-            raw_json: t,
+            raw_json: raw,
             date_added: t.dateAdded || null,
             date_updated: t.dateUpdated || null,
             synced_at: now,
@@ -180,25 +282,26 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
         );
         synced++;
       } catch (err) {
-        errors.push(`Template ${t.id}: ${err instanceof Error ? err.message : String(err)}`);
+        const id = t.id || (t as Record<string, unknown>)._id;
+        errors.push(`Template ${id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
-    // Soft-delete templates no longer in GHL
-    if (templates.length > 0) {
-      const activeIds = templates.map(t => t.id);
+    // Only soft-delete if we actually found templates (avoid wiping on API failure)
+    if (allTemplates.length > 0) {
+      const activeIds = allTemplates.map(t => t.id || (t as Record<string, unknown>)._id as string).filter(Boolean);
       await softDeleteMissing('templates', 'ghl_template_id', activeIds, locationId);
     }
 
     await updateLastSynced('templates');
     await logSyncComplete(syncLogId, synced);
-    console.log(`[TemplateSync] Templates synced: ${synced} (${errors.length} errors)`);
+    console.log(`[TemplateSync] === Sync complete: ${synced} synced, ${errors.length} errors ===`);
     return { synced, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
     await logSyncFailed(syncLogId, msg);
-    console.error(`[TemplateSync] Template sync FAILED: ${msg}`);
+    console.error(`[TemplateSync] === Sync FAILED: ${msg} ===`);
     return { synced: 0, errors };
   }
 }
