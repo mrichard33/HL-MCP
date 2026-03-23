@@ -3,15 +3,42 @@
  * Uses the run_sql RPC function for arbitrary SQL.
  *
  * IMPORTANT: run_sql does `EXECUTE query_text INTO result` which returns a single JSON value.
- * Multi-row queries MUST be wrapped in `SELECT json_agg(t) FROM (...) t` to aggregate
- * all rows into one JSON array. This is the same pattern used in LP MCP.
+ * SELECT queries are auto-wrapped in `SELECT json_agg(t) FROM (...) t` so multi-row
+ * results are aggregated into one JSON array. This prevents "invalid input syntax for
+ * type json" errors when the RPC tries to store multi-row results into a single variable.
  */
 
 import { getSupabaseClient } from '../clients/supabase.js';
 
+/**
+ * Auto-wrap SELECT queries in json_agg so the run_sql RPC can return them.
+ * Skips wrapping if the query already contains json_agg or is not a SELECT.
+ */
+function wrapSelectForJsonAgg(queryText: string): string {
+  const trimmed = queryText.trim();
+  const upper = trimmed.toUpperCase();
+
+  // Only wrap SELECT statements
+  if (!upper.startsWith('SELECT')) return trimmed;
+
+  // Don't double-wrap if already using json_agg
+  if (upper.includes('JSON_AGG')) return trimmed;
+
+  // Don't wrap if it's a single-value query (COUNT, MAX, MIN, SUM, AVG with no other columns)
+  // These already return a single value that works with INTO
+  const selectBody = trimmed.replace(/^SELECT\s+/i, '').replace(/\s+FROM\s+.*/is, '');
+  const isSimpleAggregate = /^(COUNT|MAX|MIN|SUM|AVG)\s*\(/i.test(selectBody.trim())
+    && !selectBody.includes(',');
+  if (isSimpleAggregate) return trimmed;
+
+  // Wrap in json_agg
+  return `SELECT json_agg(t) FROM (${trimmed}) t`;
+}
+
 export async function runSQL(queryText: string): Promise<unknown> {
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase.rpc('run_sql', { query_text: queryText });
+  const wrapped = wrapSelectForJsonAgg(queryText);
+  const { data, error } = await supabase.rpc('run_sql', { query_text: wrapped });
   if (error) throw new Error(`SQL execution error: ${error.message}`);
   return data;
 }
