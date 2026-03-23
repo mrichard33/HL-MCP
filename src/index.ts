@@ -31,6 +31,7 @@ import { pipelineTools } from './tools/pipelines.js';
 import { workflowTools } from './tools/workflows.js';
 import { conversationTools } from './tools/conversations.js';
 import { workflowAnalysisTools } from './tools/workflow-analysis.js';
+import { templateTools } from './tools/templates.js';
 import { adminTools } from './tools/admin/index.js';
 import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
@@ -61,6 +62,7 @@ function createMcpServer() {
     ...workflowTools,
     ...conversationTools,
     ...workflowAnalysisTools,
+    ...templateTools,
     ...adminTools,
   };
 

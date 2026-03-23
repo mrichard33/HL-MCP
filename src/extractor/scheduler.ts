@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { extractAndSyncWorkflows } from './workflow-extractor.js';
+import { syncTemplates } from './template-syncer.js';
 import { toET } from '../utils/timezone.js';
 import {
   syncContacts,
@@ -79,6 +80,7 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  * - Appointments: every 15 minutes
  * - Pipelines: every 30 minutes
  * - Conversations & Messages: every 15 minutes
+ * - Templates: every 30 minutes
  * - Funnel progression: every hour
  */
 export function startScheduledSync(): void {
@@ -156,6 +158,9 @@ export function startScheduledSync(): void {
     setTimeout(() => runJob('tags', syncTags), 40_000);
     setTimeout(() => runJob('trigger_links', syncTriggerLinks), 45_000);
 
+    // Templates: sync on startup (50s stagger)
+    setTimeout(() => runJob('templates', syncTemplates), 50_000);
+
     // Run funnel computation after initial syncs complete (2 minutes)
     setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
   })();
@@ -211,6 +216,11 @@ export function startScheduledSync(): void {
     runJob('trigger_links', syncTriggerLinks);
   });
 
+  // Templates: every 30 minutes
+  cron.schedule('*/30 * * * *', () => {
+    runJob('templates', syncTemplates);
+  });
+
   cron.schedule('0 * * * *', () => {
     runJob('funnel_progression', computeFunnelProgression);
   });
@@ -218,6 +228,6 @@ export function startScheduledSync(): void {
   console.log('[Scheduler] Cron jobs registered:');
   console.log('  */10 * * * * — workflows');
   console.log('  */15 * * * * — contacts, opportunities, appointments, conversations/messages');
-  console.log('  */30 * * * * — pipelines, custom_fields, custom_values, tags, trigger_links');
+  console.log('  */30 * * * * — pipelines, custom_fields, custom_values, tags, trigger_links, templates');
   console.log('  0 * * * *    — funnel progression');
 }
