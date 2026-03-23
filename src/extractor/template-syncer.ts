@@ -10,6 +10,11 @@
  *    → Top-level returns folders + standalone templates
  *    → Pass parentId=FOLDER_ID to fetch templates inside a folder
  *    → Recursive crawl needed to get all ~103 templates
+ *
+ * IMPORTANT: The /emails/builder list endpoint only returns metadata
+ * (id, name, version, previewUrl, etc.) — NOT the actual HTML body
+ * or subject. The body must be fetched from the previewUrl (Firebase
+ * Storage) in a separate enrichment pass after the list crawl.
  */
 
 import { getSupabaseClient } from '../clients/supabase.js';
@@ -214,6 +219,8 @@ async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
             id: item.id,
             name: item.name || 'Untitled',
             type: 'email' as const,
+            // NOTE: subject and body are NOT returned by the list endpoint.
+            // They will be populated in the enrichment pass below.
             subject: (item.subject || null) as string | undefined,
             body: (item.html || item.body || item.htmlBody || null) as string | undefined,
             dateAdded: item.dateAdded || item.createdAt || undefined,
@@ -235,6 +242,77 @@ async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
   }
 
   console.log(`[TemplateSync] [EmailBuilder] Crawl complete: ${allTemplates.length} templates, ${allFolders.length} folders, ${totalApiCalls} API calls`);
+
+  // ── Enrichment pass: fetch HTML body from previewUrl ──────
+  // The list endpoint only returns metadata. The actual email HTML
+  // is hosted on Firebase Storage at the previewUrl. We fetch it
+  // for each non-folder template with concurrency control.
+  const CONCURRENCY = 5;
+  const BATCH_DELAY_MS = 200;
+  let enriched = 0;
+  let enrichErrors = 0;
+
+  console.log(`[TemplateSync] [EmailBuilder] Starting body enrichment for ${allTemplates.length} templates (concurrency: ${CONCURRENCY})...`);
+
+  for (let i = 0; i < allTemplates.length; i += CONCURRENCY) {
+    const batch = allTemplates.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (template) => {
+        const raw = (template as Record<string, unknown>)._raw as BuilderItem | undefined;
+        const previewUrl = raw?.previewUrl;
+        if (!previewUrl) return;
+
+        try {
+          const res = await fetch(previewUrl, {
+            headers: { Accept: 'text/html' },
+            signal: AbortSignal.timeout(15000), // 15s timeout per fetch
+          });
+
+          if (!res.ok) {
+            console.log(`[TemplateSync] [Enrich] HTTP ${res.status} for "${template.name}" — skipping`);
+            return;
+          }
+
+          const html = await res.text();
+          if (html && html.length > 0) {
+            template.body = html;
+
+            // Try to extract subject from <title> tag as fallback
+            if (!template.subject) {
+              const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+              if (titleMatch && titleMatch[1] && titleMatch[1].trim().length > 0) {
+                const titleText = titleMatch[1].trim();
+                // Only use title if it looks like a real subject (not generic)
+                if (titleText.length < 200 && !titleText.toLowerCase().includes('untitled')) {
+                  template.subject = titleText;
+                }
+              }
+            }
+
+            enriched++;
+          }
+        } catch (err) {
+          console.log(`[TemplateSync] [Enrich] Failed for "${template.name}": ${err instanceof Error ? err.message : String(err)}`);
+          enrichErrors++;
+        }
+      })
+    );
+
+    // Log any unexpected rejections
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.log(`[TemplateSync] [Enrich] Unexpected rejection: ${result.reason}`);
+        enrichErrors++;
+      }
+    }
+
+    // Rate limit between batches
+    if (i + CONCURRENCY < allTemplates.length) {
+      await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
+    }
+  }
+
+  console.log(`[TemplateSync] [EmailBuilder] Enrichment complete: ${enriched}/${allTemplates.length} bodies fetched, ${enrichErrors} errors`);
 
   // Return both folders and templates — folders get templateType='folder' in raw_json
   return [...allFolders, ...allTemplates];
@@ -349,7 +427,10 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
       return (raw as Record<string, unknown>).templateType !== 'folder';
     }).length;
     const folderCount = allItems.length - templateCount;
-    console.log(`[TemplateSync] === Sync complete: ${synced} synced (${templateCount} templates, ${folderCount} folders), ${errors.length} errors ===`);
+
+    // Count how many got body content
+    const withBody = allItems.filter(t => !!t.body).length;
+    console.log(`[TemplateSync] === Sync complete: ${synced} synced (${templateCount} templates, ${folderCount} folders), ${withBody} with body content, ${errors.length} errors ===`);
 
     return { synced, errors };
   } catch (err) {
