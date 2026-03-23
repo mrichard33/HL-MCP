@@ -438,7 +438,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
       .from('contacts')
       .select('ghl_contact_id')
       .is('deleted_at', null)
-      .order('date_added', { ascending: true });
+      .order('date_updated', { ascending: false });
     if (allError) throw new Error(`Failed to fetch contacts: ${allError.message}`);
     if (!allContacts?.length) {
       console.warn('[EntitySync] No contacts found in Supabase — sync contacts first');
