@@ -2,17 +2,19 @@
  * Supabase admin operations: direct SQL execution, table listing, schema inspection.
  * Uses the run_sql RPC function for arbitrary SQL.
  *
- * IMPORTANT: run_sql does `EXECUTE query_text INTO result` which returns a single JSON value.
- * SELECT queries are auto-wrapped in `SELECT json_agg(t) FROM (...) t` so multi-row
- * results are aggregated into one JSON array. This prevents "invalid input syntax for
- * type json" errors when the RPC tries to store multi-row results into a single variable.
+ * IMPORTANT: run_sql does `EXECUTE query_text INTO result` where result is typed as json.
+ * ALL SELECT queries must be wrapped in json_agg because even simple aggregates like
+ * MAX(timestamp) or COUNT(*) fail when the RPC tries to cast non-JSON types into the
+ * json result variable. Only queries already containing json_agg are skipped.
  */
 
 import { getSupabaseClient } from '../clients/supabase.js';
 
 /**
- * Auto-wrap SELECT queries in json_agg so the run_sql RPC can return them.
- * Skips wrapping if the query already contains json_agg or is not a SELECT.
+ * Wrap ALL SELECT queries in json_agg so the run_sql RPC can return them.
+ * The RPC's INTO variable is json-typed — even COUNT returns bigint which
+ * sometimes fails, and MAX/MIN on timestamps always fails without wrapping.
+ * Only skips if query already contains json_agg or is not a SELECT.
  */
 function wrapSelectForJsonAgg(queryText: string): string {
   const trimmed = queryText.trim();
@@ -24,14 +26,7 @@ function wrapSelectForJsonAgg(queryText: string): string {
   // Don't double-wrap if already using json_agg
   if (upper.includes('JSON_AGG')) return trimmed;
 
-  // Don't wrap if it's a single-value query (COUNT, MAX, MIN, SUM, AVG with no other columns)
-  // These already return a single value that works with INTO
-  const selectBody = trimmed.replace(/^SELECT\s+/i, '').replace(/\s+FROM\s+.*/is, '');
-  const isSimpleAggregate = /^(COUNT|MAX|MIN|SUM|AVG)\s*\(/i.test(selectBody.trim())
-    && !selectBody.includes(',');
-  if (isSimpleAggregate) return trimmed;
-
-  // Wrap in json_agg
+  // Wrap everything — the RPC result variable is json-typed
   return `SELECT json_agg(t) FROM (${trimmed}) t`;
 }
 
@@ -40,6 +35,16 @@ export async function runSQL(queryText: string): Promise<unknown> {
   const wrapped = wrapSelectForJsonAgg(queryText);
   const { data, error } = await supabase.rpc('run_sql', { query_text: wrapped });
   if (error) throw new Error(`SQL execution error: ${error.message}`);
+
+  // json_agg returns an array — for single-value queries (COUNT, MAX, etc.)
+  // unwrap to return just the value for a cleaner caller experience
+  if (Array.isArray(data) && data.length === 1 && typeof data[0] === 'object') {
+    const keys = Object.keys(data[0]);
+    if (keys.length === 1) {
+      return data[0][keys[0]];
+    }
+  }
+
   return data;
 }
 
