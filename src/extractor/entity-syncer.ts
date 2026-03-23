@@ -369,7 +369,7 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 
 const BATCH_SIZE = 3;
 const BATCH_DELAY_MS = 3000; // 3s pause between batches to stay under GHL rate limits
-const MAX_CONTACTS_PER_SYNC = 200; // Limit per run to avoid timeouts
+const MAX_CONTACTS_PER_SYNC = 500; // Increased from 200 for faster backfill
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
 function toISODate(value: string | number | null | undefined): string | null {
@@ -543,7 +543,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
               // Fetch and upsert messages for this conversation (with pagination)
               try {
-                const messageList = await ghl.getAllMessages(conv.id, 5);
+                const messageList = await ghl.getAllMessages(conv.id, 20);
                 for (const msg of messageList) {
                   const { error: msgError } = await supabase.from('messages').upsert(
                     {
