@@ -17,17 +17,18 @@ export async function runSQL(queryText: string): Promise<unknown> {
 }
 
 export async function listTables(prefix?: string): Promise<unknown> {
+  // pg_stat_user_tables uses 'relname' (not 'tablename' — that's pg_tables)
   let innerQuery = `
     SELECT
-      tablename AS table_name,
+      relname AS table_name,
       n_live_tup AS approximate_row_count
     FROM pg_stat_user_tables
     WHERE schemaname = 'public'
   `;
   if (prefix) {
-    innerQuery += ` AND tablename LIKE '${prefix.replace(/'/g, "''").replace(/[\\%_]/g, '\\$&')}%'`;
+    innerQuery += ` AND relname LIKE '${prefix.replace(/'/g, "''").replace(/[\\%_]/g, '\\$&')}%'`;
   }
-  innerQuery += ' ORDER BY tablename';
+  innerQuery += ' ORDER BY relname';
 
   // Wrap in json_agg so run_sql returns a single JSON array
   const query = `SELECT json_agg(t) FROM (${innerQuery}) t`;
