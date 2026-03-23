@@ -3,6 +3,8 @@ import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
 import { normalizeDirection } from '../utils/normalize.js';
+import { isRealMessage } from '../utils/message-filter.js';
+import { syncConversationsAndMessages } from '../extractor/entity-syncer.js';
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
 function toISODate(value: string | number | null | undefined): string | null {
@@ -14,17 +16,28 @@ function toISODate(value: string | number | null | undefined): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** Upsert an array of raw GHL messages into the Supabase messages table. */
+/**
+ * Upsert an array of raw GHL messages into the Supabase messages table.
+ * Filters out system activity events (opportunity created, chat ended, etc.)
+ * that GHL injects into the conversation timeline — those are NOT real messages.
+ */
 async function persistMessages(
   messages: Record<string, unknown>[],
   conversationId: string,
-): Promise<number> {
-  if (!messages.length) return 0;
+): Promise<{ persisted: number; skipped: number }> {
+  if (!messages.length) return { persisted: 0, skipped: 0 };
   const supabase = getSupabaseClient();
   const now = nowET();
-  let count = 0;
+  let persisted = 0;
+  let skipped = 0;
 
   for (const msg of messages) {
+    // Skip system activity events — not real messages
+    if (!isRealMessage(msg)) {
+      skipped++;
+      continue;
+    }
+
     const { error } = await supabase.from('messages').upsert(
       {
         ghl_message_id: msg.id as string,
@@ -38,10 +51,10 @@ async function persistMessages(
       },
       { onConflict: 'ghl_message_id' },
     );
-    if (!error) count++;
+    if (!error) persisted++;
   }
 
-  return count;
+  return { persisted, skipped };
 }
 
 export const conversationTools = {
@@ -88,7 +101,6 @@ export const conversationTools = {
         if (!error && data) {
           return { conversation: data, source: 'supabase' };
         }
-        // Not found in Supabase — fall back to GHL API
       }
       const ghl = new GHLClient();
       const conversation = await ghl.getConversation(args.conversationId);
@@ -118,13 +130,13 @@ export const conversationTools = {
       const ghl = new GHLClient();
       const raw = await ghl.getAllMessages(args.conversationId);
 
-      // Persist fetched messages to Supabase
-      const persisted = await persistMessages(
+      // Persist real messages only (filters out system activity events)
+      const { persisted, skipped } = await persistMessages(
         raw as unknown as Record<string, unknown>[],
         args.conversationId,
       );
 
-      return { messages: raw, persisted, source: 'ghl_api' };
+      return { messages: raw, persisted, skipped_activity_events: skipped, source: 'ghl_api' };
     },
   },
 
@@ -143,15 +155,25 @@ export const conversationTools = {
   },
 
   sync_conversations: {
-    description: 'Sync conversations and their messages from GoHighLevel to Supabase cache.',
+    description: 'Sync conversations and their messages from GoHighLevel to Supabase cache. If no contactId is provided, runs a bulk sync across all contacts (backfill mode for unsynced contacts, then incremental round-robin for already-synced ones). System activity events (opportunity created, chat ended, etc.) are filtered out — only real messages are stored.',
     inputSchema: z.object({
-      contactId: z.string().optional(),
+      contactId: z.string().optional().describe('Optional: sync a specific contact. If omitted, runs bulk sync across all contacts.'),
       limit: z.number().optional().default(50),
     }),
     handler: async (args: { contactId?: string; limit?: number }) => {
+      // If no contactId, run the full bulk sync from entity-syncer
       if (!args.contactId) {
-        throw new Error('contactId is required — the GHL conversations/search endpoint requires it.');
+        const result = await syncConversationsAndMessages();
+        return {
+          synced_conversations: result.synced_conversations,
+          synced_messages: result.synced_messages,
+          errors: result.errors.length > 0 ? result.errors.slice(0, 20) : 'none',
+          status: 'completed',
+          mode: 'bulk',
+        };
       }
+
+      // Single-contact sync
       const ghl = new GHLClient();
       const supabase = getSupabaseClient();
       const now = nowET();
@@ -170,22 +192,29 @@ export const conversationTools = {
       const { error } = await supabase.from('conversations').upsert(rows, { onConflict: 'ghl_conversation_id' });
       if (error) throw new Error(`Supabase error: ${error.message}`);
 
-      // Also fetch and persist messages for each synced conversation
       let totalMessages = 0;
+      let totalSkipped = 0;
       for (const conv of conversations) {
         try {
-          const messageList = await ghl.getAllMessages(conv.id, 5);
-          const persisted = await persistMessages(
+          const messageList = await ghl.getAllMessages(conv.id);
+          const { persisted, skipped } = await persistMessages(
             messageList as unknown as Record<string, unknown>[],
             conv.id,
           );
           totalMessages += persisted;
+          totalSkipped += skipped;
         } catch (err) {
           console.error(`[sync_conversations] Failed to sync messages for conv ${conv.id}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
-      return { synced_conversations: rows.length, synced_messages: totalMessages, status: 'completed' };
+      return {
+        synced_conversations: rows.length,
+        synced_messages: totalMessages,
+        skipped_activity_events: totalSkipped,
+        status: 'completed',
+        mode: 'single_contact',
+      };
     },
   },
 };
