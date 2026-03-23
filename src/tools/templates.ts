@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { getSupabaseClient } from '../../clients/supabase.js';
-import { syncTemplates } from '../../extractor/template-syncer.js';
+import { getSupabaseClient } from '../clients/supabase.js';
+import { syncTemplates } from '../extractor/template-syncer.js';
 
 export const templateTools = {
   list_templates: {
@@ -48,7 +48,7 @@ export const templateTools = {
         query = query.ilike('name', `%${args.search}%`);
       }
 
-      const { data, error, count } = await query;
+      const { data, error } = await query;
       if (error) throw new Error(`Template query failed: ${error.message}`);
 
       return {
