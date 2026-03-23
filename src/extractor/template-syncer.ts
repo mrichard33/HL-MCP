@@ -6,10 +6,10 @@
  *
  * 2. Email Builder: GET /emails/builder
  *    → Designed email templates built in the GHL email builder
- *    → IMPORTANT: Response key is "builders" not "templates"
- *    → Do NOT pass originId or status params — they cause empty results
- *
- * Both are synced into the same Supabase `templates` table.
+ *    → Response key is "builders" not "templates"
+ *    → Top-level returns folders + standalone templates
+ *    → Pass parentId=FOLDER_ID to fetch templates inside a folder
+ *    → Recursive crawl needed to get all ~103 templates
  */
 
 import { getSupabaseClient } from '../clients/supabase.js';
@@ -56,15 +56,11 @@ async function fetchLocationTemplates(): Promise<GHLTemplate[]> {
     url.searchParams.set('limit', String(PAGE_SIZE));
     url.searchParams.set('skip', String(skip));
 
-    console.log(`[TemplateSync] [LocationTemplates] Page ${pageNum}: ${url.toString()}`);
-
     const res = await fetch(url.toString(), { headers: authHeaders(apiKey) });
     const rawBody = await res.text();
 
-    console.log(`[TemplateSync] [LocationTemplates] ${res.status}: ${rawBody.substring(0, 1000)}`);
-
     if (!res.ok) {
-      console.error(`[TemplateSync] [LocationTemplates] API error ${res.status}, skipping`);
+      console.log(`[TemplateSync] [LocationTemplates] API error ${res.status}, skipping`);
       break;
     }
 
@@ -92,114 +88,156 @@ async function fetchLocationTemplates(): Promise<GHLTemplate[]> {
 // ────────────────────────────────────────────────────────────
 // Source 2: Email Builder  (GET /emails/builder)
 //
-// Response: { builders: [...], total: [{total: N}] }
-// Key is "builders" NOT "templates"
-// Do NOT pass originId or status — they cause empty results
+// Top-level returns mix of folders (templateType="folder") and
+// standalone templates (templateType="html"). To get all templates,
+// we recursively fetch children of each folder using parentId.
 // ────────────────────────────────────────────────────────────
 
-async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
+interface BuilderItem {
+  id: string;
+  name: string;
+  templateType: string;
+  childCount?: number;
+  subject?: string;
+  html?: string;
+  body?: string;
+  htmlBody?: string;
+  previewUrl?: string;
+  dateAdded?: string;
+  lastUpdated?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  version?: string;
+  isPlainText?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * Fetch one page of email builder items, optionally inside a folder.
+ */
+async function fetchBuilderPage(parentId?: string, offset = 0, limit = 25): Promise<{ items: BuilderItem[]; total: number }> {
   const { apiKey, locationId, baseUrl } = getConfig();
-  const all: GHLTemplate[] = [];
-  const PAGE_SIZE = 25;
-  let offset = 0;
-  let pageNum = 0;
-  let totalKnown = Infinity;
 
-  while (offset < totalKnown) {
-    pageNum++;
-
-    // Only pass locationId + limit + offset — no originId, no status
-    const url = new URL('/emails/builder', baseUrl);
-    url.searchParams.set('locationId', locationId);
-    url.searchParams.set('limit', String(PAGE_SIZE));
-    url.searchParams.set('offset', String(offset));
-
-    console.log(`[TemplateSync] [EmailBuilder] Page ${pageNum}: ${url.toString()}`);
-
-    const res = await fetch(url.toString(), { headers: authHeaders(apiKey) });
-    const rawBody = await res.text();
-
-    console.log(`[TemplateSync] [EmailBuilder] ${res.status}: ${rawBody.substring(0, 2000)}`);
-
-    if (!res.ok) {
-      console.error(`[TemplateSync] [EmailBuilder] API error ${res.status}, skipping`);
-      break;
-    }
-
-    let parsed: Record<string, unknown>;
-    try { parsed = JSON.parse(rawBody); } catch { break; }
-
-    const keys = Object.keys(parsed);
-    console.log(`[TemplateSync] [EmailBuilder] Response keys: ${keys.join(', ')}`);
-
-    // Extract total — GHL returns it as [{total: N}] or a plain number
-    if (totalKnown === Infinity) {
-      const rawTotal = parsed.total || parsed.totalCount;
-      if (typeof rawTotal === 'number') {
-        totalKnown = rawTotal;
-      } else if (Array.isArray(rawTotal) && rawTotal.length > 0 && typeof rawTotal[0] === 'object') {
-        totalKnown = (rawTotal[0] as Record<string, number>).total || 0;
-      } else {
-        totalKnown = 0;
-      }
-      console.log(`[TemplateSync] [EmailBuilder] Total count: ${totalKnown}`);
-    }
-
-    // Find the template array — check "builders", "templates", "data", or any array with objects
-    let items: Record<string, unknown>[] = [];
-
-    // Check known keys first
-    for (const tryKey of ['builders', 'templates', 'data', 'emailTemplates', 'results']) {
-      const val = parsed[tryKey];
-      if (Array.isArray(val) && val.length > 0) {
-        console.log(`[TemplateSync] [EmailBuilder] Found data at key '${tryKey}': ${val.length} items`);
-        if (val.length > 0 && typeof val[0] === 'object') {
-          console.log(`[TemplateSync] [EmailBuilder] First item keys: ${Object.keys(val[0] as Record<string, unknown>).join(', ')}`);
-        }
-        items = val as Record<string, unknown>[];
-        break;
-      }
-    }
-
-    // Fallback: scan all keys for any array of objects with id/name
-    if (items.length === 0) {
-      for (const key of keys) {
-        const val = parsed[key];
-        if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
-          const firstKeys = Object.keys(val[0] as Record<string, unknown>);
-          if (firstKeys.includes('id') || firstKeys.includes('_id') || firstKeys.includes('name')) {
-            console.log(`[TemplateSync] [EmailBuilder] Auto-discovered data at key '${key}': ${val.length} items`);
-            items = val as Record<string, unknown>[];
-            break;
-          }
-        }
-      }
-    }
-
-    // Map to GHLTemplate format
-    const templates: GHLTemplate[] = items.map((item) => ({
-      id: (item.id || item._id || '') as string,
-      name: (item.name || item.templateName || 'Untitled') as string,
-      type: 'email' as const,
-      subject: (item.subject || null) as string | undefined,
-      body: (item.html || item.body || item.htmlBody || null) as string | undefined,
-      dateAdded: (item.createdAt || item.created_at || item.dateAdded || null) as string | undefined,
-      dateUpdated: (item.updatedAt || item.updated_at || item.dateUpdated || null) as string | undefined,
-      _source: 'email_builder',
-      _raw: item,
-    })) as GHLTemplate[];
-
-    console.log(`[TemplateSync] [EmailBuilder] Page ${pageNum}: ${templates.length} templates mapped`);
-
-    all.push(...templates);
-    offset += PAGE_SIZE;
-
-    if (templates.length === 0 || pageNum > 50) break;
-    await new Promise(r => setTimeout(r, 500));
+  const url = new URL('/emails/builder', baseUrl);
+  url.searchParams.set('locationId', locationId);
+  url.searchParams.set('limit', String(limit));
+  url.searchParams.set('offset', String(offset));
+  if (parentId) {
+    url.searchParams.set('parentId', parentId);
   }
 
-  console.log(`[TemplateSync] [EmailBuilder] Total fetched: ${all.length} across ${pageNum} pages`);
-  return all;
+  const res = await fetch(url.toString(), { headers: authHeaders(apiKey) });
+  const rawBody = await res.text();
+
+  if (!res.ok) {
+    console.error(`[TemplateSync] [EmailBuilder] API error ${res.status}: ${rawBody.substring(0, 500)}`);
+    return { items: [], total: 0 };
+  }
+
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(rawBody); } catch { return { items: [], total: 0 }; }
+
+  // Items live in "builders" key
+  const items: BuilderItem[] = Array.isArray(parsed.builders) ? parsed.builders as BuilderItem[] : [];
+
+  // Total is [{total: N}] or a number
+  let total = 0;
+  const rawTotal = parsed.total || parsed.totalCount;
+  if (typeof rawTotal === 'number') {
+    total = rawTotal;
+  } else if (Array.isArray(rawTotal) && rawTotal.length > 0 && typeof rawTotal[0] === 'object') {
+    total = (rawTotal[0] as Record<string, number>).total || 0;
+  }
+
+  return { items, total };
+}
+
+/**
+ * Fetch ALL email builder templates, recursively crawling folders.
+ * Returns both folders (for organizational context) and actual templates.
+ */
+async function fetchEmailBuilderTemplates(): Promise<GHLTemplate[]> {
+  const allTemplates: GHLTemplate[] = [];
+  const allFolders: GHLTemplate[] = [];
+
+  // Queue of folders to crawl: [folderId, folderName, depth]
+  const folderQueue: [string | undefined, string, number][] = [[undefined, 'root', 0]];
+  let totalApiCalls = 0;
+  const MAX_API_CALLS = 100; // Safety limit
+  const MAX_DEPTH = 5;       // Prevent infinite recursion
+
+  while (folderQueue.length > 0 && totalApiCalls < MAX_API_CALLS) {
+    const [parentId, parentName, depth] = folderQueue.shift()!;
+    let offset = 0;
+    let pageNum = 0;
+    let totalInFolder = Infinity;
+
+    const label = parentId ? `folder "${parentName}" (${parentId})` : 'root';
+    console.log(`[TemplateSync] [EmailBuilder] Crawling ${label}...`);
+
+    while (offset < totalInFolder && totalApiCalls < MAX_API_CALLS) {
+      pageNum++;
+      totalApiCalls++;
+
+      const { items, total } = await fetchBuilderPage(parentId, offset, 25);
+
+      if (totalInFolder === Infinity) {
+        totalInFolder = total;
+      }
+
+      let templatesFound = 0;
+      let foldersFound = 0;
+
+      for (const item of items) {
+        if (item.templateType === 'folder') {
+          foldersFound++;
+          // Store folder for context
+          allFolders.push({
+            id: item.id,
+            name: item.name || 'Untitled Folder',
+            type: 'folder' as unknown as 'email',
+            dateAdded: item.dateAdded || item.createdAt || undefined,
+            dateUpdated: item.lastUpdated || item.updatedAt || undefined,
+            _source: 'email_builder',
+            _raw: item,
+          } as GHLTemplate);
+
+          // Queue folder for recursive crawl (if it has children)
+          const childCount = item.childCount || 0;
+          if (childCount > 0 && depth < MAX_DEPTH) {
+            folderQueue.push([item.id, item.name, depth + 1]);
+          }
+        } else {
+          // Actual template (html, code, etc.)
+          templatesFound++;
+          allTemplates.push({
+            id: item.id,
+            name: item.name || 'Untitled',
+            type: 'email' as const,
+            subject: (item.subject || null) as string | undefined,
+            body: (item.html || item.body || item.htmlBody || null) as string | undefined,
+            dateAdded: item.dateAdded || item.createdAt || undefined,
+            dateUpdated: item.lastUpdated || item.updatedAt || undefined,
+            _source: 'email_builder',
+            _raw: item,
+          } as GHLTemplate);
+        }
+      }
+
+      console.log(`[TemplateSync] [EmailBuilder] ${label} page ${pageNum}: ${templatesFound} templates, ${foldersFound} folders (total in level: ${totalInFolder})`);
+
+      offset += 25;
+      if (items.length === 0) break;
+
+      // Rate limit courtesy
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+
+  console.log(`[TemplateSync] [EmailBuilder] Crawl complete: ${allTemplates.length} templates, ${allFolders.length} folders, ${totalApiCalls} API calls`);
+
+  // Return both folders and templates — folders get templateType='folder' in raw_json
+  return [...allFolders, ...allTemplates];
 }
 
 // ────────────────────────────────────────────────────────────
@@ -249,36 +287,37 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
   let synced = 0;
 
   try {
-    console.log('[TemplateSync] === Starting dual-source template sync ===');
+    console.log('[TemplateSync] === Starting template sync ===');
 
     const locationTemplates = await fetchLocationTemplates();
     console.log(`[TemplateSync] Location templates: ${locationTemplates.length}`);
 
-    const emailBuilderTemplates = await fetchEmailBuilderTemplates();
-    console.log(`[TemplateSync] Email builder templates: ${emailBuilderTemplates.length}`);
+    const emailBuilderItems = await fetchEmailBuilderTemplates();
+    console.log(`[TemplateSync] Email builder items (templates + folders): ${emailBuilderItems.length}`);
 
     // Combine, deduplicating by ID
     const seen = new Set<string>();
-    const allTemplates: GHLTemplate[] = [];
-    for (const t of [...locationTemplates, ...emailBuilderTemplates]) {
+    const allItems: GHLTemplate[] = [];
+    for (const t of [...locationTemplates, ...emailBuilderItems]) {
       const id = t.id || (t as Record<string, unknown>)._id as string;
       if (id && !seen.has(id)) {
         seen.add(id);
-        allTemplates.push(t);
+        allItems.push(t);
       }
     }
 
-    console.log(`[TemplateSync] Combined unique templates: ${allTemplates.length}`);
+    console.log(`[TemplateSync] Combined unique items: ${allItems.length}`);
 
-    for (const t of allTemplates) {
+    for (const t of allItems) {
       try {
         const raw = (t as Record<string, unknown>)._raw || t;
+        const templateType = (raw as Record<string, unknown>).templateType as string || undefined;
         await supabase.from('templates').upsert(
           {
             ghl_template_id: t.id || (t as Record<string, unknown>)._id as string,
             ghl_location_id: locationId,
             name: t.name || 'Untitled',
-            type: t.type || 'email',
+            type: templateType === 'folder' ? 'folder' : (t.type || 'email'),
             subject: t.subject || null,
             body: t.body || null,
             attachments: t.attachments || [],
@@ -297,14 +336,21 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
       }
     }
 
-    if (allTemplates.length > 0) {
-      const activeIds = allTemplates.map(t => t.id || (t as Record<string, unknown>)._id as string).filter(Boolean);
+    if (allItems.length > 0) {
+      const activeIds = allItems.map(t => t.id || (t as Record<string, unknown>)._id as string).filter(Boolean);
       await softDeleteMissing('templates', 'ghl_template_id', activeIds, locationId);
     }
 
     await updateLastSynced('templates');
     await logSyncComplete(syncLogId, synced);
-    console.log(`[TemplateSync] === Sync complete: ${synced} synced, ${errors.length} errors ===`);
+
+    const templateCount = allItems.filter(t => {
+      const raw = (t as Record<string, unknown>)._raw || t;
+      return (raw as Record<string, unknown>).templateType !== 'folder';
+    }).length;
+    const folderCount = allItems.length - templateCount;
+    console.log(`[TemplateSync] === Sync complete: ${synced} synced (${templateCount} templates, ${folderCount} folders), ${errors.length} errors ===`);
+
     return { synced, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
