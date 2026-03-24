@@ -3,6 +3,7 @@ import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
 import { normalizeDirection } from '../utils/normalize.js';
+import { isRealMessage } from '../utils/message-filter.js';
 import { syncConversationsAndMessages } from '../extractor/entity-syncer.js';
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
@@ -154,13 +155,12 @@ export const conversationTools = {
   },
 
   sync_conversations: {
-    description: 'Sync conversations and their messages from GoHighLevel to Supabase cache. If no contactId is provided, runs a bulk sync across all contacts (backfill mode for unsynced contacts, then incremental round-robin for already-synced ones).',
+    description: 'Sync conversations and their messages from GoHighLevel to Supabase cache. If no contactId is provided, runs a bulk sync across all contacts. System activity events (opportunity created, chat ended, etc.) are filtered out — only real messages are stored.',
     inputSchema: z.object({
       contactId: z.string().optional().describe('Optional: sync a specific contact. If omitted, runs bulk sync across all contacts.'),
       limit: z.number().optional().default(50),
     }),
     handler: async (args: { contactId?: string; limit?: number }) => {
-      // If no contactId, run the full bulk sync from entity-syncer
       if (!args.contactId) {
         const result = await syncConversationsAndMessages();
         return {
@@ -172,7 +172,6 @@ export const conversationTools = {
         };
       }
 
-      // Single-contact sync
       const ghl = new GHLClient();
       const supabase = getSupabaseClient();
       const now = nowET();
@@ -196,7 +195,7 @@ export const conversationTools = {
       for (const conv of conversations) {
         try {
           const messageList = await ghl.getAllMessages(conv.id);
-          const persisted = await persistMessages(
+          const { persisted, skipped } = await persistMessages(
             messageList as unknown as Record<string, unknown>[],
             conv.id,
           );
@@ -207,7 +206,13 @@ export const conversationTools = {
         }
       }
 
-      return { synced_conversations: rows.length, synced_messages: totalMessages, status: 'completed', mode: 'single_contact' };
+      return {
+        synced_conversations: rows.length,
+        synced_messages: totalMessages,
+        skipped_activity_events: totalSkipped,
+        status: 'completed',
+        mode: 'single_contact',
+      };
     },
   },
 };

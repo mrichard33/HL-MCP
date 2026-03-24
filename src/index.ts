@@ -114,14 +114,18 @@ async function createAndRegisterSession(
 }
 
 async function startHttpServer(port: number) {
+  const instanceId = crypto.randomUUID();
+  const staticToken = process.env.MCP_AUTH_TOKEN;
   const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  console.log(`[Server] Instance ${instanceId} starting`);
 
   const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
 
-    // CORS headers for MCP and OAuth endpoints
-    const corsPaths = ['/.well-known/oauth-authorization-server', '/authorize', '/token', '/register', '/mcp'];
-    if (corsPaths.includes(url.pathname)) {
+    // CORS headers for OAuth and MCP endpoints
+    const oauthPaths = ['/.well-known/oauth-authorization-server', '/authorize', '/token', '/register'];
+    if (oauthPaths.includes(url.pathname) || url.pathname === '/mcp') {
       const origin = req.headers.origin || '*';
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -140,7 +144,8 @@ async function startHttpServer(port: number) {
       res.end(JSON.stringify({
         status: 'ok',
         name: 'hl-workflow-intelligence-mcp',
-        version: '1.1.0',
+        version: '1.0.0',
+        instance_id: instanceId,
         sync_enabled: process.env.ENABLE_SCHEDULED_SYNC !== 'false',
         ghl_configured: !!(process.env.GHL_API_KEY && process.env.GHL_LOCATION_ID),
         ghl_oauth_configured: isGhlOAuthConfigured(),
@@ -149,9 +154,11 @@ async function startHttpServer(port: number) {
       return;
     }
 
+    // OAuth endpoints — always enabled in HTTP mode for Claude Desktop compatibility
     // OAuth metadata discovery (RFC 8414)
     if (url.pathname === '/.well-known/oauth-authorization-server' && req.method === 'GET') {
       const issuer = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;
+      console.log(`[OAuth] Metadata requested, issuer: ${issuer}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(getOAuthMetadata(issuer)));
       return;
@@ -262,19 +269,24 @@ async function startHttpServer(port: number) {
 
     // MCP endpoint
     if (url.pathname === '/mcp') {
-      // Token-based authentication
+      // Token-based authentication: accept OAuth-issued tokens or optional static MCP_AUTH_TOKEN
       const authHeader = req.headers['authorization'] || '';
       const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-      const staticToken = process.env.MCP_AUTH_TOKEN;
 
-      if (staticToken) {
-        const isStaticMatch = bearerToken === staticToken;
-        const isOAuthValid = bearerToken ? validateAccessToken(bearerToken) : false;
-        if (!isStaticMatch && !isOAuthValid) {
+      if (bearerToken) {
+        const isOAuthValid = validateAccessToken(bearerToken);
+        const isStaticMatch = staticToken ? bearerToken === staticToken : false;
+        if (!isOAuthValid && !isStaticMatch) {
+          console.log(`[OAuth] /mcp: invalid bearer token (instance: ${instanceId})`);
           res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }));
+          res.end(JSON.stringify({ error: 'Unauthorized — invalid or expired Bearer token' }));
           return;
         }
+      } else if (staticToken) {
+        // Static token is configured but no bearer provided — require auth
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized — Bearer token required' }));
+        return;
       }
 
       // Handle DELETE for session cleanup
@@ -338,10 +350,12 @@ async function startHttpServer(port: number) {
   });
 
   httpServer.listen(port, () => {
-    console.log(`HL Workflow Intelligence MCP server v1.1 running on http://0.0.0.0:${port}`);
+    console.log(`HL Workflow Intelligence MCP server running on http://0.0.0.0:${port}`);
+    console.log(`  Instance:      ${instanceId}`);
     console.log(`  Health check:  http://0.0.0.0:${port}/`);
     console.log(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
     console.log(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
+    console.log(`  Static token:  ${staticToken ? 'configured' : 'not set (OAuth-only auth)'}`);
     console.log(`  Diagnostics:   http://0.0.0.0:${port}/diagnostics`);
     console.log(`  CRM OAuth:     http://0.0.0.0:${port}/crm-oauth/authorize`);
   });
