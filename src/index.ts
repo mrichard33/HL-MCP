@@ -52,7 +52,7 @@ import {
 function createMcpServer() {
   const server = new McpServer({
     name: 'hl-workflow-intelligence-mcp',
-    version: '1.0.0',
+    version: '1.1.0',
   });
 
   // Register all tools
@@ -92,11 +92,47 @@ function createMcpServer() {
   return server;
 }
 
+// ─── Session Recovery (v1.1) ─────────────────────────────────────
+// When Railway redeploys, all in-memory sessions are lost. Claude.ai
+// then sends requests with the old mcp-session-id. Instead of rejecting
+// (which forces manual reconnect), we auto-create a new session.
+
+async function createAndRegisterSession(
+  transports: Map<string, StreamableHTTPServerTransport>,
+): Promise<{ transport: StreamableHTTPServerTransport; server: McpServer }> {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => crypto.randomUUID(),
+  });
+  transport.onclose = () => {
+    if (transport.sessionId) {
+      transports.delete(transport.sessionId);
+    }
+  };
+  const server = createMcpServer();
+  await server.connect(transport);
+  return { transport, server };
+}
+
 async function startHttpServer(port: number) {
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+
+    // CORS headers for MCP and OAuth endpoints
+    const corsPaths = ['/.well-known/oauth-authorization-server', '/authorize', '/token', '/register', '/mcp'];
+    if (corsPaths.includes(url.pathname)) {
+      const origin = req.headers.origin || '*';
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id');
+      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+    }
 
     // Health check endpoint
     if (url.pathname === '/' || url.pathname === '/health') {
@@ -104,7 +140,7 @@ async function startHttpServer(port: number) {
       res.end(JSON.stringify({
         status: 'ok',
         name: 'hl-workflow-intelligence-mcp',
-        version: '1.0.0',
+        version: '1.1.0',
         sync_enabled: process.env.ENABLE_SCHEDULED_SYNC !== 'false',
         ghl_configured: !!(process.env.GHL_API_KEY && process.env.GHL_LOCATION_ID),
         ghl_oauth_configured: isGhlOAuthConfigured(),
@@ -141,7 +177,6 @@ async function startHttpServer(port: number) {
 
     // ---- CRM OAuth one-time setup routes ----
 
-    // Step 1: Redirect user to CRM consent screen
     if (url.pathname === '/crm-oauth/authorize' && req.method === 'GET') {
       if (!isGhlOAuthConfigured()) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -157,7 +192,6 @@ async function startHttpServer(port: number) {
       return;
     }
 
-    // Step 2: CRM redirects back here with ?code=...
     if (url.pathname === '/crm-oauth/callback' && req.method === 'GET') {
       const code = url.searchParams.get('code');
       if (!code) {
@@ -181,7 +215,6 @@ async function startHttpServer(port: number) {
 
     // Diagnostics endpoint
     if (url.pathname === '/diagnostics' && req.method === 'GET') {
-      // Protect with MCP_AUTH_TOKEN if set
       const authToken = process.env.MCP_AUTH_TOKEN;
       if (authToken) {
         const authHeader = req.headers['authorization'] || '';
@@ -229,13 +262,12 @@ async function startHttpServer(port: number) {
 
     // MCP endpoint
     if (url.pathname === '/mcp') {
-      // Token-based authentication: accept static MCP_AUTH_TOKEN or OAuth-issued tokens
+      // Token-based authentication
       const authHeader = req.headers['authorization'] || '';
       const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
       const staticToken = process.env.MCP_AUTH_TOKEN;
 
       if (staticToken) {
-        // If a static token is configured, require either it or a valid OAuth token
         const isStaticMatch = bearerToken === staticToken;
         const isOAuthValid = bearerToken ? validateAccessToken(bearerToken) : false;
         if (!isStaticMatch && !isOAuthValid) {
@@ -243,10 +275,8 @@ async function startHttpServer(port: number) {
           res.end(JSON.stringify({ error: 'Unauthorized — invalid or missing Bearer token' }));
           return;
         }
-      } else if (bearerToken) {
-        // No static token configured, but a bearer was provided — check if it's a valid OAuth token
-        // (allow through even if invalid, to maintain backwards compatibility with no-auth mode)
       }
+
       // Handle DELETE for session cleanup
       if (req.method === 'DELETE') {
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
@@ -260,30 +290,23 @@ async function startHttpServer(port: number) {
         return;
       }
 
-      // For new initialize requests (POST without session), create a new transport and server
       if (req.method === 'POST') {
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
+        // ── Known session — route to its transport
         if (sessionId && transports.has(sessionId)) {
-          // Existing session — reuse transport
           const transport = transports.get(sessionId)!;
           await transport.handleRequest(req, res);
           return;
         }
 
-        // New session — create transport + server
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => crypto.randomUUID(),
-        });
+        // ── Unknown session after redeploy — log for visibility
+        if (sessionId) {
+          console.log(`[MCP] Session recovery: unknown session ${sessionId.slice(0, 8)}... — creating new session`);
+        }
 
-        transport.onclose = () => {
-          if (transport.sessionId) {
-            transports.delete(transport.sessionId);
-          }
-        };
-
-        const server = createMcpServer();
-        await server.connect(transport);
+        // ── Create new session (handles both fresh connects and recovery)
+        const { transport } = await createAndRegisterSession(transports);
         await transport.handleRequest(req, res);
 
         if (transport.sessionId) {
@@ -315,7 +338,7 @@ async function startHttpServer(port: number) {
   });
 
   httpServer.listen(port, () => {
-    console.log(`HL Workflow Intelligence MCP server running on http://0.0.0.0:${port}`);
+    console.log(`HL Workflow Intelligence MCP server v1.1 running on http://0.0.0.0:${port}`);
     console.log(`  Health check:  http://0.0.0.0:${port}/`);
     console.log(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
     console.log(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
