@@ -312,12 +312,19 @@ async function startHttpServer(port: number) {
           return;
         }
 
-        // ── Unknown session after redeploy — log for visibility
+        // ── Unknown session after redeploy — return 404 per MCP spec
+        // so the client knows to re-initialize with a fresh handshake.
+        // The old v1.1 approach of creating a new session and passing the
+        // stale request broke because the SDK rejects non-initialize
+        // requests on a brand-new transport ("Server not initialized").
         if (sessionId) {
-          console.log(`[MCP] Session recovery: unknown session ${sessionId.slice(0, 8)}... — creating new session`);
+          console.log(`[MCP] Unknown session ${sessionId.slice(0, 8)}... — returning 404 to trigger client re-init`);
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Session not found — please re-initialize' }));
+          return;
         }
 
-        // ── Create new session (handles both fresh connects and recovery)
+        // ── No session ID — fresh connect (initialize handshake)
         const { transport } = await createAndRegisterSession(transports);
         await transport.handleRequest(req, res);
 
