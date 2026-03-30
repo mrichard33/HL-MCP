@@ -30,21 +30,123 @@ function wrapSelectForJsonAgg(queryText: string): string {
   return `SELECT json_agg(t) FROM (${trimmed}) t`;
 }
 
+/**
+ * Auto-fix jsonb ILIKE/LIKE errors by casting jsonb expressions to ::text.
+ * 
+ * PostgreSQL throws "operator does not exist: jsonb ~~* unknown" when ILIKE
+ * is used directly on a jsonb column. This function detects jsonb arrow 
+ * expressions (-> not ->>) followed by ILIKE/LIKE and wraps them with ::text.
+ * 
+ * Handles patterns like:
+ *   t.value->'attributes'->'tags' ILIKE '%foo%'
+ *     → (t.value->'attributes'->'tags')::text ILIKE '%foo%'
+ * 
+ *   t.value->'attributes'->'tags'::text ILIKE '%foo%'  (misplaced cast)
+ *     → (t.value->'attributes'->'tags')::text ILIKE '%foo%'
+ * 
+ * Does NOT modify ->> expressions (already return text).
+ */
+function autoFixJsonbLike(query: string): string {
+  let fixed = query;
+  let changed = false;
+
+  // Pattern 1: jsonb_path ILIKE/LIKE (no ::text at all)
+  // Matches: something->'key' ILIKE or something->'key'  ILIKE
+  // The -> returns jsonb, needs ::text cast
+  // Negative lookahead ensures we don't match ->> (which returns text)
+  fixed = fixed.replace(
+    /(\b\w+(?:\.[\w.]+)?(?:(?:->>'[^']*')|(?:->'[^']*'))*(?:->'[^']*'))(\s+)(I?LIKE\s)/gi,
+    (match, expr, space, like) => {
+      // If the expression already ends with ::text, skip
+      if (expr.trim().endsWith('::text')) return match;
+      // If the last accessor is ->> (returns text already), skip
+      if (/->>'[^']*'\s*$/.test(expr)) return match;
+      changed = true;
+      return `(${expr})::text${space}${like}`;
+    }
+  );
+
+  // Pattern 2: jsonb_path::text ILIKE (misplaced cast - ::text applied to string literal)
+  // Example: t.value->'attributes'->'tags'::text ILIKE '%foo%'
+  // Here ::text applies to the literal 'tags' (already text), not the jsonb result
+  // Fix: wrap the whole expression in parens before ::text
+  fixed = fixed.replace(
+    /(\b\w+(?:\.[\w.]+)?(?:->>?'[^']*')*)->('[^']*')::text(\s+)(I?LIKE\s)/gi,
+    (match, prefix, key, space, like) => {
+      changed = true;
+      return `(${prefix}->${key})::text${space}${like}`;
+    }
+  );
+
+  // Pattern 3: Already-parenthesized expressions missing ::text
+  // Example: (t.value->'attributes'->'tags') ILIKE '%foo%'  
+  // Fix: add ::text after the closing paren
+  fixed = fixed.replace(
+    /(\([^()]*->'[^']*'\s*\))(\s+)(I?LIKE\s)/gi,
+    (match, expr, space, like) => {
+      if (expr.includes('::text')) return match;
+      if (/->>'[^']*'\s*\)$/.test(expr)) return match;
+      changed = true;
+      return `${expr}::text${space}${like}`;
+    }
+  );
+
+  return changed ? fixed : query;
+}
+
 export async function runSQL(queryText: string): Promise<unknown> {
   const supabase = getSupabaseClient();
   const wrapped = wrapSelectForJsonAgg(queryText);
   const { data, error } = await supabase.rpc('run_sql', { query_text: wrapped });
-  if (error) throw new Error(`SQL execution error: ${error.message}`);
 
-  // json_agg returns an array — for single-value queries (COUNT, MAX, etc.)
-  // unwrap to return just the value for a cleaner caller experience
-  if (Array.isArray(data) && data.length === 1 && typeof data[0] === 'object') {
-    const keys = Object.keys(data[0]);
-    if (keys.length === 1) {
-      return data[0][keys[0]];
+  if (error) {
+    // Auto-fix: jsonb ILIKE/LIKE type mismatch — cast to text and retry once
+    const isJsonbLikeError =
+      error.message.includes('operator does not exist') &&
+      error.message.includes('jsonb') &&
+      (error.message.includes('~~') || error.message.includes('LIKE'));
+
+    if (isJsonbLikeError) {
+      const fixedQuery = autoFixJsonbLike(queryText);
+      if (fixedQuery !== queryText) {
+        const wrappedFixed = wrapSelectForJsonAgg(fixedQuery);
+        const { data: retryData, error: retryError } = await supabase.rpc('run_sql', {
+          query_text: wrappedFixed,
+        });
+        if (retryError) {
+          throw new Error(
+            `SQL execution error (auto-fix retry failed): ${retryError.message}\n` +
+            `Original error: ${error.message}\n` +
+            `Attempted fix: ${fixedQuery}`
+          );
+        }
+        return unwrapSingleValue(retryData);
+      }
+      // Could not auto-fix — provide helpful guidance
+      throw new Error(
+        `SQL execution error: ${error.message}\n` +
+        `Hint: ILIKE/LIKE cannot operate on jsonb columns directly. ` +
+        `Cast jsonb expressions to text: (jsonb_expr)::text ILIKE '%pattern%'`
+      );
     }
+
+    throw new Error(`SQL execution error: ${error.message}`);
   }
 
+  return unwrapSingleValue(data);
+}
+
+/**
+ * json_agg returns an array — for single-value queries (COUNT, MAX, etc.)
+ * unwrap to return just the value for a cleaner caller experience.
+ */
+function unwrapSingleValue(data: unknown): unknown {
+  if (Array.isArray(data) && data.length === 1 && typeof data[0] === 'object') {
+    const keys = Object.keys(data[0] as Record<string, unknown>);
+    if (keys.length === 1) {
+      return (data[0] as Record<string, unknown>)[keys[0]];
+    }
+  }
   return data;
 }
 
