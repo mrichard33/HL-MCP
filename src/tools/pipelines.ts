@@ -63,8 +63,11 @@ export const pipelineTools = {
     handler: async (args: Record<string, unknown>) => {
       const ghl = new GHLClient();
       // GHL API requires 'pipelineStageId', not 'stageId'
-      const { stageId, ...rest } = args;
-      const data = { ...rest, ...(stageId ? { pipelineStageId: stageId } : {}) };
+      const data = { ...args };
+      if (data.stageId) {
+        data.pipelineStageId = data.stageId;
+        delete data.stageId;
+      }
       return ghl.createOpportunity(data);
     },
   },
@@ -80,9 +83,12 @@ export const pipelineTools = {
     }),
     handler: async (args: { opportunityId: string; [key: string]: unknown }) => {
       const ghl = new GHLClient();
+      const { opportunityId, ...data } = args;
       // GHL API requires 'pipelineStageId', not 'stageId'
-      const { opportunityId, stageId, ...rest } = args;
-      const data = { ...rest, ...(stageId ? { pipelineStageId: stageId } : {}) };
+      if (data.stageId) {
+        data.pipelineStageId = data.stageId;
+        delete data.stageId;
+      }
       return ghl.updateOpportunity(opportunityId, data);
     },
   },
