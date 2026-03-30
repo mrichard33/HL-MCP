@@ -306,6 +306,10 @@ export class GHLClient {
   }
 
   // ---- Conversations ----
+  // NOTE: Switched from requestWithOAuth to request (API key auth) on 2026-03-29.
+  // OAuth was returning 401 "not authorized for this scope" since March 24,
+  // silently breaking all conversation/message syncs. The standard API key
+  // supports these endpoints and is used by all other entity types.
 
   async getConversations(params?: { contactId?: string; limit?: number; startAfter?: string; startAfterId?: string }): Promise<{ conversations: GHLConversation[] }> {
     const reqParams: Record<string, string> = { locationId: this.locationId };
@@ -313,7 +317,7 @@ export class GHLClient {
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.startAfter) reqParams.startAfter = params.startAfter;
     if (params?.startAfterId) reqParams.startAfterId = params.startAfterId;
-    return this.requestWithOAuth('/conversations/search', { method: 'GET', params: reqParams });
+    return this.request('/conversations/search', { method: 'GET', params: reqParams });
   }
 
   async getAllConversations(contactId: string): Promise<GHLConversation[]> {
@@ -324,7 +328,7 @@ export class GHLClient {
     const MAX_PAGES = 100;
     do {
       const result: { conversations: GHLConversation[]; meta?: GHLPaginationMeta } =
-        await this.requestWithOAuth('/conversations/search', {
+        await this.request('/conversations/search', {
           method: 'GET',
           params: { locationId: this.locationId, contactId, limit: '100', ...(startAfter ? { startAfter } : {}), ...(startAfterId ? { startAfterId } : {}) },
         });
@@ -338,7 +342,7 @@ export class GHLClient {
   }
 
   async getConversation(conversationId: string): Promise<GHLConversation> {
-    const res = await this.requestWithOAuth<{ conversation: GHLConversation }>(`/conversations/${conversationId}`);
+    const res = await this.request<{ conversation: GHLConversation }>(`/conversations/${conversationId}`);
     return res.conversation;
   }
 
@@ -347,7 +351,7 @@ export class GHLClient {
   async getMessages(conversationId: string, params?: { lastMessageId?: string }): Promise<{ messages: unknown }> {
     const reqParams: Record<string, string> = {};
     if (params?.lastMessageId) reqParams.lastMessageId = params.lastMessageId;
-    return this.requestWithOAuth(`/conversations/${conversationId}/messages`, { params: reqParams });
+    return this.request(`/conversations/${conversationId}/messages`, { params: reqParams });
   }
 
   /**
@@ -381,7 +385,7 @@ export class GHLClient {
   }
 
   async sendMessage(data: { conversationId: string; type: string; message: string; contactId: string }): Promise<GHLMessage> {
-    const res = await this.requestWithOAuth<{ message: GHLMessage }>(`/conversations/messages`, { method: 'POST', body: data });
+    const res = await this.request<{ message: GHLMessage }>(`/conversations/messages`, { method: 'POST', body: data });
     return res.message;
   }
 
