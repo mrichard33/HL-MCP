@@ -1,9 +1,13 @@
 /**
  * GitHub REST API v3 wrapper for the HL MCP repository.
  * 
- * v1.1: Added repo override support — all functions accept an optional `repo` parameter
- * to query any repository the GITHUB_PAT has access to. Defaults to GITHUB_REPO env var.
- * This enables cross-repo access (e.g. HL MCP reading LP MCP repo for diagnostics).
+ * v1.2: Added n8n repo support alongside LP MCP cross-repo access.
+ * All functions accept an optional `repo` parameter to query any repository
+ * the GITHUB_PAT has access to. Defaults to GITHUB_REPO env var.
+ * 
+ * Cross-repo access:
+ * - LP MCP: getLpRepo() → LP_GITHUB_REPO env var
+ * - n8n:    getN8nRepo() → N8N_GITHUB_REPO env var
  */
 
 const GITHUB_API = 'https://api.github.com';
@@ -25,10 +29,17 @@ function getRepo(repoOverride?: string): string {
 }
 
 /**
- * Get the LP MCP repo name from env, or fall back to convention.
+ * Get the LP MCP repo name from env.
  */
 export function getLpRepo(): string {
-  return process.env.LP_GITHUB_REPO || 'mrichard33/lp-mcp-server';
+  return process.env.LP_GITHUB_REPO || 'mrichard33/LP-MCP';
+}
+
+/**
+ * Get the n8n repo name from env.
+ */
+export function getN8nRepo(): string {
+  return process.env.N8N_GITHUB_REPO || 'mrichard33/n8n';
 }
 
 async function api(path: string, options: RequestInit = {}): Promise<unknown> {
@@ -38,10 +49,32 @@ async function api(path: string, options: RequestInit = {}): Promise<unknown> {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`GitHub API ${res.status}: ${text}`);
+    throw new Error(`GitHub ${res.status}: ${text}`);
   }
   return res.json();
 }
+
+// ─── Branch listing (new in v1.2) ────────────────────────────────
+
+export async function listBranches(repo?: string): Promise<unknown> {
+  const r = getRepo(repo);
+  const data = (await api(`/repos/${r}/branches?per_page=100`)) as Array<{
+    name: string;
+    commit: { sha: string; url: string };
+    protected: boolean;
+  }>;
+  return {
+    repo: r,
+    branches: data.map((b) => ({
+      name: b.name,
+      sha: b.commit.sha.slice(0, 7),
+      protected: b.protected,
+    })),
+    count: data.length,
+  };
+}
+
+// ─── Existing functions (all with repo override) ─────────────────
 
 export async function listFiles(path = '', branch?: string, repo?: string): Promise<unknown> {
   const r = getRepo(repo);
@@ -58,7 +91,7 @@ export async function listFiles(path = '', branch?: string, repo?: string): Prom
     branch: branch || 'default',
     files: Array.isArray(data)
       ? data.map((f) => ({ name: f.name, type: f.type, size: f.size, path: f.path }))
-      : data, // single file case
+      : data,
   };
 }
 
@@ -127,11 +160,9 @@ export async function getRecentCommits(branch?: string, limit = 10, repo?: strin
 
 export async function createBranch(branchName: string, fromBranch = 'main', repo?: string): Promise<unknown> {
   const r = getRepo(repo);
-  // Get the SHA of the source branch
   const refData = (await api(`/repos/${r}/git/ref/heads/${encodeURIComponent(fromBranch)}`)) as {
     object: { sha: string };
   };
-  // Create the new branch
   const data = await api(`/repos/${r}/git/refs`, {
     method: 'POST',
     body: JSON.stringify({
