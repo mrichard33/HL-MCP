@@ -7,6 +7,7 @@ import {
   createBranch,
   createPullRequest,
   searchCode,
+  getLpRepo,
 } from '../../admin/github-client.js';
 
 export const githubTools = {
@@ -128,6 +129,100 @@ export const githubTools = {
     }),
     handler: async (args: { query: string }) => {
       return await searchCode(args.query);
+    },
+  },
+
+  // ─── LP MCP Cross-Repo Tools (diagnostics when LP MCP is down) ───
+
+  lp_github_list_files: {
+    description:
+      'CROSS-REPO: List files in the LP MCP GitHub repository. Use when LP MCP is down to inspect code, check deployment state, or diagnose issues.',
+    inputSchema: z.object({
+      path: z.string().optional().default('').describe('Directory path to list. Empty for root.'),
+      branch: z.string().optional().default('main').describe('Branch name (default: main)'),
+    }),
+    handler: async (args: { path?: string; branch?: string }) => {
+      const repo = getLpRepo();
+      return await listFiles(args.path, args.branch, repo);
+    },
+  },
+
+  lp_github_get_file: {
+    description:
+      'CROSS-REPO: Get a file from the LP MCP GitHub repository. Use when LP MCP is down to read code, check configs, or diagnose crashes.',
+    inputSchema: z.object({
+      path: z.string().describe('File path (e.g. "src/index.js", "package.json")'),
+      branch: z.string().optional().default('main').describe('Branch name (default: main)'),
+    }),
+    handler: async (args: { path: string; branch?: string }) => {
+      const repo = getLpRepo();
+      return await getFile(args.path, args.branch, repo);
+    },
+  },
+
+  lp_github_get_recent_commits: {
+    description:
+      'CROSS-REPO: Get recent commits from the LP MCP GitHub repository. Use to check what was deployed, compare branches, or diagnose deploy issues.',
+    inputSchema: z.object({
+      branch: z.string().optional().default('main').describe('Branch name (default: main)'),
+      limit: z.number().optional().default(10).describe('Number of commits (max 30)'),
+    }),
+    handler: async (args: { branch?: string; limit?: number }) => {
+      const repo = getLpRepo();
+      return await getRecentCommits(args.branch, args.limit, repo);
+    },
+  },
+
+  lp_github_search_code: {
+    description:
+      'CROSS-REPO: Search code in the LP MCP GitHub repository. Use when LP MCP is down to find functions, configs, or debug issues.',
+    inputSchema: z.object({
+      query: z.string().describe('Search query'),
+    }),
+    handler: async (args: { query: string }) => {
+      const repo = getLpRepo();
+      return await searchCode(args.query, repo);
+    },
+  },
+
+  lp_github_create_or_update_file: {
+    description:
+      'CROSS-REPO: Commit a file to the LP MCP GitHub repository. ALWAYS use dev branch. Requires confirm: true.',
+    inputSchema: z.object({
+      path: z.string().describe('File path'),
+      content: z.string().describe('File content'),
+      message: z.string().describe('Commit message'),
+      branch: z.string().optional().default('dev').describe('Target branch (default: dev). NEVER commit to main.'),
+      sha: z.string().optional().describe('Current file SHA (required for updates)'),
+      confirm: z.boolean().optional().default(false).describe('Must be true to execute.'),
+    }),
+    handler: async (args: {
+      path: string;
+      content: string;
+      message: string;
+      branch?: string;
+      sha?: string;
+      confirm?: boolean;
+    }) => {
+      const repo = getLpRepo();
+      const branch = args.branch || 'dev';
+      if (!args.confirm) {
+        return {
+          preview: true,
+          repo,
+          path: args.path,
+          branch,
+          message: args.message,
+          content_length: args.content.length,
+          warning: branch === 'main'
+            ? 'BLOCKED: Cannot commit to main on LP MCP through cross-repo tools. Use dev branch.'
+            : 'Pass confirm: true to execute.',
+        };
+      }
+      if (branch === 'main') {
+        return { error: 'BLOCKED: Cannot commit to main on LP MCP through cross-repo tools. Ryan must merge dev→main manually.' };
+      }
+      return await createOrUpdateFile(args.path, args.content, args.message, branch, args.sha, repo);
     },
   },
 };
