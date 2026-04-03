@@ -3,6 +3,13 @@ import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection, extractMessageBody } from '../utils/normalize.js';
+import {
+  emitSystemEvent,
+  contactToSystemEvent,
+  opportunityToSystemEvent,
+  appointmentToSystemEvent,
+  messageToSystemEvent,
+} from './event-bus.js';
 
 /**
  * Creates a deterministic event hash for deduplication.
@@ -102,6 +109,12 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
       await createLeadEvent(id, action, id, stableTs, payload);
     }
   }
+
+  // ── Forward to agentic event bus (non-blocking) ──
+  const systemEvent = contactToSystemEvent(payload);
+  if (systemEvent) {
+    emitSystemEvent(systemEvent).catch(() => {}); // fire-and-forget
+  }
 }
 
 async function handleOpportunityWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -135,6 +148,12 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
   const eventType = payload.previousStageId ? 'pipeline_stage_changed' : 'opportunity_created';
   const stableTs = (payload.dateUpdated || payload.updatedAt || payload.dateAdded || payload.createdAt || now) as string;
   await createLeadEvent(contactId, eventType, id, stableTs, payload);
+
+  // ── Forward to agentic event bus (non-blocking) ──
+  const systemEvent = opportunityToSystemEvent(payload);
+  if (systemEvent) {
+    emitSystemEvent(systemEvent).catch(() => {});
+  }
 }
 
 async function handleAppointmentWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -164,6 +183,12 @@ async function handleAppointmentWebhook(payload: Record<string, unknown>): Promi
   const eventType = deriveAppointmentEventType((payload.status as string) || '');
   const stableTs = (payload.startTime || now) as string;
   await createLeadEvent(contactId, eventType, id, stableTs, payload);
+
+  // ── Forward to agentic event bus (non-blocking) ──
+  const systemEvent = appointmentToSystemEvent(payload);
+  if (systemEvent) {
+    emitSystemEvent(systemEvent).catch(() => {});
+  }
 }
 
 async function handleMessageWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -191,6 +216,12 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
   const eventType = deriveMessageEventType({ direction, type: msgType, status: payload.status as string });
   const stableTs = (payload.dateAdded || now) as string;
   await createLeadEvent(contactId, eventType, id, stableTs, payload);
+
+  // ── Forward inbound messages to agentic event bus (non-blocking) ──
+  const systemEvent = messageToSystemEvent(payload);
+  if (systemEvent) {
+    emitSystemEvent(systemEvent).catch(() => {});
+  }
 }
 
 async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -229,6 +260,18 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
     // Non-critical — log but don't fail the webhook
     console.warn(`[Webhook] Failed to insert workflow_execution for workflow ${id}`);
   }
+
+  // ── Forward to agentic event bus (non-blocking) ──
+  emitSystemEvent({
+    event_type: 'workflow.contact_added',
+    source: 'ghl',
+    entity_type: 'workflow',
+    entity_id: id,
+    ghl_contact_id: contactId,
+    payload,
+    priority: 'normal',
+    event_timestamp: stableTs,
+  }).catch(() => {});
 }
 
 // ---- Main webhook router ----
