@@ -50,6 +50,10 @@ export class GHLClient {
     this.firebaseRefreshToken = process.env.GHL_FIREBASE_REFRESH_TOKEN;
   }
 
+  /**
+   * Standard API key request with 429 retry logic.
+   * Retries up to 3 times with exponential backoff (2s, 4s, 8s) on rate limit.
+   */
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const url = new URL(path, this.baseUrl);
     if (options.params) {
@@ -62,16 +66,33 @@ export class GHLClient {
       'Content-Type': 'application/json',
       Version: '2021-07-28',
     };
-    const response = await fetch(url.toString(), {
-      method: options.method || 'GET',
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await fetch(url.toString(), {
+        method: options.method || 'GET',
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+
+      if (response.status === 429) {
+        const retryAfter = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+        console.warn(`[GHL] 429 rate limited on ${path}, retrying in ${retryAfter}ms (attempt ${attempt + 1}/3)`);
+        await new Promise(r => setTimeout(r, retryAfter));
+        lastError = new Error(`GHL API error 429: Too Many Requests`);
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+      }
+
+      return response.json() as Promise<T>;
     }
-    return response.json() as Promise<T>;
+
+    // All retries exhausted — throw the last 429 error
+    throw lastError!;
   }
 
   private async requestWithOAuth<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -310,6 +331,7 @@ export class GHLClient {
   // OAuth was returning 401 "not authorized for this scope" since March 24,
   // silently breaking all conversation/message syncs. The standard API key
   // supports these endpoints and is used by all other entity types.
+  // 2026-04-04: Added 429 retry logic to request() to match requestWithOAuth().
 
   async getConversations(params?: { contactId?: string; limit?: number; startAfter?: string; startAfterId?: string }): Promise<{ conversations: GHLConversation[] }> {
     const reqParams: Record<string, string> = { locationId: this.locationId };
