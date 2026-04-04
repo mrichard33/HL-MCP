@@ -365,11 +365,12 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
   }
 }
 
-// ---- Conversation & Message Sync (every 15 min) — direct GHL OAuth calls ----
+// ---- Conversation & Message Sync (every 15 min) ----
 
-const BATCH_SIZE = 3;
-const BATCH_DELAY_MS = 3000; // 3s pause between batches to stay under GHL rate limits
-const MAX_CONTACTS_PER_SYNC = 500; // Increased from 200 for faster backfill
+const BATCH_SIZE = 2; // Reduced from 3 to lower concurrent API pressure
+const BATCH_DELAY_MS = 5000; // 5s pause between batches (was 3s) to stay under GHL rate limits
+const INTER_CONV_DELAY_MS = 1000; // 1s pause between conversations within a contact
+const MAX_CONTACTS_PER_SYNC = 300; // Reduced from 500 to lower rate-limit pressure per cycle
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
 function toISODate(value: string | number | null | undefined): string | null {
@@ -492,6 +493,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
     let totalConversations = 0;
     let totalMessages = 0;
+    let totalMessageFailures = 0;
     const now = nowET();
 
     // Process contacts in batches
@@ -504,6 +506,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
           const contactId = contact.ghl_contact_id;
           let convCount = 0;
           let msgCount = 0;
+          let msgFailures = 0;
 
           try {
             // Fetch conversations for this contact
@@ -520,8 +523,10 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
               }, { onConflict: 'ghl_conversation_id' });
             }
 
-            for (const conv of conversations) {
-              // Upsert conversation
+            for (let ci = 0; ci < conversations.length; ci++) {
+              const conv = conversations[ci];
+
+              // Upsert conversation metadata (synced_at set to now initially)
               const { error: convError } = await supabase.from('conversations').upsert(
                 {
                   ghl_conversation_id: conv.id,
@@ -542,6 +547,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
               convCount++;
 
               // Fetch and upsert messages for this conversation (with pagination)
+              let messagesSucceeded = false;
               try {
                 const messageList = await ghl.getAllMessages(conv.id, 20);
                 for (const msg of messageList) {
@@ -564,8 +570,29 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                   }
                   msgCount++;
                 }
+                messagesSucceeded = true;
               } catch (msgErr) {
-                errors.push(`Messages for conv ${conv.id}: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`);
+                const errMsg = msgErr instanceof Error ? msgErr.message : String(msgErr);
+                errors.push(`Messages for conv ${conv.id}: ${errMsg}`);
+                msgFailures++;
+
+                // CRITICAL FIX: Reset synced_at to a stale timestamp so this
+                // conversation gets retried in the next round-robin cycle.
+                // Without this, the conversation appears "synced" but has no messages.
+                try {
+                  await supabase.from('conversations')
+                    .update({ synced_at: '2000-01-01T00:00:00Z' })
+                    .eq('ghl_conversation_id', conv.id);
+                  console.warn(`[EntitySync] Reset synced_at for conv ${conv.id} (message fetch failed: ${errMsg})`);
+                } catch (resetErr) {
+                  // Non-fatal — worst case it just won't be prioritized for retry
+                  console.error(`[EntitySync] Failed to reset synced_at for conv ${conv.id}`);
+                }
+              }
+
+              // Small delay between conversations to reduce rate limit pressure
+              if (ci < conversations.length - 1) {
+                await sleep(INTER_CONV_DELAY_MS);
               }
             }
           } catch (err) {
@@ -574,7 +601,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
             console.error(`[EntitySync] Failed to sync conversations for contact ${contactId}: ${errMsg}`);
           }
 
-          return { convCount, msgCount };
+          return { convCount, msgCount, msgFailures };
         }),
       );
 
@@ -583,6 +610,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
         if (result.status === 'fulfilled') {
           totalConversations += result.value.convCount;
           totalMessages += result.value.msgCount;
+          totalMessageFailures += result.value.msgFailures;
         }
       }
 
@@ -602,7 +630,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     await updateLastSynced('messages');
     await logSyncComplete(syncLogId, totalConversations);
     await logSyncComplete(msgSyncLogId, totalMessages);
-    console.log(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}`);
+    console.log(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}${totalMessageFailures > 0 ? `, Message fetch failures: ${totalMessageFailures} (will retry)` : ''}`);
 
     if (errors.length > 0) {
       console.error(`[EntitySync] ${errors.length} errors during conversation sync:`);
