@@ -73,13 +73,17 @@ export const pipelineTools = {
   },
 
   update_opportunity: {
-    description: 'Update an existing opportunity in GoHighLevel.',
+    description: 'Update an existing opportunity in GoHighLevel. Supports custom fields via customFields array.',
     inputSchema: z.object({
       opportunityId: z.string().describe('Opportunity ID'),
       name: z.string().optional(),
       stageId: z.string().optional(),
       status: z.enum(['open', 'won', 'lost', 'abandoned']).optional(),
       monetaryValue: z.number().optional(),
+      customFields: z.array(z.object({
+        id: z.string().describe('Custom field ID'),
+        field_value: z.union([z.string(), z.number(), z.boolean()]).describe('Value to set'),
+      })).optional().describe('Array of custom field updates. Each item needs id (field ID) and field_value.'),
     }),
     handler: async (args: { opportunityId: string; [key: string]: unknown }) => {
       const ghl = new GHLClient();
