@@ -16,7 +16,7 @@ import type {
 } from '../types/ghl.js';
 import { isOAuthConfigured, getOAuthAccessToken } from './ghl-oauth.js';
 import { isRealMessage } from '../utils/message-filter.js';
-import { acquireToken, report429 } from './ghl-rate-limiter.js';
+import { acquireToken, report429, reportSuccess } from './ghl-rate-limiter.js';
 
 const DEFAULT_BASE_URL = 'https://services.leadconnectorhq.com';
 const BACKEND_BASE_URL = 'https://backend.leadconnectorhq.com';
@@ -53,9 +53,9 @@ export class GHLClient {
 
   /**
    * Rate-limited API key request.
-   * Acquires a token from the shared rate limiter before each call.
-   * On 429: reports to rate limiter (drains bucket + pauses 60s) and throws immediately.
-   * No blind retries — the rate limiter handles backpressure via queue.
+   * - acquireToken() before each call (waits if paused or no tokens)
+   * - report429() on 429 (pauses 5min+, exponential backoff)
+   * - reportSuccess() on success (resets consecutive 429 counter)
    */
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     await acquireToken();
@@ -88,12 +88,12 @@ export class GHLClient {
       throw new Error(`GHL API error ${response.status}: ${errorBody}`);
     }
 
+    reportSuccess();
     return response.json() as Promise<T>;
   }
 
   /**
-   * Rate-limited OAuth request.
-   * Same rate limiter as request() — shared token bucket.
+   * Rate-limited OAuth request. Same shared token bucket.
    */
   private async requestWithOAuth<T>(path: string, options: RequestOptions = {}): Promise<T> {
     await acquireToken();
@@ -135,12 +135,13 @@ export class GHLClient {
       throw new Error(`GHL API error ${response.status}: ${errorBody}`);
     }
 
+    reportSuccess();
     return response.json() as Promise<T>;
   }
 
   get isOAuthConfigured(): boolean { return isOAuthConfigured(); }
 
-  // ---- Firebase Auth ----
+  // ---- Firebase Auth (NOT rate-limited — different API) ----
 
   private get hasFirebaseAuth(): boolean { return !!(this.firebaseApiKey && this.firebaseRefreshToken); }
   get isFirebaseAuthConfigured(): boolean { return this.hasFirebaseAuth; }
