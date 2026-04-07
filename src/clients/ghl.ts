@@ -16,6 +16,7 @@ import type {
 } from '../types/ghl.js';
 import { isOAuthConfigured, getOAuthAccessToken } from './ghl-oauth.js';
 import { isRealMessage } from '../utils/message-filter.js';
+import { acquireToken, report429 } from './ghl-rate-limiter.js';
 
 const DEFAULT_BASE_URL = 'https://services.leadconnectorhq.com';
 const BACKEND_BASE_URL = 'https://backend.leadconnectorhq.com';
@@ -51,10 +52,14 @@ export class GHLClient {
   }
 
   /**
-   * Standard API key request with 429 retry logic.
-   * Retries up to 3 times with exponential backoff (2s, 4s, 8s) on rate limit.
+   * Rate-limited API key request.
+   * Acquires a token from the shared rate limiter before each call.
+   * On 429: reports to rate limiter (drains bucket + pauses 60s) and throws immediately.
+   * No blind retries — the rate limiter handles backpressure via queue.
    */
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+    await acquireToken();
+
     const url = new URL(path, this.baseUrl);
     if (options.params) {
       for (const [key, value] of Object.entries(options.params)) {
@@ -67,35 +72,32 @@ export class GHLClient {
       Version: '2021-07-28',
     };
 
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const response = await fetch(url.toString(), {
-        method: options.method || 'GET',
-        headers,
-        body: options.body ? JSON.stringify(options.body) : undefined,
-      });
+    const response = await fetch(url.toString(), {
+      method: options.method || 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
 
-      if (response.status === 429) {
-        const retryAfter = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
-        console.warn(`[GHL] 429 rate limited on ${path}, retrying in ${retryAfter}ms (attempt ${attempt + 1}/3)`);
-        await new Promise(r => setTimeout(r, retryAfter));
-        lastError = new Error(`GHL API error 429: Too Many Requests`);
-        continue;
-      }
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`GHL API error ${response.status}: ${errorBody}`);
-      }
-
-      return response.json() as Promise<T>;
+    if (response.status === 429) {
+      report429();
+      throw new Error(`GHL API error 429: Too Many Requests`);
     }
 
-    // All retries exhausted — throw the last 429 error
-    throw lastError!;
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+    }
+
+    return response.json() as Promise<T>;
   }
 
+  /**
+   * Rate-limited OAuth request.
+   * Same rate limiter as request() — shared token bucket.
+   */
   private async requestWithOAuth<T>(path: string, options: RequestOptions = {}): Promise<T> {
+    await acquireToken();
+
     const url = new URL(path, this.baseUrl);
     if (options.params) {
       for (const [key, value] of Object.entries(options.params)) {
@@ -113,30 +115,27 @@ export class GHLClient {
       'Content-Type': 'application/json',
       Version: '2021-07-28',
     };
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const response = await fetch(url.toString(), {
-        method: options.method || 'GET',
-        headers,
-        body: options.body ? JSON.stringify(options.body) : undefined,
-      });
-      if (response.status === 429) {
-        const retryAfter = Math.pow(2, attempt + 1) * 1000;
-        console.warn(`[GHL] 429 rate limited on ${path}, retrying in ${retryAfter}ms (attempt ${attempt + 1}/3)`);
-        await new Promise(r => setTimeout(r, retryAfter));
-        lastError = new Error(`GHL API error 429: Too Many Requests`);
-        continue;
-      }
-      if (!response.ok) {
-        const errorBody = await response.text();
-        if (response.status === 401 || response.status === 403) {
-          console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
-        }
-        throw new Error(`GHL API error ${response.status}: ${errorBody}`);
-      }
-      return response.json() as Promise<T>;
+
+    const response = await fetch(url.toString(), {
+      method: options.method || 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (response.status === 429) {
+      report429();
+      throw new Error(`GHL API error 429: Too Many Requests`);
     }
-    throw lastError!;
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      if (response.status === 401 || response.status === 403) {
+        console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
+      }
+      throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+    }
+
+    return response.json() as Promise<T>;
   }
 
   get isOAuthConfigured(): boolean { return isOAuthConfigured(); }
@@ -327,11 +326,6 @@ export class GHLClient {
   }
 
   // ---- Conversations ----
-  // NOTE: Switched from requestWithOAuth to request (API key auth) on 2026-03-29.
-  // OAuth was returning 401 "not authorized for this scope" since March 24,
-  // silently breaking all conversation/message syncs. The standard API key
-  // supports these endpoints and is used by all other entity types.
-  // 2026-04-04: Added 429 retry logic to request() to match requestWithOAuth().
 
   async getConversations(params?: { contactId?: string; limit?: number; startAfter?: string; startAfterId?: string }): Promise<{ conversations: GHLConversation[] }> {
     const reqParams: Record<string, string> = { locationId: this.locationId };
@@ -376,17 +370,6 @@ export class GHLClient {
     return this.request(`/conversations/${conversationId}/messages`, { params: reqParams });
   }
 
-  /**
-   * Fetch ALL messages for a conversation using pagination.
-   * GHL API returns: { messages: { lastMessageId, nextPage, messages: [...] }, traceId }
-   *
-   * Automatically filters out system activity events (opportunity created, chat ended,
-   * DnD changes, appointment activity, employee action logs) so only real messages
-   * (SMS, email, chat, calls, etc.) are returned. The filter is applied here at the
-   * source so ALL callers get clean data without needing to filter themselves.
-   *
-   * Default maxPages = 20 (~400 messages max per conversation).
-   */
   async getAllMessages(conversationId: string, maxPages = 20): Promise<GHLMessage[]> {
     const all: GHLMessage[] = [];
     let lastMessageId: string | undefined;
@@ -402,7 +385,6 @@ export class GHLClient {
       if (!nextPage || !lastMessageId || msgs.length === 0) break;
     }
 
-    // Filter out system activity events — only return real messages
     return all.filter(msg => isRealMessage(msg));
   }
 
