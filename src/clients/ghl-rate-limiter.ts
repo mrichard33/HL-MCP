@@ -9,34 +9,28 @@
  *   - Bucket capacity: 40 tokens (conservative under GHL's ~100/min limit)
  *   - Refill rate: 40 tokens per minute (~1 every 1.5 seconds)
  *   - Queue-based backpressure: callers wait in FIFO queue when empty
- *   - On 429: drain bucket + pause ALL requests for 60 seconds
+ *   - On 429: drain bucket + pause ALL requests for 5 MINUTES
+ *   - Exponential backoff on consecutive 429s: 5min → 10min → 15min (cap)
  *   - Singleton: one instance shared across the entire process
  * 
- * Usage in GHLClient.request():
- *   await acquireToken();           // Wait for a token
- *   const res = await fetch(url);   // Make the GHL API call
- *   if (res.status === 429) {
- *     report429();                  // Drain bucket + pause 60s
- *     throw ...;                    // Don't retry — let caller handle
- *   }
+ * v1.1 — Exponential pause: 5min base, doubles on consecutive 429s (cap 15min)
+ *   60s was not enough for GHL to reset after sustained rate limit abuse.
+ *   The longer pause ensures complete rate limit recovery before retry.
  * 
- * Why 60s pause (vs LP MCP's 30s)?
- *   The HL MCP EntitySync makes many more concurrent requests than the
- *   LP MCP Action Executor. A longer pause gives the GHL rate limit
- *   more time to fully reset before resuming.
- * 
- * v1.0 — Initial implementation for HL MCP
+ * v1.0 — Initial implementation (60s pause)
  */
 
 const BUCKET_CAPACITY = 40;
 const REFILL_RATE = 40;          // tokens per minute
 const REFILL_INTERVAL_MS = (60 * 1000) / REFILL_RATE;  // ~1500ms per token
-const PAUSE_ON_429_MS = 60000;   // 60 seconds pause on 429
+const BASE_PAUSE_MS = 300000;    // 5 minutes base pause
+const MAX_PAUSE_MS = 900000;     // 15 minutes maximum pause
 
 let tokens = BUCKET_CAPACITY;
 let lastRefill = Date.now();
 let paused = false;
 let pauseUntil = 0;
+let consecutive429Cycles = 0;    // tracks how many resume→429 cycles in a row
 
 interface QueueEntry {
   resolve: () => void;
@@ -68,8 +62,8 @@ function isPaused(): boolean {
   if (!paused) return false;
   if (Date.now() >= pauseUntil) {
     paused = false;
-    tokens = Math.min(5, BUCKET_CAPACITY); // Very cautious restart
-    console.log(`[RateLimiter] 429 pause ended. Resuming with ${tokens} tokens.`);
+    tokens = Math.min(2, BUCKET_CAPACITY); // Very cautious: only 2 tokens on resume
+    console.log(`[RateLimiter] Pause ended. Resuming with ${tokens} tokens. Consecutive 429 cycles: ${consecutive429Cycles}`);
     processQueue();
     return false;
   }
@@ -103,7 +97,7 @@ export function acquireToken(): Promise<void> {
           refill();
           processQueue();
         }
-      }, 1000);
+      }, 5000); // Check every 5s during long pauses
     });
   }
 
@@ -127,16 +121,32 @@ export function acquireToken(): Promise<void> {
 
 /**
  * Report a 429 response. Drains bucket and pauses all requests.
+ * Uses exponential backoff: 5min → 10min → 15min on consecutive 429 cycles.
+ * Resets to base pause after a successful request.
  */
 export function report429(): void {
   stats.total429s++;
   tokens = 0;
   paused = true;
-  pauseUntil = Date.now() + PAUSE_ON_429_MS;
+  consecutive429Cycles++;
+  const pauseMs = Math.min(BASE_PAUSE_MS * consecutive429Cycles, MAX_PAUSE_MS);
+  pauseUntil = Date.now() + pauseMs;
   console.warn(
-    `[RateLimiter] 429 received! Pausing ALL GHL requests for ${PAUSE_ON_429_MS / 1000}s. ` +
-    `Queue depth: ${waitQueue.length}. Total 429s: ${stats.total429s}`
+    `[RateLimiter] 429 received! Pausing ALL GHL requests for ${Math.round(pauseMs / 1000)}s. ` +
+    `Queue depth: ${waitQueue.length}. Total 429s: ${stats.total429s}. ` +
+    `Consecutive cycles: ${consecutive429Cycles}`
   );
+}
+
+/**
+ * Call after a SUCCESSFUL GHL request to reset the consecutive 429 counter.
+ * This allows the pause duration to shrink back to base after recovery.
+ */
+export function reportSuccess(): void {
+  if (consecutive429Cycles > 0) {
+    console.log(`[RateLimiter] GHL request succeeded! Resetting consecutive 429 counter from ${consecutive429Cycles} to 0.`);
+    consecutive429Cycles = 0;
+  }
 }
 
 /**
@@ -150,6 +160,8 @@ export function getRateLimiterStats(): Record<string, unknown> {
     paused: isPaused(),
     pauseRemainingMs: paused ? Math.max(0, pauseUntil - Date.now()) : 0,
     queueDepth: waitQueue.length,
+    consecutive429Cycles,
+    currentPauseMs: Math.min(BASE_PAUSE_MS * Math.max(consecutive429Cycles, 1), MAX_PAUSE_MS),
     ...stats,
   };
 }
