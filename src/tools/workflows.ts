@@ -73,9 +73,6 @@ export const workflowTools = {
     },
   },
 
-  // NOTE: workflow_executions is populated from two sources:
-  // 1. Webhook events (automatic — see handleWorkflowWebhook in handler.ts)
-  // 2. This MCP tool (manual logging for executions not captured by webhooks)
   log_workflow_execution: {
     description: 'Log a workflow execution event to Supabase for tracking and analytics. Workflow executions are also automatically populated from webhook events.',
     inputSchema: z.object({
@@ -170,7 +167,6 @@ export const workflowTools = {
       let actions: unknown = null;
 
       if (useCache) {
-        // Read from Supabase cache
         const supabase = getSupabaseClient();
         const { data, error } = await supabase
           .from('workflows')
@@ -188,14 +184,12 @@ export const workflowTools = {
         triggerConfig = data.trigger_config;
         actions = data.actions;
       } else {
-        // Fetch live data from HighLevel API
         const ghl = new GHLClient();
         const detail = await ghl.getWorkflowDetail(args.workflowId);
         if (detail) {
           raw = detail;
           source = 'highlevel_internal_api';
         } else {
-          // Fallback to public API
           const publicData = await ghl.getWorkflow(args.workflowId);
           raw = JSON.parse(JSON.stringify(publicData));
           source = 'highlevel_public_api';
@@ -205,7 +199,6 @@ export const workflowTools = {
         triggerConfig = raw.triggers || null;
         actions = raw.actions || null;
 
-        // Optionally update Supabase cache
         if (updateCache) {
           const supabase = getSupabaseClient();
           await supabase.from('workflows').upsert({
@@ -248,7 +241,6 @@ export const workflowTools = {
       const ghl = new GHLClient();
       const supabase = getSupabaseClient();
 
-      // Fetch from internal API first, fallback to public API
       let rawJson: Record<string, unknown>;
       let source: string;
       const detail = await ghl.getWorkflowDetail(args.workflowId);
@@ -266,7 +258,6 @@ export const workflowTools = {
       const version = (rawJson.version as number) || 1;
       const locationId = (rawJson.locationId as string) || ghl.getLocationId();
 
-      // Update the Supabase cache
       const { error: upsertError } = await supabase.from('workflows').upsert({
         ghl_workflow_id: args.workflowId,
         ghl_location_id: locationId,
@@ -393,6 +384,34 @@ export const workflowTools = {
         count: templates.length,
         total: result.total || templates.length,
       };
+    },
+  },
+
+  add_to_workflow: {
+    description: 'Enroll a contact in a GHL workflow. The contact will enter the workflow at the beginning.',
+    inputSchema: z.object({
+      workflowId: z.string().describe('GHL workflow ID to enroll the contact in'),
+      contactId: z.string().describe('GHL contact ID to enroll'),
+      eventStartTime: z.string().optional().describe('Optional ISO datetime for scheduled enrollment'),
+    }),
+    handler: async (args: { workflowId: string; contactId: string; eventStartTime?: string }) => {
+      const ghl = new GHLClient();
+      const result = await ghl.enrollContactInWorkflow(args.workflowId, args.contactId, args.eventStartTime);
+      return { success: true, workflowId: args.workflowId, contactId: args.contactId, result };
+    },
+  },
+
+  remove_from_workflow: {
+    description: 'Remove a contact from a GHL workflow (unenroll). Stops any active execution of that workflow for the contact.',
+    inputSchema: z.object({
+      workflowId: z.string().describe('GHL workflow ID to remove the contact from'),
+      contactId: z.string().describe('GHL contact ID to remove'),
+      eventStartTime: z.string().optional().describe('Optional — required if the workflow has scheduled events'),
+    }),
+    handler: async (args: { workflowId: string; contactId: string; eventStartTime?: string }) => {
+      const ghl = new GHLClient();
+      const result = await ghl.removeContactFromWorkflow(args.workflowId, args.contactId, args.eventStartTime);
+      return { success: true, workflowId: args.workflowId, contactId: args.contactId, result };
     },
   },
 };
