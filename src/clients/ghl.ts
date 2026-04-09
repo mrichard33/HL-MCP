@@ -224,6 +224,40 @@ export class GHLClient {
     await this.request(`/contacts/${contactId}`, { method: 'DELETE' });
   }
 
+  /**
+   * Add tags to a contact (additive — does NOT replace existing tags).
+   * Uses POST /contacts/{id}/tags
+   */
+  async addContactTags(contactId: string, tags: string[]): Promise<{ tags: string[] }> {
+    return this.request<{ tags: string[] }>(`/contacts/${contactId}/tags`, {
+      method: 'POST',
+      body: { tags },
+    });
+  }
+
+  /**
+   * Remove specific tags from a contact (subtractive — only removes listed tags).
+   * Uses DELETE /contacts/{id}/tags
+   */
+  async removeContactTags(contactId: string, tags: string[]): Promise<{ tags: string[] }> {
+    return this.request<{ tags: string[] }>(`/contacts/${contactId}/tags`, {
+      method: 'DELETE',
+      body: { tags },
+    });
+  }
+
+  /**
+   * Update custom fields on a contact without touching other fields.
+   * Uses PUT /contacts/{id} with only customFields in the body.
+   */
+  async updateContactCustomFields(contactId: string, customFields: Array<{ id: string; field_value: string | number | boolean }>): Promise<GHLContact> {
+    const res = await this.request<{ contact: GHLContact }>(`/contacts/${contactId}`, {
+      method: 'PUT',
+      body: { customFields },
+    });
+    return res.contact;
+  }
+
   // ---- Pipelines ----
 
   async getPipelines(): Promise<GHLPipeline[]> {
@@ -233,11 +267,15 @@ export class GHLClient {
 
   // ---- Opportunities ----
 
-  async getOpportunities(params?: { pipelineId?: string; stageId?: string; status?: string; limit?: number; startAfter?: string; startAfterId?: string }): Promise<{ opportunities: GHLOpportunity[]; meta?: GHLPaginationMeta }> {
+  async getOpportunities(params?: { pipelineId?: string; status?: string; q?: string; contactId?: string; assignedTo?: string; limit?: number; startAfter?: string; startAfterId?: string }): Promise<{ opportunities: GHLOpportunity[]; meta?: GHLPaginationMeta }> {
+    // NOTE: GHL search endpoint does NOT support stage_id filtering (returns 422).
+    // Use pipeline_id + client-side filtering if stage filtering is needed.
     const reqParams: Record<string, string> = { location_id: this.locationId };
     if (params?.pipelineId) reqParams.pipeline_id = params.pipelineId;
-    if (params?.stageId) reqParams.stage_id = params.stageId;
     if (params?.status) reqParams.status = params.status;
+    if (params?.q) reqParams.q = params.q;
+    if (params?.contactId) reqParams.contact_id = params.contactId;
+    if (params?.assignedTo) reqParams.assigned_to = params.assignedTo;
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.startAfter) reqParams.startAfter = params.startAfter;
     if (params?.startAfterId) reqParams.startAfterId = params.startAfterId;
