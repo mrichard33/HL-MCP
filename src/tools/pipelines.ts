@@ -23,28 +23,33 @@ export const pipelineTools = {
   },
 
   get_opportunities: {
-    description: 'Get opportunities (deals) from a pipeline, optionally filtered by stage or status. Queries Supabase by default (primary source). Set forceLive=true to bypass Supabase and query the GHL API directly.',
+    description: 'Get opportunities (deals) from a pipeline. Supports text search (q), contact filtering (contactId), pipeline, status. stageId works for Supabase only — GHL API does not support it. Set forceLive=true to query GHL API directly.',
     inputSchema: z.object({
       pipelineId: z.string().optional().describe('Filter by pipeline ID'),
-      stageId: z.string().optional().describe('Filter by stage ID'),
+      stageId: z.string().optional().describe('Filter by stage ID (Supabase only — GHL API does not support this)'),
       status: z.enum(['open', 'won', 'lost', 'abandoned']).optional(),
+      q: z.string().optional().describe('Text search — matches opportunity name'),
+      contactId: z.string().optional().describe('Filter by GHL contact ID'),
       limit: z.number().optional().default(20),
       forceLive: z.boolean().optional().default(false).describe('Bypass Supabase and query GHL API directly'),
     }),
-    handler: async (args: { pipelineId?: string; stageId?: string; status?: string; limit?: number; forceLive?: boolean }) => {
+    handler: async (args: { pipelineId?: string; stageId?: string; status?: string; q?: string; contactId?: string; limit?: number; forceLive?: boolean }) => {
       if (!args.forceLive) {
         const supabase = getSupabaseClient();
         let qb = supabase.from('opportunities').select('*').is('deleted_at', null).limit(args.limit || 20);
         if (args.pipelineId) qb = qb.eq('ghl_pipeline_id', args.pipelineId);
         if (args.stageId) qb = qb.eq('ghl_stage_id', args.stageId);
         if (args.status) qb = qb.eq('status', args.status);
+        if (args.contactId) qb = qb.eq('ghl_contact_id', args.contactId);
+        if (args.q) qb = qb.ilike('name', `%${args.q}%`);
         const { data, error } = await qb;
         if (error) throw new Error(`Supabase error: ${error.message}`);
         return { opportunities: data, source: 'supabase' };
       }
+      // GHL API: stageId is NOT supported (returns 422). Use q, contactId, pipelineId, status.
       const ghl = new GHLClient();
       const result = await ghl.getOpportunities({
-        pipelineId: args.pipelineId, stageId: args.stageId, status: args.status, limit: args.limit,
+        pipelineId: args.pipelineId, status: args.status, q: args.q, contactId: args.contactId, limit: args.limit,
       });
       return { ...result, source: 'ghl_api' };
     },
