@@ -53,9 +53,6 @@ export class GHLClient {
 
   /**
    * Rate-limited API key request.
-   * - acquireToken() before each call (waits if paused or no tokens)
-   * - report429() on 429 (pauses 5min+, exponential backoff)
-   * - reportSuccess() on success (resets consecutive 429 counter)
    */
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     await acquireToken();
@@ -268,8 +265,6 @@ export class GHLClient {
   // ---- Opportunities ----
 
   async getOpportunities(params?: { pipelineId?: string; status?: string; q?: string; contactId?: string; assignedTo?: string; limit?: number; startAfter?: string; startAfterId?: string }): Promise<{ opportunities: GHLOpportunity[]; meta?: GHLPaginationMeta }> {
-    // NOTE: GHL search endpoint does NOT support stage_id filtering (returns 422).
-    // Use pipeline_id + client-side filtering if stage filtering is needed.
     const reqParams: Record<string, string> = { location_id: this.locationId };
     if (params?.pipelineId) reqParams.pipeline_id = params.pipelineId;
     if (params?.status) reqParams.status = params.status;
@@ -325,6 +320,26 @@ export class GHLClient {
   async getWorkflow(workflowId: string): Promise<GHLWorkflow> {
     const res = await this.request<{ workflow: GHLWorkflow }>(`/workflows/${workflowId}`);
     return res.workflow;
+  }
+
+  /**
+   * Enroll a contact in a workflow.
+   * Uses POST /workflows/{workflowId}/enroll
+   */
+  async enrollContactInWorkflow(workflowId: string, contactId: string, eventStartTime?: string): Promise<unknown> {
+    const body: Record<string, string> = { contactId };
+    if (eventStartTime) body.eventStartTime = eventStartTime;
+    return this.request(`/workflows/${workflowId}/enroll`, { method: 'POST', body });
+  }
+
+  /**
+   * Remove a contact from a workflow (unenroll).
+   * Uses DELETE /workflows/{workflowId}/enroll
+   */
+  async removeContactFromWorkflow(workflowId: string, contactId: string, eventStartTime?: string): Promise<unknown> {
+    const body: Record<string, string> = { contactId };
+    if (eventStartTime) body.eventStartTime = eventStartTime;
+    return this.request(`/workflows/${workflowId}/enroll`, { method: 'DELETE', body });
   }
 
   async getWorkflowDetail(workflowId: string): Promise<Record<string, unknown> | null> {
