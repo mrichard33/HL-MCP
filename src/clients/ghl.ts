@@ -324,22 +324,22 @@ export class GHLClient {
 
   /**
    * Enroll a contact in a workflow.
-   * Uses POST /workflows/{workflowId}/enroll
+   * Uses POST /contacts/{contactId}/workflow/{workflowId}
    */
   async enrollContactInWorkflow(workflowId: string, contactId: string, eventStartTime?: string): Promise<unknown> {
-    const body: Record<string, string> = { contactId };
+    const body: Record<string, string> = {};
     if (eventStartTime) body.eventStartTime = eventStartTime;
-    return this.request(`/workflows/${workflowId}/enroll`, { method: 'POST', body });
+    return this.request(`/contacts/${contactId}/workflow/${workflowId}`, { method: 'POST', body });
   }
 
   /**
    * Remove a contact from a workflow (unenroll).
-   * Uses DELETE /workflows/{workflowId}/enroll
+   * Uses DELETE /contacts/{contactId}/workflow/{workflowId}
    */
   async removeContactFromWorkflow(workflowId: string, contactId: string, eventStartTime?: string): Promise<unknown> {
-    const body: Record<string, string> = { contactId };
+    const body: Record<string, string> = {};
     if (eventStartTime) body.eventStartTime = eventStartTime;
-    return this.request(`/workflows/${workflowId}/enroll`, { method: 'DELETE', body });
+    return this.request(`/contacts/${contactId}/workflow/${workflowId}`, { method: 'DELETE', body });
   }
 
   async getWorkflowDetail(workflowId: string): Promise<Record<string, unknown> | null> {
