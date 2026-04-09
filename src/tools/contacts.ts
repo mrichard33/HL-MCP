@@ -74,7 +74,7 @@ export const contactTools = {
   },
 
   update_contact: {
-    description: 'Update an existing contact in GoHighLevel.',
+    description: 'Update an existing contact in GoHighLevel. WARNING: tags array does FULL REPLACEMENT — use add_tags/remove_tags for safe additive operations.',
     inputSchema: z.object({
       contactId: z.string().describe('GoHighLevel contact ID'),
       firstName: z.string().optional(),
@@ -82,12 +82,54 @@ export const contactTools = {
       email: z.string().optional(),
       phone: z.string().optional(),
       companyName: z.string().optional(),
-      tags: z.array(z.string()).optional(),
+      tags: z.array(z.string()).optional().describe('FULL REPLACEMENT — replaces ALL tags. Use add_tags/remove_tags instead for safe operations.'),
     }),
     handler: async (args: { contactId: string; [key: string]: unknown }) => {
       const ghl = new GHLClient();
       const { contactId, ...data } = args;
       return ghl.updateContact(contactId, data);
+    },
+  },
+
+  add_tags: {
+    description: 'Add tags to a contact WITHOUT removing existing tags. Safe additive operation.',
+    inputSchema: z.object({
+      contactId: z.string().describe('GoHighLevel contact ID'),
+      tags: z.array(z.string()).describe('Tags to add (existing tags are preserved)'),
+    }),
+    handler: async (args: { contactId: string; tags: string[] }) => {
+      const ghl = new GHLClient();
+      const result = await ghl.addContactTags(args.contactId, args.tags);
+      return { success: true, tags: result.tags, operation: 'add' };
+    },
+  },
+
+  remove_tags: {
+    description: 'Remove specific tags from a contact WITHOUT affecting other tags. Safe subtractive operation.',
+    inputSchema: z.object({
+      contactId: z.string().describe('GoHighLevel contact ID'),
+      tags: z.array(z.string()).describe('Tags to remove (other tags are preserved)'),
+    }),
+    handler: async (args: { contactId: string; tags: string[] }) => {
+      const ghl = new GHLClient();
+      const result = await ghl.removeContactTags(args.contactId, args.tags);
+      return { success: true, tags: result.tags, operation: 'remove' };
+    },
+  },
+
+  update_custom_fields: {
+    description: 'Update custom fields on a contact without touching tags or other standard fields. Pass an array of {id, field_value} objects.',
+    inputSchema: z.object({
+      contactId: z.string().describe('GoHighLevel contact ID'),
+      customFields: z.array(z.object({
+        id: z.string().describe('Custom field ID (e.g. ZZCpHTthFMaVc3g5vMAS)'),
+        field_value: z.union([z.string(), z.number(), z.boolean()]).describe('Value to set'),
+      })).describe('Array of custom field updates'),
+    }),
+    handler: async (args: { contactId: string; customFields: Array<{ id: string; field_value: string | number | boolean }> }) => {
+      const ghl = new GHLClient();
+      const contact = await ghl.updateContactCustomFields(args.contactId, args.customFields);
+      return { success: true, contact };
     },
   },
 
