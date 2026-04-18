@@ -1,5 +1,21 @@
 // ─── GHL API Client — src/clients/ghl.ts ─────────────────────────
 //
+// v1.2 — Switched conversation + message endpoints to OAuth2.
+//         GHL's /conversations/search and /conversations/{id}/messages
+//         endpoints REQUIRE OAuth2 (conversations.readonly and
+//         conversations/message.readonly scopes). The v1 Location API
+//         key silently stalls on these endpoints — no response, no
+//         error, just an open TCP connection forever. Confirmed by
+//         inspecting the working n8n "Sync GHL Conversations & Messages
+//         to Supabase" workflow which uses highLevelOAuth2Api for the
+//         same two endpoints.
+//         This was the ACTUAL root cause of conversations/messages
+//         syncs being stuck at 2026-04-07 — not a fetch timeout issue.
+//         Affected methods: getConversations, getAllConversations,
+//         getConversation, getMessages, sendMessage.
+//         Requires OAuth to be authorized via /crm-oauth/authorize
+//         (already done — tokens persisted in ghl_oauth_tokens table).
+//
 // v1.1 — Added per-request timeout to every fetch() call.
 //         Node's fetch has NO default timeout; a stalled response pins
 //         the sync mutex (runningJobs) forever, silently killing all
@@ -430,7 +446,8 @@ export class GHLClient {
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.startAfter) reqParams.startAfter = params.startAfter;
     if (params?.startAfterId) reqParams.startAfterId = params.startAfterId;
-    return this.request('/conversations/search', { method: 'GET', params: reqParams });
+    // v1.2: GHL /conversations/search requires OAuth2 — v1 API key silently stalls.
+    return this.requestWithOAuth('/conversations/search', { method: 'GET', params: reqParams });
   }
 
   async getAllConversations(contactId: string): Promise<GHLConversation[]> {
@@ -440,8 +457,9 @@ export class GHLClient {
     let pageCount = 0;
     const MAX_PAGES = 100;
     do {
+      // v1.2: GHL /conversations/search requires OAuth2 — v1 API key silently stalls.
       const result: { conversations: GHLConversation[]; meta?: GHLPaginationMeta } =
-        await this.request('/conversations/search', {
+        await this.requestWithOAuth('/conversations/search', {
           method: 'GET',
           params: { locationId: this.locationId, contactId, limit: '100', ...(startAfter ? { startAfter } : {}), ...(startAfterId ? { startAfterId } : {}) },
         });
@@ -455,7 +473,8 @@ export class GHLClient {
   }
 
   async getConversation(conversationId: string): Promise<GHLConversation> {
-    const res = await this.request<{ conversation: GHLConversation }>(`/conversations/${conversationId}`);
+    // v1.2: GHL conversation endpoints require OAuth2.
+    const res = await this.requestWithOAuth<{ conversation: GHLConversation }>(`/conversations/${conversationId}`);
     return res.conversation;
   }
 
@@ -464,7 +483,8 @@ export class GHLClient {
   async getMessages(conversationId: string, params?: { lastMessageId?: string }): Promise<{ messages: unknown }> {
     const reqParams: Record<string, string> = {};
     if (params?.lastMessageId) reqParams.lastMessageId = params.lastMessageId;
-    return this.request(`/conversations/${conversationId}/messages`, { params: reqParams });
+    // v1.2: GHL /conversations/{id}/messages requires OAuth2 — v1 API key silently stalls.
+    return this.requestWithOAuth(`/conversations/${conversationId}/messages`, { params: reqParams });
   }
 
   async getAllMessages(conversationId: string, maxPages = 20): Promise<GHLMessage[]> {
@@ -486,7 +506,8 @@ export class GHLClient {
   }
 
   async sendMessage(data: { conversationId: string; type: string; message: string; contactId: string }): Promise<GHLMessage> {
-    const res = await this.request<{ message: GHLMessage }>(`/conversations/messages`, { method: 'POST', body: data });
+    // v1.2: GHL message send requires OAuth2 with conversations/message.write scope.
+    const res = await this.requestWithOAuth<{ message: GHLMessage }>(`/conversations/messages`, { method: 'POST', body: data });
     return res.message;
   }
 
