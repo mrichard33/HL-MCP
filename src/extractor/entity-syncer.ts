@@ -66,6 +66,11 @@ async function logSyncFailed(syncLogId: string | null, errorMessage: string): Pr
 // default 1000-row limit and keeps any single request under ~5MB JSON payload.
 const UPSERT_BATCH_SIZE = 500;
 
+// v1.5: PostgREST caps single-query result sets at 1000 rows by default.
+// For any `.select()` that can return more than that (contacts, conversations,
+// lead_events), we must paginate via .range() or the result silently truncates.
+const PAGINATION_PAGE_SIZE = 1000;
+
 /**
  * Chunk an array into batches of a given size.
  */
@@ -493,14 +498,27 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
   try {
     console.log('[EntitySync] syncConversationsAndMessages: fetching contact list from Supabase...');
-    // Get all contact IDs (exclude soft-deleted)
-    const { data: allContacts, error: allError } = await supabase
-      .from('contacts')
-      .select('ghl_contact_id')
-      .is('deleted_at', null)
-      .order('date_updated', { ascending: false });
-    if (allError) throw new Error(`Failed to fetch contacts: ${allError.message}`);
-    if (!allContacts?.length) {
+    // Get all contact IDs (exclude soft-deleted).
+    // v1.5: Paginate past PostgREST's 1000-row default cap. Contact count
+    // (~2,700+) was silently truncated to 1000, so backfill mode kept
+    // seeing the same slice as "unsynced" and never made forward progress
+    // past the first page of contacts.
+    const allContacts: { ghl_contact_id: string }[] = [];
+    for (let page = 0; ; page++) {
+      const from = page * PAGINATION_PAGE_SIZE;
+      const to = from + PAGINATION_PAGE_SIZE - 1;
+      const { data, error: allError } = await supabase
+        .from('contacts')
+        .select('ghl_contact_id')
+        .is('deleted_at', null)
+        .order('date_updated', { ascending: false })
+        .range(from, to);
+      if (allError) throw new Error(`Failed to fetch contacts (page ${page}): ${allError.message}`);
+      if (!data || data.length === 0) break;
+      allContacts.push(...(data as { ghl_contact_id: string }[]));
+      if (data.length < PAGINATION_PAGE_SIZE) break;
+    }
+    if (!allContacts.length) {
       console.warn('[EntitySync] No contacts found in Supabase — sync contacts first');
       await logSyncComplete(syncLogId, 0);
       return { synced_conversations: 0, synced_messages: 0, errors: [] };
@@ -510,10 +528,29 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     // Determine backfill vs incremental mode
     // Backfill: process contacts that have NEVER had conversations checked
     // Incremental: all contacts covered, refresh most recently updated
-    const { data: syncedRows } = await supabase
-      .from('conversations')
-      .select('ghl_contact_id');
-    const syncedIds = new Set((syncedRows || []).map(r => r.ghl_contact_id));
+    //
+    // v1.5: Also paginate this query. Once backfill has produced one row
+    // (real or `no-conv-*` sentinel) per contact, this table can exceed
+    // 1000 rows and the default cap would re-break the backfill/incremental
+    // decision — a subset of contacts would look unsynced forever.
+    const syncedIds = new Set<string>();
+    for (let page = 0; ; page++) {
+      const from = page * PAGINATION_PAGE_SIZE;
+      const to = from + PAGINATION_PAGE_SIZE - 1;
+      const { data, error: syncedErr } = await supabase
+        .from('conversations')
+        .select('ghl_contact_id')
+        .range(from, to);
+      if (syncedErr) {
+        console.warn(`[EntitySync] Failed to fetch synced conversation IDs (page ${page}): ${syncedErr.message}`);
+        break;
+      }
+      if (!data || data.length === 0) break;
+      for (const r of data as { ghl_contact_id: string | null }[]) {
+        if (r.ghl_contact_id) syncedIds.add(r.ghl_contact_id);
+      }
+      if (data.length < PAGINATION_PAGE_SIZE) break;
+    }
     const unsyncedContacts = allContacts.filter(c => !syncedIds.has(c.ghl_contact_id));
 
     let contacts: { ghl_contact_id: string }[];

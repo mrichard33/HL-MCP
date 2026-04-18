@@ -74,7 +74,8 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  * to backfill historical data. Subsequent runs use the normal 24h lookback.
  *
  * Schedule:
- * - Workflows: every 10 minutes
+ * - Workflows: every hour (v1.5: reduced from every 10 min — workflow
+ *   definitions change rarely and the sync is heavy)
  * - Contacts: every 15 minutes
  * - Opportunities: every 15 minutes
  * - Appointments: every 15 minutes
@@ -165,8 +166,12 @@ export function startScheduledSync(): void {
     setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
   })();
 
-  // Schedule recurring jobs (every 15 minutes for most entities)
-  cron.schedule('*/10 * * * *', () => {
+  // Schedule recurring jobs
+  // v1.5: Workflow sync cadence reduced from */10 to hourly. Workflow
+  // definitions change rarely; hourly is plenty and reduces Firebase/GHL
+  // internal-API load. Funnel progression is also hourly — the two share
+  // the top-of-hour slot.
+  cron.schedule('0 * * * *', () => {
     runJob('workflows', async () => {
       const result = await extractAndSyncWorkflows();
       console.log(
@@ -226,8 +231,7 @@ export function startScheduledSync(): void {
   });
 
   console.log('[Scheduler] Cron jobs registered:');
-  console.log('  */10 * * * * — workflows');
+  console.log('  0 * * * *    — workflows, funnel progression');
   console.log('  */15 * * * * — contacts, opportunities, appointments, conversations/messages');
   console.log('  */30 * * * * — pipelines, custom_fields, custom_values, tags, trigger_links, templates');
-  console.log('  0 * * * *    — funnel progression');
 }
