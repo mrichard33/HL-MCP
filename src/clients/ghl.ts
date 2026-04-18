@@ -1,5 +1,18 @@
 // ─── GHL API Client — src/clients/ghl.ts ─────────────────────────
 //
+// v1.3 — Added 429 retry logic to request() and requestWithOAuth().
+//         Per CONVERSATION_SYNC_CHANGES.md, this was the planned 2026-04-04
+//         fix for 71% of conversations having metadata but zero stored
+//         messages. Root cause: message fetches hit GHL rate limits,
+//         silently failed, but `synced_at` got bumped anyway so the
+//         round-robin scheduler moved on and never retried.
+//         The fix never made it into the code (or was reverted) — both
+//         request() and requestWithOAuth() just throw immediately on 429.
+//         This v1.3 adds the retry pattern: up to 3 attempts with
+//         exponential backoff (2s, 4s, 8s) on 429 responses only. Other
+//         errors still throw immediately. Each retry re-acquires a token
+//         from the rate limiter, which will wait if the bucket is paused.
+//
 // v1.1 — Added per-request timeout to every fetch() call.
 //         Node's fetch has NO default timeout; a stalled response pins
 //         the sync mutex (runningJobs) forever, silently killing all
@@ -42,6 +55,12 @@ const FIREBASE_TOKEN_URL = 'https://securetoken.googleapis.com/v1/token';
 // Override via env: GHL_REQUEST_TIMEOUT_MS=120000
 const REQUEST_TIMEOUT_MS = parseInt(process.env.GHL_REQUEST_TIMEOUT_MS || '60000', 10);
 
+// v1.3: 429 retry policy. Matches intent of the 2026-04-04 planned fix
+// (see CONVERSATION_SYNC_CHANGES.md). Exponential backoff on 429 only —
+// other errors (500, 401, etc.) throw immediately.
+const MAX_RETRIES_ON_429 = 3;
+const RETRY_BACKOFF_MS = [2000, 4000, 8000];
+
 /**
  * fetch() with an AbortController-based timeout.
  * Uses AbortController + setTimeout (Node 16+) rather than
@@ -61,6 +80,13 @@ async function fetchWithTimeout(url: string, init: RequestInit, label: string): 
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Sleep helper used by the 429 retry loop.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 interface RequestOptions {
@@ -94,89 +120,113 @@ export class GHLClient {
 
   /**
    * Rate-limited API key request.
+   * v1.3: Retries up to MAX_RETRIES_ON_429 times on HTTP 429 with exponential backoff.
    */
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    await acquireToken();
+    for (let attempt = 0; attempt < MAX_RETRIES_ON_429; attempt++) {
+      await acquireToken();
 
-    const url = new URL(path, this.baseUrl);
-    if (options.params) {
-      for (const [key, value] of Object.entries(options.params)) {
-        url.searchParams.set(key, value);
+      const url = new URL(path, this.baseUrl);
+      if (options.params) {
+        for (const [key, value] of Object.entries(options.params)) {
+          url.searchParams.set(key, value);
+        }
       }
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        Version: '2021-07-28',
+      };
+
+      const method = options.method || 'GET';
+      const response = await fetchWithTimeout(url.toString(), {
+        method,
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      }, `${method} ${path}`);
+
+      if (response.status === 429) {
+        report429();
+        if (attempt < MAX_RETRIES_ON_429 - 1) {
+          const backoff = RETRY_BACKOFF_MS[attempt];
+          console.warn(`[GHL] 429 on ${method} ${path} (attempt ${attempt + 1}/${MAX_RETRIES_ON_429}), retrying in ${backoff}ms`);
+          await sleep(backoff);
+          continue;
+        }
+        throw new Error(`GHL API error 429: Too Many Requests (after ${MAX_RETRIES_ON_429} attempts)`);
+      }
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+      }
+
+      reportSuccess();
+      return response.json() as Promise<T>;
     }
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.apiKey}`,
-      'Content-Type': 'application/json',
-      Version: '2021-07-28',
-    };
 
-    const method = options.method || 'GET';
-    const response = await fetchWithTimeout(url.toString(), {
-      method,
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    }, `${method} ${path}`);
-
-    if (response.status === 429) {
-      report429();
-      throw new Error(`GHL API error 429: Too Many Requests`);
-    }
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`GHL API error ${response.status}: ${errorBody}`);
-    }
-
-    reportSuccess();
-    return response.json() as Promise<T>;
+    // Unreachable — the loop either returns or throws on every path.
+    throw new Error(`GHL request to ${path} failed after ${MAX_RETRIES_ON_429} attempts`);
   }
 
   /**
    * Rate-limited OAuth request. Same shared token bucket.
+   * v1.3: Retries up to MAX_RETRIES_ON_429 times on HTTP 429 with exponential backoff.
    */
   private async requestWithOAuth<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    await acquireToken();
+    for (let attempt = 0; attempt < MAX_RETRIES_ON_429; attempt++) {
+      await acquireToken();
 
-    const url = new URL(path, this.baseUrl);
-    if (options.params) {
-      for (const [key, value] of Object.entries(options.params)) {
-        url.searchParams.set(key, value);
+      const url = new URL(path, this.baseUrl);
+      if (options.params) {
+        for (const [key, value] of Object.entries(options.params)) {
+          url.searchParams.set(key, value);
+        }
       }
-    }
-    let authToken: string;
-    if (isOAuthConfigured()) {
-      authToken = await getOAuthAccessToken();
-    } else {
-      authToken = this.apiKey;
-    }
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${authToken}`,
-      'Content-Type': 'application/json',
-      Version: '2021-07-28',
-    };
-
-    const method = options.method || 'GET';
-    const response = await fetchWithTimeout(url.toString(), {
-      method,
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    }, `${method} ${path} (oauth)`);
-
-    if (response.status === 429) {
-      report429();
-      throw new Error(`GHL API error 429: Too Many Requests`);
-    }
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      if (response.status === 401 || response.status === 403) {
-        console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
+      let authToken: string;
+      if (isOAuthConfigured()) {
+        authToken = await getOAuthAccessToken();
+      } else {
+        authToken = this.apiKey;
       }
-      throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+        Version: '2021-07-28',
+      };
+
+      const method = options.method || 'GET';
+      const response = await fetchWithTimeout(url.toString(), {
+        method,
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      }, `${method} ${path} (oauth)`);
+
+      if (response.status === 429) {
+        report429();
+        if (attempt < MAX_RETRIES_ON_429 - 1) {
+          const backoff = RETRY_BACKOFF_MS[attempt];
+          console.warn(`[GHL] 429 on ${method} ${path} oauth (attempt ${attempt + 1}/${MAX_RETRIES_ON_429}), retrying in ${backoff}ms`);
+          await sleep(backoff);
+          continue;
+        }
+        throw new Error(`GHL API error 429: Too Many Requests (after ${MAX_RETRIES_ON_429} attempts)`);
+      }
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        if (response.status === 401 || response.status === 403) {
+          console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
+        }
+        throw new Error(`GHL API error ${response.status}: ${errorBody}`);
+      }
+
+      reportSuccess();
+      return response.json() as Promise<T>;
     }
 
-    reportSuccess();
-    return response.json() as Promise<T>;
+    // Unreachable — the loop either returns or throws on every path.
+    throw new Error(`GHL OAuth request to ${path} failed after ${MAX_RETRIES_ON_429} attempts`);
   }
 
   get isOAuthConfigured(): boolean { return isOAuthConfigured(); }
