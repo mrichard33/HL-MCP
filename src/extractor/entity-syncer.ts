@@ -4,6 +4,7 @@ import { createLeadEvent } from '../webhooks/handler.js';
 import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection } from '../utils/normalize.js';
+import type { GHLContact, GHLOpportunity } from '../types/ghl.js';
 
 // ---- Sync State Helpers ----
 
@@ -71,6 +72,16 @@ const UPSERT_BATCH_SIZE = 500;
 // lead_events), we must paginate via .range() or the result silently truncates.
 const PAGINATION_PAGE_SIZE = 1000;
 
+// v1.6: Incremental sync overlap buffer — minutes subtracted from
+// last_synced_at when computing the dateUpdated floor for incremental
+// fetches. Covers GHL's write-to-index lag and scheduler clock skew so
+// a record that changes right around the sync boundary can't slip
+// through both cycles. Override via env: INCREMENTAL_SYNC_OVERLAP_MINUTES.
+const INCREMENTAL_OVERLAP_MINUTES = parseInt(
+  process.env.INCREMENTAL_SYNC_OVERLAP_MINUTES || '10',
+  10,
+);
+
 /**
  * Chunk an array into batches of a given size.
  */
@@ -81,6 +92,15 @@ function chunk<T>(arr: T[], size: number): T[][] {
     out.push(arr.slice(i, i + size));
   }
   return out;
+}
+
+// v1.6: Compute the "since" floor for an incremental sync by subtracting
+// the overlap buffer from the entity's last_synced_at.
+async function computeIncrementalFloor(entityName: string): Promise<string | null> {
+  const lastSynced = await getLastSynced(entityName);
+  if (lastSynced.startsWith('1970-01-01')) return null; // First run — caller falls back to full
+  const floorMs = Date.parse(lastSynced) - INCREMENTAL_OVERLAP_MINUTES * 60_000;
+  return new Date(floorMs).toISOString();
 }
 
 // ---- Soft-Delete Helper ----
@@ -150,22 +170,91 @@ export async function softDeleteMissing(
   return { deleted, restored };
 }
 
-// ---- Contact Sync (every 15 min) ----
+// ---- Contact Sync ----
 
-export async function syncContacts(): Promise<{ synced: number; errors: string[] }> {
+export type SyncMode = 'incremental' | 'full';
+
+export interface SyncResult {
+  synced: number;
+  skipped?: number;
+  mode?: SyncMode | 'incremental-failed';
+  errors: string[];
+}
+
+/**
+ * Sync contacts from GHL to Supabase.
+ *
+ * v1.6: Supports two modes:
+ *   - 'incremental' (default): fetches only contacts updated since
+ *     `last_synced_at - overlap_buffer` using POST /contacts/search.
+ *     Skips softDeleteMissing (can't see deleted records remotely).
+ *     On first run (no prior sync) or on search API failure, falls
+ *     back to a full sync this cycle. Daily full reconcile handles
+ *     any drift.
+ *   - 'full': fetches every contact via GET /contacts/ and runs
+ *     softDeleteMissing. Used on boot and by the daily 3 AM ET cron.
+ */
+export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncResult> {
+  const requestedMode: SyncMode = options?.mode ?? 'full';
   const ghl = new GHLClient();
   const supabase = getSupabaseClient();
   const errors: string[] = [];
   const syncLogId = await logSyncStart('contacts');
 
   try {
-    console.log('[EntitySync] syncContacts: fetching all contacts from GHL...');
-    const contacts = await ghl.getAllContacts();
-    console.log(`[EntitySync] syncContacts: fetched ${contacts.length} contacts, batching upserts...`);
+    let effectiveMode: SyncMode = requestedMode;
+    let sinceIso: string | null = null;
+
+    if (requestedMode === 'incremental') {
+      sinceIso = await computeIncrementalFloor('contacts');
+      if (!sinceIso) {
+        console.log('[EntitySync] syncContacts: incremental requested but no prior sync — running full');
+        effectiveMode = 'full';
+      } else {
+        console.log(`[EntitySync] syncContacts: incremental, floor=${sinceIso} (overlap=${INCREMENTAL_OVERLAP_MINUTES}min)`);
+      }
+    } else {
+      console.log('[EntitySync] syncContacts: full sync requested');
+    }
+
+    let contacts: GHLContact[];
+    if (effectiveMode === 'incremental' && sinceIso) {
+      try {
+        const result = await ghl.getContactsUpdatedSince(sinceIso);
+        const reported = result.totalReportedByServer;
+        // Sanity check: a normal 15-min incremental should return a small
+        // subset (typically <100). If we get back something that looks like
+        // the whole location, the filter was ignored by GHL — fall back to
+        // a full fetch this cycle rather than trusting bad data.
+        if (typeof reported === 'number' && reported > 1000) {
+          console.warn(`[EntitySync] syncContacts: incremental returned total=${reported} — filter likely ignored, falling back to full`);
+          contacts = await ghl.getAllContacts();
+          effectiveMode = 'full';
+        } else {
+          contacts = result.contacts;
+          console.log(`[EntitySync] syncContacts: incremental fetched ${contacts.length} changed (server total=${reported ?? 'n/a'})`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[EntitySync] syncContacts: incremental search failed (${msg}) — skipping cycle; daily full will reconcile`);
+        errors.push(`Incremental fetch failed: ${msg}`);
+        await logSyncComplete(syncLogId, 0);
+        return { synced: 0, skipped: 0, mode: 'incremental-failed', errors };
+      }
+    } else {
+      console.log('[EntitySync] syncContacts: fetching all contacts from GHL...');
+      contacts = await ghl.getAllContacts();
+      console.log(`[EntitySync] syncContacts: fetched ${contacts.length} contacts`);
+    }
+
+    if (contacts.length === 0) {
+      console.log('[EntitySync] syncContacts: no changes to sync');
+      await updateLastSynced('contacts');
+      await logSyncComplete(syncLogId, 0);
+      return { synced: 0, skipped: 0, mode: effectiveMode, errors };
+    }
 
     const now = nowET();
-
-    // v1.4: Batch upserts — 500 rows per call instead of one-at-a-time
     const rows = contacts.map((c) => ({
       ghl_contact_id: c.id,
       ghl_location_id: c.locationId || null,
@@ -195,9 +284,8 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
     }
     console.log(`[EntitySync] syncContacts: upserted ${upsertedCount}/${rows.length} contacts`);
 
-    // v1.4: createLeadEvent still runs per-contact but only for contacts with a timestamp.
-    // This loop is much lighter than upserts (just event-hash dedup) and stays sequential
-    // so lead_events ordering is preserved.
+    // v1.4: createLeadEvent stays sequential for ordering. In incremental
+    // mode this only iterates the changed subset, not all 3,400+ contacts.
     console.log('[EntitySync] syncContacts: creating lead events...');
     let eventsCreated = 0;
     for (const c of contacts) {
@@ -213,41 +301,107 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
     }
     console.log(`[EntitySync] syncContacts: created ${eventsCreated} lead events`);
 
-    // Soft-delete contacts no longer in GHL
-    const activeContactIds = contacts.map((c) => c.id);
-    await softDeleteMissing('contacts', 'ghl_contact_id', activeContactIds, ghl.getLocationId());
+    // v1.6: Soft-delete only runs in full mode — incremental can't see
+    // records that GHL has removed since there's nothing to diff against.
+    if (effectiveMode === 'full') {
+      const activeContactIds = contacts.map((c) => c.id);
+      await softDeleteMissing('contacts', 'ghl_contact_id', activeContactIds, ghl.getLocationId());
+    }
 
     await updateLastSynced('contacts');
     await logSyncComplete(syncLogId, contacts.length);
-    console.log(`[EntitySync] Contacts synced: ${contacts.length}`);
-    return { synced: contacts.length, errors };
+    console.log(`[EntitySync] Contacts synced (${effectiveMode}): ${contacts.length}`);
+    return { synced: contacts.length, skipped: 0, mode: effectiveMode, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
     await logSyncFailed(syncLogId, msg);
     console.error(`[EntitySync] Contact sync failed: ${msg}`);
-    return { synced: 0, errors };
+    return { synced: 0, skipped: 0, mode: requestedMode, errors };
   }
 }
 
-// ---- Opportunity Sync (every 15 min) ----
+// ---- Opportunity Sync ----
 
-export async function syncOpportunities(): Promise<{ synced: number; errors: string[] }> {
+/**
+ * Sync opportunities from GHL to Supabase.
+ *
+ * v1.6: Supports 'incremental' and 'full' modes.
+ *   - 'full': current v1.4 behavior — fetch all, upsert all, softDelete sweep.
+ *   - 'incremental': fetch all from GHL (the opportunities search endpoint
+ *     doesn't reliably accept a server-side dateUpdated filter, so we still
+ *     pay the GHL API cost), then diff against Supabase's date_updated
+ *     column to find only records that actually changed. Upsert only the
+ *     changed subset. Skip softDeleteMissing. Saves the ~2,700 row-per-cycle
+ *     Supabase write amplification, which was the larger issue.
+ *
+ *     TODO v1.7: investigate POST /opportunities/search with a filter body;
+ *     some tenants support it and it would let us skip the GHL fetch too.
+ */
+export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<SyncResult> {
+  const mode: SyncMode = options?.mode ?? 'full';
   const ghl = new GHLClient();
   const supabase = getSupabaseClient();
   const errors: string[] = [];
   const syncLogId = await logSyncStart('opportunities');
 
   try {
-    console.log('[EntitySync] syncOpportunities: fetching all opportunities from GHL...');
+    console.log(`[EntitySync] syncOpportunities: ${mode} mode — fetching all opportunities from GHL...`);
     const opportunities = await ghl.getAllOpportunities();
-    console.log(`[EntitySync] syncOpportunities: fetched ${opportunities.length} opportunities, batching upserts...`);
+    console.log(`[EntitySync] syncOpportunities: fetched ${opportunities.length} opportunities from GHL`);
+
+    let toUpsert: GHLOpportunity[] = opportunities;
+    let skippedUnchanged = 0;
+
+    if (mode === 'incremental') {
+      // Build a map of existing opportunity id → date_updated from Supabase.
+      // Paginated past the 1000-row PostgREST cap (v1.5 lesson).
+      const existingDates = new Map<string, string>();
+      for (let page = 0; ; page++) {
+        const from = page * PAGINATION_PAGE_SIZE;
+        const to = from + PAGINATION_PAGE_SIZE - 1;
+        const { data, error } = await supabase
+          .from('opportunities')
+          .select('ghl_opportunity_id, date_updated')
+          .is('deleted_at', null)
+          .range(from, to);
+        if (error) {
+          console.warn(`[EntitySync] syncOpportunities: failed to load date_updated map (page ${page}): ${error.message} — falling back to full upsert`);
+          existingDates.clear();
+          break;
+        }
+        if (!data || data.length === 0) break;
+        for (const row of data as { ghl_opportunity_id: string; date_updated: string | null }[]) {
+          if (row.ghl_opportunity_id && row.date_updated) {
+            existingDates.set(row.ghl_opportunity_id, row.date_updated);
+          }
+        }
+        if (data.length < PAGINATION_PAGE_SIZE) break;
+      }
+
+      if (existingDates.size > 0) {
+        toUpsert = opportunities.filter((o) => {
+          const incomingTs = o.dateUpdated || o.updatedAt;
+          if (!incomingTs) return true; // Unknown freshness — upsert to be safe
+          const existing = existingDates.get(o.id);
+          if (!existing) return true; // New record never seen before
+          // Strictly greater — equal means identical row, skip.
+          return new Date(incomingTs).getTime() > new Date(existing).getTime();
+        });
+        skippedUnchanged = opportunities.length - toUpsert.length;
+        console.log(`[EntitySync] syncOpportunities: diff — ${toUpsert.length} changed, ${skippedUnchanged} unchanged (skipped)`);
+      }
+    }
+
+    if (toUpsert.length === 0) {
+      console.log('[EntitySync] syncOpportunities: no rows to write');
+      await updateLastSynced('opportunities');
+      await logSyncComplete(syncLogId, 0);
+      return { synced: 0, skipped: skippedUnchanged, mode, errors };
+    }
 
     const now = nowET();
-
-    // v1.4: Batch upserts — this was the primary bottleneck. 2,700 sequential
-    // upserts (@50ms each) was 2+ min; batched it's seconds.
-    const rows = opportunities.map((o) => ({
+    const rows = toUpsert.map((o) => ({
       ghl_opportunity_id: o.id,
       ghl_pipeline_id: o.pipelineId,
       ghl_stage_id: o.pipelineStageId || null,
@@ -278,25 +432,24 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
     }
     console.log(`[EntitySync] syncOpportunities: upserted ${upsertedCount}/${rows.length} opportunities`);
 
-    // v1.4: Skip createLeadEvent in bulk sync — opportunity webhooks create these
-    // in real-time with the correct event type (pipeline_stage_changed vs
-    // opportunity_created). The bulk 'opportunity_updated' event on every sync
-    // was creating 2,700 dedup-drop calls per cycle and adding noise.
+    // v1.4: createLeadEvent skipped in bulk — opportunity webhooks handle real-time events.
 
-    // Soft-delete opportunities no longer in GHL
-    const activeOppIds = opportunities.map((o) => o.id);
-    await softDeleteMissing('opportunities', 'ghl_opportunity_id', activeOppIds, ghl.getLocationId());
+    // v1.6: Soft-delete only runs in full mode.
+    if (mode === 'full') {
+      const activeOppIds = opportunities.map((o) => o.id);
+      await softDeleteMissing('opportunities', 'ghl_opportunity_id', activeOppIds, ghl.getLocationId());
+    }
 
     await updateLastSynced('opportunities');
-    await logSyncComplete(syncLogId, opportunities.length);
-    console.log(`[EntitySync] Opportunities synced: ${opportunities.length}`);
-    return { synced: opportunities.length, errors };
+    await logSyncComplete(syncLogId, toUpsert.length);
+    console.log(`[EntitySync] Opportunities synced (${mode}): ${toUpsert.length} (skipped ${skippedUnchanged})`);
+    return { synced: toUpsert.length, skipped: skippedUnchanged, mode, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
     await logSyncFailed(syncLogId, msg);
     console.error(`[EntitySync] Opportunity sync failed: ${msg}`);
-    return { synced: 0, errors };
+    return { synced: 0, skipped: 0, mode, errors };
   }
 }
 
@@ -387,7 +540,7 @@ export async function syncAppointments(options?: {
   }
 }
 
-// ---- Pipeline Sync (every 30 min) ----
+// ---- Pipeline Sync ----
 
 export async function syncPipelines(): Promise<{ synced: number; errors: string[] }> {
   const ghl = new GHLClient();
