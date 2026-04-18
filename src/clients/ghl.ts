@@ -1,5 +1,14 @@
 // ─── GHL API Client — src/clients/ghl.ts ─────────────────────────
 //
+// v1.6 — Added searchContacts() + getContactsUpdatedSince() for
+//         incremental contact sync via POST /contacts/search with
+//         a dateUpdated filter. Lets the 15-min cron fetch only
+//         changed records instead of re-pulling all 3,400+ contacts
+//         every cycle. Opportunities stay on the simple GET
+//         /opportunities/search (client-side dateUpdated diff in
+//         entity-syncer) because the GHL opportunities search
+//         endpoint doesn't reliably accept a server-side date filter.
+//
 // v1.3 — Added 429 retry logic to request() and requestWithOAuth().
 //         Per CONVERSATION_SYNC_CHANGES.md, this was the planned 2026-04-04
 //         fix for 71% of conversations having metadata but zero stored
@@ -292,6 +301,68 @@ export class GHLClient {
       if (!result.contacts?.length || (!startAfter && !startAfterId)) break;
     } while (pageCount < MAX_PAGES);
     return allContacts;
+  }
+
+  /**
+   * v1.6: Incremental contact search via POST /contacts/search.
+   *
+   * Used by the 15-min incremental sync to fetch only contacts whose
+   * `dateUpdated` is >= a floor timestamp, rather than re-pulling every
+   * contact in the location on every cycle.
+   *
+   * API shape note: GHL's search endpoints are less stable than the simple
+   * list endpoints. If the response is 400 or the filter appears ignored
+   * (e.g. returned total ~= total location contacts), treat it as a signal
+   * that the filter schema has shifted and the caller should fall back to
+   * a full fetch for that cycle. Daily full reconcile catches any drift.
+   */
+  async searchContacts(params: {
+    updatedSinceIso?: string;
+    page?: number;
+    pageLimit?: number;
+  }): Promise<{ contacts: GHLContact[]; total?: number }> {
+    const body: Record<string, unknown> = {
+      locationId: this.locationId,
+      page: params.page ?? 1,
+      pageLimit: params.pageLimit ?? 100,
+    };
+    if (params.updatedSinceIso) {
+      body.filters = [
+        {
+          field: 'dateUpdated',
+          operator: 'range',
+          value: { gte: params.updatedSinceIso },
+        },
+      ];
+      body.sort = [{ field: 'dateUpdated', direction: 'asc' }];
+    }
+    const res = await this.request<{ contacts?: GHLContact[]; total?: number }>(
+      '/contacts/search',
+      { method: 'POST', body },
+    );
+    return { contacts: res.contacts || [], total: res.total };
+  }
+
+  /**
+   * v1.6: Fetch all contacts with dateUpdated >= `updatedSinceIso`, paginating
+   * through /contacts/search until exhausted.
+   *
+   * Returns the fetched records and the server-reported total so the caller
+   * can sanity-check the filter against location size (if returned total is
+   * close to 100% of contacts, the filter likely wasn't applied).
+   */
+  async getContactsUpdatedSince(updatedSinceIso: string): Promise<{ contacts: GHLContact[]; totalReportedByServer: number | null }> {
+    const all: GHLContact[] = [];
+    const PAGE_LIMIT = 100;
+    const MAX_PAGES = 200;
+    let totalReported: number | null = null;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const result = await this.searchContacts({ updatedSinceIso, page, pageLimit: PAGE_LIMIT });
+      if (page === 1 && typeof result.total === 'number') totalReported = result.total;
+      all.push(...(result.contacts || []));
+      if (!result.contacts.length || result.contacts.length < PAGE_LIMIT) break;
+    }
+    return { contacts: all, totalReportedByServer: totalReported };
   }
 
   async getContact(contactId: string): Promise<GHLContact> {

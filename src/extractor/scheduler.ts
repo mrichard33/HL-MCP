@@ -70,22 +70,32 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
 /**
  * Starts all scheduled sync jobs.
  *
- * On first run (no prior sync_state), appointments use a 1-year lookback
- * to backfill historical data. Subsequent runs use the normal 24h lookback.
+ * v1.6 sync architecture:
+ *   - Real-time: GHL webhooks (handled in src/webhooks/handler.ts)
+ *   - Incremental: every 15 min for contacts + opportunities. Contacts uses
+ *     POST /contacts/search with a dateUpdated filter; opportunities uses a
+ *     client-side diff against Supabase's date_updated column.
+ *   - Full reconcile: daily at 3:05 / 3:10 AM America/New_York for contacts
+ *     and opportunities respectively. Runs softDeleteMissing and corrects
+ *     any drift that webhooks + incremental missed. The minute offsets of 5
+ *     and 10 are deliberate: they keep the daily crons off the */15-minute
+ *     boundary (:00/:15/:30/:45) so they can't collide with the recurring
+ *     incremental cron and get skipped by the shared job-name mutex.
+ *   - Time-windowed: appointments every 15 min (already bounded to a
+ *     2-week back / 30-day forward window).
+ *   - Smart round-robin: conversations/messages every 15 min (already
+ *     drip-syncs by staleness).
+ *   - Low-volume config: pipelines, custom_fields, custom_values, tags,
+ *     trigger_links, templates every 6 hours. These rarely change; 30-min
+ *     cadence was overkill.
+ *   - Synthetic: workflows + funnel_progression hourly.
  *
- * Schedule:
- * - Workflows: every hour (v1.5: reduced from every 10 min — workflow
- *   definitions change rarely and the sync is heavy)
- * - Contacts: every 15 minutes
- * - Opportunities: every 15 minutes
- * - Appointments: every 15 minutes
- * - Pipelines: every 30 minutes
- * - Conversations & Messages: every 15 minutes
- * - Templates: every 30 minutes
- * - Funnel progression: every hour
+ * On first run (no prior sync_state), appointments use a 1-year lookback
+ * to backfill historical data. Subsequent runs use the normal 2-week
+ * back / 30-day forward window.
  */
 export function startScheduledSync(): void {
-  console.log('[Scheduler] Starting scheduled sync jobs');
+  console.log('[Scheduler] Starting scheduled sync jobs (v1.6)');
 
   // One-time diagnostic: Firebase auth status affects workflow data quality
   const hasFirebaseAuth = !!(process.env.GHL_FIREBASE_API_KEY && process.env.GHL_FIREBASE_REFRESH_TOKEN);
@@ -109,6 +119,10 @@ export function startScheduledSync(): void {
     );
   }
 
+  // v1.6: Surface the incremental overlap buffer for easy verification in logs.
+  const incrementalOverlap = parseInt(process.env.INCREMENTAL_SYNC_OVERLAP_MINUTES || '10', 10);
+  console.log(`[Scheduler] Incremental sync overlap buffer: ${incrementalOverlap} min (override via INCREMENTAL_SYNC_OVERLAP_MINUTES)`);
+
   // Run initial sync with first-run detection
   (async () => {
     const appointmentsFirstRun = await isFirstRunFor('appointments');
@@ -129,11 +143,11 @@ export function startScheduledSync(): void {
       }
     });
 
-    // Run entity syncs immediately with staggered starts
-    // Pipelines first (referenced by opportunities)
+    // v1.6: On-boot entity syncs run in FULL mode to establish a clean
+    // baseline. Subsequent 15-min crons run in incremental mode.
     setTimeout(() => runJob('pipelines', syncPipelines), 5_000);
-    setTimeout(() => runJob('contacts', syncContacts), 10_000);
-    setTimeout(() => runJob('opportunities', syncOpportunities), 15_000);
+    setTimeout(() => runJob('contacts', () => syncContacts({ mode: 'full' })), 10_000);
+    setTimeout(() => runJob('opportunities', () => syncOpportunities({ mode: 'full' })), 15_000);
 
     // Appointments: 1-year lookback on first run, 2-week default otherwise
     setTimeout(() => runJob('appointments', () => {
@@ -153,24 +167,22 @@ export function startScheduledSync(): void {
       );
     }), 25_000);
 
-    // Run new entity syncs with staggered starts
+    // Low-volume config entity syncs on boot (staggered)
     setTimeout(() => runJob('custom_fields', syncCustomFields), 30_000);
     setTimeout(() => runJob('custom_values', syncCustomValues), 35_000);
     setTimeout(() => runJob('tags', syncTags), 40_000);
     setTimeout(() => runJob('trigger_links', syncTriggerLinks), 45_000);
-
-    // Templates: sync on startup (50s stagger)
     setTimeout(() => runJob('templates', syncTemplates), 50_000);
 
     // Run funnel computation after initial syncs complete (2 minutes)
     setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
   })();
 
-  // Schedule recurring jobs
+  // ─── Recurring jobs ──────────────────────────────────────────────
+
   // v1.5: Workflow sync cadence reduced from */10 to hourly. Workflow
   // definitions change rarely; hourly is plenty and reduces Firebase/GHL
-  // internal-API load. Funnel progression is also hourly — the two share
-  // the top-of-hour slot.
+  // internal-API load. Funnel progression also hourly — same top-of-hour slot.
   cron.schedule('0 * * * *', () => {
     runJob('workflows', async () => {
       const result = await extractAndSyncWorkflows();
@@ -180,22 +192,28 @@ export function startScheduledSync(): void {
     });
   });
 
+  cron.schedule('0 * * * *', () => {
+    runJob('funnel_progression', computeFunnelProgression);
+  });
+
+  // v1.6: 15-min cadence for contacts + opportunities now runs in INCREMENTAL
+  // mode. Pulls only records with dateUpdated >= (last_synced_at - overlap)
+  // for contacts, and skips unchanged-row upserts for opportunities.
   cron.schedule('*/15 * * * *', () => {
-    runJob('contacts', syncContacts);
+    runJob('contacts', () => syncContacts({ mode: 'incremental' }));
   });
 
   cron.schedule('*/15 * * * *', () => {
-    runJob('opportunities', syncOpportunities);
+    runJob('opportunities', () => syncOpportunities({ mode: 'incremental' }));
   });
 
+  // Appointments stays at 15 min — already time-windowed, very efficient.
   cron.schedule('*/15 * * * *', () => {
     runJob('appointments', syncAppointments);
   });
 
-  cron.schedule('*/30 * * * *', () => {
-    runJob('pipelines', syncPipelines);
-  });
-
+  // Conversations/messages stays at 15 min — already smart-scheduled (drip
+  // by staleness with MAX_CONTACTS_PER_SYNC cap).
   cron.schedule('*/15 * * * *', () => {
     runJob('conversations', async () => {
       const result = await syncConversationsAndMessages();
@@ -205,33 +223,61 @@ export function startScheduledSync(): void {
     });
   });
 
-  cron.schedule('*/30 * * * *', () => {
+  // v1.6: Daily full reconcile for contacts + opportunities in America/New_York.
+  // Runs softDeleteMissing and corrects any drift that webhooks + incremental
+  // missed. Using node-cron 4.x's timezone option so the job fires at the right
+  // clock time year-round across the EST/EDT transition.
+  //
+  // IMPORTANT: Minute offsets are 5 and 10, NOT 0. A `0 3 * * *` daily cron
+  // would collide with the `*/15 * * * *` incremental cron (which fires at
+  // :00/:15/:30/:45), and since both use the same job name the `runningJobs`
+  // mutex would silently drop whichever fired second. If that happened to be
+  // the daily full, we'd miss the nightly drift + soft-delete reconcile — the
+  // whole point of having a daily full. Offsets to :05 and :10 keep the daily
+  // crons off the 15-min boundary entirely. 3:10 ET for opportunities (rather
+  // than running simultaneously with contacts) also avoids hammering the GHL
+  // API with two concurrent full-fetch jobs at the same minute.
+  cron.schedule('5 3 * * *', () => {
+    console.log('[Scheduler] Daily 3:05 AM ET full reconcile — contacts');
+    runJob('contacts', () => syncContacts({ mode: 'full' }));
+  }, { timezone: 'America/New_York' });
+
+  cron.schedule('10 3 * * *', () => {
+    console.log('[Scheduler] Daily 3:10 AM ET full reconcile — opportunities');
+    runJob('opportunities', () => syncOpportunities({ mode: 'full' }));
+  }, { timezone: 'America/New_York' });
+
+  // v1.6: Low-volume config entities moved from every 30 min to every
+  // 6 hours (00:00, 06:00, 12:00, 18:00 UTC). These rarely change;
+  // 30-min cadence was overkill and contributed to Supabase write churn.
+  cron.schedule('0 */6 * * *', () => {
+    runJob('pipelines', syncPipelines);
+  });
+
+  cron.schedule('0 */6 * * *', () => {
     runJob('custom_fields', syncCustomFields);
   });
 
-  cron.schedule('*/30 * * * *', () => {
+  cron.schedule('0 */6 * * *', () => {
     runJob('custom_values', syncCustomValues);
   });
 
-  cron.schedule('*/30 * * * *', () => {
+  cron.schedule('0 */6 * * *', () => {
     runJob('tags', syncTags);
   });
 
-  cron.schedule('*/30 * * * *', () => {
+  cron.schedule('0 */6 * * *', () => {
     runJob('trigger_links', syncTriggerLinks);
   });
 
-  // Templates: every 30 minutes
-  cron.schedule('*/30 * * * *', () => {
+  cron.schedule('0 */6 * * *', () => {
     runJob('templates', syncTemplates);
   });
 
-  cron.schedule('0 * * * *', () => {
-    runJob('funnel_progression', computeFunnelProgression);
-  });
-
-  console.log('[Scheduler] Cron jobs registered:');
-  console.log('  0 * * * *    — workflows, funnel progression');
-  console.log('  */15 * * * * — contacts, opportunities, appointments, conversations/messages');
-  console.log('  */30 * * * * — pipelines, custom_fields, custom_values, tags, trigger_links, templates');
+  console.log('[Scheduler] Cron jobs registered (v1.6):');
+  console.log('  0 * * * *          — workflows, funnel progression (hourly)');
+  console.log('  */15 * * * *       — contacts (incremental), opportunities (incremental), appointments, conversations/messages');
+  console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
+  console.log('  10 3 * * * ET      — opportunities daily full reconcile (America/New_York)');
+  console.log('  0 */6 * * *        — pipelines, custom_fields, custom_values, tags, trigger_links, templates (every 6 hr)');
 }
