@@ -75,9 +75,12 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  *   - Incremental: every 15 min for contacts + opportunities. Contacts uses
  *     POST /contacts/search with a dateUpdated filter; opportunities uses a
  *     client-side diff against Supabase's date_updated column.
- *   - Full reconcile: daily at 3:00 AM America/New_York for contacts +
- *     opportunities. Runs softDeleteMissing and corrects any drift that
- *     webhooks + incremental missed.
+ *   - Full reconcile: daily at 3:05 / 3:10 AM America/New_York for contacts
+ *     and opportunities respectively. Runs softDeleteMissing and corrects
+ *     any drift that webhooks + incremental missed. The minute offsets of 5
+ *     and 10 are deliberate: they keep the daily crons off the */15-minute
+ *     boundary (:00/:15/:30/:45) so they can't collide with the recurring
+ *     incremental cron and get skipped by the shared job-name mutex.
  *   - Time-windowed: appointments every 15 min (already bounded to a
  *     2-week back / 30-day forward window).
  *   - Smart round-robin: conversations/messages every 15 min (already
@@ -220,17 +223,27 @@ export function startScheduledSync(): void {
     });
   });
 
-  // v1.6: Daily full reconcile for contacts + opportunities at 3:00 AM
-  // America/New_York. Runs softDeleteMissing and corrects any drift that
-  // webhooks + incremental missed. Using node-cron's timezone option so
-  // the job fires at 3 AM ET year-round, automatically handling the
-  // EST/EDT transition (node-cron 4.x supports this — verified against
-  // package.json).
-  cron.schedule('0 3 * * *', () => {
+  // v1.6: Daily full reconcile for contacts + opportunities in America/New_York.
+  // Runs softDeleteMissing and corrects any drift that webhooks + incremental
+  // missed. Using node-cron 4.x's timezone option so the job fires at the right
+  // clock time year-round across the EST/EDT transition.
+  //
+  // IMPORTANT: Minute offsets are 5 and 10, NOT 0. A `0 3 * * *` daily cron
+  // would collide with the `*/15 * * * *` incremental cron (which fires at
+  // :00/:15/:30/:45), and since both use the same job name the `runningJobs`
+  // mutex would silently drop whichever fired second. If that happened to be
+  // the daily full, we'd miss the nightly drift + soft-delete reconcile — the
+  // whole point of having a daily full. Offsets to :05 and :10 keep the daily
+  // crons off the 15-min boundary entirely. 3:10 ET for opportunities (rather
+  // than running simultaneously with contacts) also avoids hammering the GHL
+  // API with two concurrent full-fetch jobs at the same minute.
+  cron.schedule('5 3 * * *', () => {
+    console.log('[Scheduler] Daily 3:05 AM ET full reconcile — contacts');
     runJob('contacts', () => syncContacts({ mode: 'full' }));
   }, { timezone: 'America/New_York' });
 
-  cron.schedule('0 3 * * *', () => {
+  cron.schedule('10 3 * * *', () => {
+    console.log('[Scheduler] Daily 3:10 AM ET full reconcile — opportunities');
     runJob('opportunities', () => syncOpportunities({ mode: 'full' }));
   }, { timezone: 'America/New_York' });
 
@@ -264,6 +277,7 @@ export function startScheduledSync(): void {
   console.log('[Scheduler] Cron jobs registered (v1.6):');
   console.log('  0 * * * *          — workflows, funnel progression (hourly)');
   console.log('  */15 * * * *       — contacts (incremental), opportunities (incremental), appointments, conversations/messages');
-  console.log('  0 3 * * * ET       — contacts (FULL reconcile), opportunities (FULL reconcile) [daily 3 AM America/New_York]');
+  console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
+  console.log('  10 3 * * * ET      — opportunities daily full reconcile (America/New_York)');
   console.log('  0 */6 * * *        — pipelines, custom_fields, custom_values, tags, trigger_links, templates (every 6 hr)');
 }
