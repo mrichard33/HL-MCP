@@ -1,3 +1,17 @@
+// ─── GHL API Client — src/clients/ghl.ts ─────────────────────────
+//
+// v1.1 — Added per-request timeout to every fetch() call.
+//         Node's fetch has NO default timeout; a stalled response pins
+//         the sync mutex (runningJobs) forever, silently killing all
+//         subsequent scheduled runs of that entity sync. This was the
+//         root cause of opportunities/appointments/conversations/messages
+//         going stale from 2026-04-07 onward — the initial call hung,
+//         `isJobRunning(name)` stayed true, and every later cron fire
+//         was skipped without logging an error.
+//         All 5 fetch() sites now route through fetchWithTimeout() which
+//         aborts with a readable error after REQUEST_TIMEOUT_MS (default
+//         60s, override via env GHL_REQUEST_TIMEOUT_MS).
+
 import type {
   GHLContact,
   GHLPipeline,
@@ -21,6 +35,33 @@ import { acquireToken, report429, reportSuccess } from './ghl-rate-limiter.js';
 const DEFAULT_BASE_URL = 'https://services.leadconnectorhq.com';
 const BACKEND_BASE_URL = 'https://backend.leadconnectorhq.com';
 const FIREBASE_TOKEN_URL = 'https://securetoken.googleapis.com/v1/token';
+
+// v1.1: Per-request timeout. Without this, a hung TCP connection to the
+// GHL API pins the containing sync job's runJob() mutex forever, causing
+// the recurring cron for that entity to silently skip all future runs.
+// Override via env: GHL_REQUEST_TIMEOUT_MS=120000
+const REQUEST_TIMEOUT_MS = parseInt(process.env.GHL_REQUEST_TIMEOUT_MS || '60000', 10);
+
+/**
+ * fetch() with an AbortController-based timeout.
+ * Uses AbortController + setTimeout (Node 16+) rather than
+ * AbortSignal.timeout() (Node 17.3+) for broader compatibility.
+ * The `label` is included in the thrown error to aid log diagnosis.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit, label: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`GHL request timed out after ${REQUEST_TIMEOUT_MS / 1000}s: ${label}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 interface RequestOptions {
   method?: string;
@@ -69,11 +110,12 @@ export class GHLClient {
       Version: '2021-07-28',
     };
 
-    const response = await fetch(url.toString(), {
-      method: options.method || 'GET',
+    const method = options.method || 'GET';
+    const response = await fetchWithTimeout(url.toString(), {
+      method,
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    }, `${method} ${path}`);
 
     if (response.status === 429) {
       report429();
@@ -113,11 +155,12 @@ export class GHLClient {
       Version: '2021-07-28',
     };
 
-    const response = await fetch(url.toString(), {
-      method: options.method || 'GET',
+    const method = options.method || 'GET';
+    const response = await fetchWithTimeout(url.toString(), {
+      method,
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    }, `${method} ${path} (oauth)`);
 
     if (response.status === 429) {
       report429();
@@ -155,11 +198,11 @@ export class GHLClient {
     }
     const url = `${FIREBASE_TOKEN_URL}?key=${this.firebaseApiKey}`;
     const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: this.firebaseRefreshToken });
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
-    });
+    }, 'Firebase token refresh');
     if (!response.ok) {
       const errorBody = await response.text();
       const errorMsg = `Firebase token error ${response.status}: ${errorBody}`;
@@ -347,7 +390,7 @@ export class GHLClient {
     try {
       const idToken = await this.getFirebaseToken();
       const url = `${BACKEND_BASE_URL}/workflow/${this.locationId}/${workflowId}?includeScheduledPauseInfo=true`;
-      const response = await fetch(url, { method: 'GET', headers: { Accept: 'application/json', channel: 'APP', 'token-id': idToken } });
+      const response = await fetchWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json', channel: 'APP', 'token-id': idToken } }, `GET workflow detail ${workflowId}`);
       if (!response.ok) { console.error(`[GHL] Internal API failed for workflow ${workflowId} (${response.status})`); return null; }
       return response.json() as Promise<Record<string, unknown>>;
     } catch (err) {
@@ -361,7 +404,7 @@ export class GHLClient {
     try {
       const idToken = await this.getFirebaseToken();
       const url = `${BACKEND_BASE_URL}/workflow/${this.locationId}/trigger?workflowId=${workflowId}`;
-      const response = await fetch(url, { method: 'GET', headers: { Accept: 'application/json', channel: 'APP', 'token-id': idToken } });
+      const response = await fetchWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json', channel: 'APP', 'token-id': idToken } }, `GET workflow triggers ${workflowId}`);
       if (!response.ok) { console.warn(`[GHL] Trigger API failed for workflow ${workflowId} (${response.status})`); return []; }
       const data = await response.json();
       const dataType = Array.isArray(data) ? `Array[${data.length}]` : typeof data;
