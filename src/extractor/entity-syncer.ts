@@ -62,6 +62,22 @@ async function logSyncFailed(syncLogId: string | null, errorMessage: string): Pr
   }).eq('id', syncLogId);
 }
 
+// v1.4: Batch size for Supabase bulk upserts. 500 is well under PostgREST's
+// default 1000-row limit and keeps any single request under ~5MB JSON payload.
+const UPSERT_BATCH_SIZE = 500;
+
+/**
+ * Chunk an array into batches of a given size.
+ */
+function chunk<T>(arr: T[], size: number): T[][] {
+  if (size <= 0) return [arr];
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    out.push(arr.slice(i, i + size));
+  }
+  return out;
+}
+
 // ---- Soft-Delete Helper ----
 
 /**
@@ -138,41 +154,59 @@ export async function syncContacts(): Promise<{ synced: number; errors: string[]
   const syncLogId = await logSyncStart('contacts');
 
   try {
-    // Fetch ALL contacts with pagination (no updatedAfter — not supported by GHL API v2)
+    console.log('[EntitySync] syncContacts: fetching all contacts from GHL...');
     const contacts = await ghl.getAllContacts();
+    console.log(`[EntitySync] syncContacts: fetched ${contacts.length} contacts, batching upserts...`);
 
     const now = nowET();
-    for (const c of contacts) {
-      try {
-        await supabase.from('contacts').upsert(
-          {
-            ghl_contact_id: c.id,
-            ghl_location_id: c.locationId || null,
-            first_name: c.firstName || null,
-            last_name: c.lastName || null,
-            email: c.email || null,
-            phone: c.phone || null,
-            company_name: c.companyName || null,
-            tags: c.tags || [],
-            source: c.source || null,
-            custom_fields: c.customFields || {},
-            date_added: c.dateAdded || null,
-            date_updated: c.dateUpdated || now,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_contact_id' },
-        );
 
-        const stableTs = c.dateUpdated || c.dateAdded;
-        if (stableTs) {
-          const eventType = deriveContactEventType({ dateAdded: c.dateAdded, dateUpdated: c.dateUpdated });
-          await createLeadEvent(c.id, eventType, c.id, stableTs, c);
-        }
-      } catch (err) {
-        errors.push(`Contact ${c.id}: ${err instanceof Error ? err.message : String(err)}`);
+    // v1.4: Batch upserts — 500 rows per call instead of one-at-a-time
+    const rows = contacts.map((c) => ({
+      ghl_contact_id: c.id,
+      ghl_location_id: c.locationId || null,
+      first_name: c.firstName || null,
+      last_name: c.lastName || null,
+      email: c.email || null,
+      phone: c.phone || null,
+      company_name: c.companyName || null,
+      tags: c.tags || [],
+      source: c.source || null,
+      custom_fields: c.customFields || {},
+      date_added: c.dateAdded || null,
+      date_updated: c.dateUpdated || now,
+      synced_at: now,
+      updated_at: now,
+    }));
+
+    let upsertedCount = 0;
+    for (const batch of chunk(rows, UPSERT_BATCH_SIZE)) {
+      const { error } = await supabase.from('contacts').upsert(batch, { onConflict: 'ghl_contact_id' });
+      if (error) {
+        errors.push(`Contact batch upsert: ${error.message}`);
+        console.error(`[EntitySync] Contact batch upsert failed: ${error.message}`);
+      } else {
+        upsertedCount += batch.length;
       }
     }
+    console.log(`[EntitySync] syncContacts: upserted ${upsertedCount}/${rows.length} contacts`);
+
+    // v1.4: createLeadEvent still runs per-contact but only for contacts with a timestamp.
+    // This loop is much lighter than upserts (just event-hash dedup) and stays sequential
+    // so lead_events ordering is preserved.
+    console.log('[EntitySync] syncContacts: creating lead events...');
+    let eventsCreated = 0;
+    for (const c of contacts) {
+      const stableTs = c.dateUpdated || c.dateAdded;
+      if (!stableTs) continue;
+      try {
+        const eventType = deriveContactEventType({ dateAdded: c.dateAdded, dateUpdated: c.dateUpdated });
+        await createLeadEvent(c.id, eventType, c.id, stableTs, c);
+        eventsCreated++;
+      } catch (err) {
+        errors.push(`Contact event ${c.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    console.log(`[EntitySync] syncContacts: created ${eventsCreated} lead events`);
 
     // Soft-delete contacts no longer in GHL
     const activeContactIds = contacts.map((c) => c.id);
@@ -200,42 +234,49 @@ export async function syncOpportunities(): Promise<{ synced: number; errors: str
   const syncLogId = await logSyncStart('opportunities');
 
   try {
-    // Fetch ALL opportunities with pagination (locationId always included now)
+    console.log('[EntitySync] syncOpportunities: fetching all opportunities from GHL...');
     const opportunities = await ghl.getAllOpportunities();
+    console.log(`[EntitySync] syncOpportunities: fetched ${opportunities.length} opportunities, batching upserts...`);
 
     const now = nowET();
-    for (const o of opportunities) {
-      try {
-        await supabase.from('opportunities').upsert(
-          {
-            ghl_opportunity_id: o.id,
-            ghl_pipeline_id: o.pipelineId,
-            ghl_stage_id: o.pipelineStageId || null,
-            ghl_contact_id: o.contactId || null,
-            ghl_location_id: o.locationId || null,
-            name: o.name,
-            status: o.status,
-            monetary_value: o.monetaryValue || null,
-            currency: o.currency || 'USD',
-            source: o.source || null,
-            assigned_to: o.assignedTo || null,
-            custom_fields: o.customFields || {},
-            date_added: o.dateAdded || o.createdAt || null,
-            date_updated: o.dateUpdated || o.updatedAt || now,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_opportunity_id' },
-        );
 
-        const stableTs = o.dateUpdated || o.updatedAt || o.dateAdded || o.createdAt;
-        if (stableTs) {
-          await createLeadEvent(o.contactId, 'opportunity_updated', o.id, stableTs, o);
-        }
-      } catch (err) {
-        errors.push(`Opportunity ${o.id}: ${err instanceof Error ? err.message : String(err)}`);
+    // v1.4: Batch upserts — this was the primary bottleneck. 2,700 sequential
+    // upserts (@50ms each) was 2+ min; batched it's seconds.
+    const rows = opportunities.map((o) => ({
+      ghl_opportunity_id: o.id,
+      ghl_pipeline_id: o.pipelineId,
+      ghl_stage_id: o.pipelineStageId || null,
+      ghl_contact_id: o.contactId || null,
+      ghl_location_id: o.locationId || null,
+      name: o.name,
+      status: o.status,
+      monetary_value: o.monetaryValue || null,
+      currency: o.currency || 'USD',
+      source: o.source || null,
+      assigned_to: o.assignedTo || null,
+      custom_fields: o.customFields || {},
+      date_added: o.dateAdded || o.createdAt || null,
+      date_updated: o.dateUpdated || o.updatedAt || now,
+      synced_at: now,
+      updated_at: now,
+    }));
+
+    let upsertedCount = 0;
+    for (const batch of chunk(rows, UPSERT_BATCH_SIZE)) {
+      const { error } = await supabase.from('opportunities').upsert(batch, { onConflict: 'ghl_opportunity_id' });
+      if (error) {
+        errors.push(`Opportunity batch upsert: ${error.message}`);
+        console.error(`[EntitySync] Opportunity batch upsert failed: ${error.message}`);
+      } else {
+        upsertedCount += batch.length;
       }
     }
+    console.log(`[EntitySync] syncOpportunities: upserted ${upsertedCount}/${rows.length} opportunities`);
+
+    // v1.4: Skip createLeadEvent in bulk sync — opportunity webhooks create these
+    // in real-time with the correct event type (pipeline_stage_changed vs
+    // opportunity_created). The bulk 'opportunity_updated' event on every sync
+    // was creating 2,700 dedup-drop calls per cycle and adding noise.
 
     // Soft-delete opportunities no longer in GHL
     const activeOppIds = opportunities.map((o) => o.id);
@@ -270,51 +311,68 @@ export async function syncAppointments(options?: {
     // Default: 2 weeks back to 30d forward (for scheduled sync); callers can override for initial population
     const startTime = options?.startTime ?? toET(Date.now() - 14 * 24 * 60 * 60 * 1000);
     const endTime = options?.endTime ?? toET(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    console.log(`[EntitySync] syncAppointments: fetching appointments from ${startTime} to ${endTime}...`);
     const events = await ghl.getAllAppointments({ startTime, endTime });
+    console.log(`[EntitySync] syncAppointments: fetched ${events.length} appointments, batching upserts...`);
+
     if (events.length === 0) {
       console.warn('[EntitySync] No appointments returned — check that calendars exist and GHL_LOCATION_ID is correct');
     }
 
     const now = nowET();
-    let synced = 0;
-    for (const apt of events) {
-      try {
-        await supabase.from('appointments').upsert(
-          {
-            ghl_appointment_id: apt.id,
-            ghl_contact_id: apt.contactId || null,
-            ghl_calendar_id: apt.calendarId || null,
-            ghl_location_id: apt.locationId || null,
-            title: apt.title || null,
-            status: apt.status || 'confirmed',
-            start_time: apt.startTime || null,
-            end_time: apt.endTime || null,
-            assigned_to: apt.assignedUserId || null,
-            raw_json: apt,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_appointment_id' },
-        );
 
-        const eventType = deriveAppointmentEventType(apt.status);
-        if (apt.startTime) {
-          await createLeadEvent(apt.contactId, eventType, apt.id, apt.startTime, apt);
-        }
-        synced++;
-      } catch (err) {
-        errors.push(`Appointment ${apt.id}: ${err instanceof Error ? err.message : String(err)}`);
+    // v1.4: Batch upserts
+    const rows = events.map((apt) => ({
+      ghl_appointment_id: apt.id,
+      ghl_contact_id: apt.contactId || null,
+      ghl_calendar_id: apt.calendarId || null,
+      ghl_location_id: apt.locationId || null,
+      title: apt.title || null,
+      status: apt.status || 'confirmed',
+      start_time: apt.startTime || null,
+      end_time: apt.endTime || null,
+      assigned_to: apt.assignedUserId || null,
+      raw_json: apt,
+      synced_at: now,
+      updated_at: now,
+    }));
+
+    let upsertedCount = 0;
+    for (const batch of chunk(rows, UPSERT_BATCH_SIZE)) {
+      const { error } = await supabase.from('appointments').upsert(batch, { onConflict: 'ghl_appointment_id' });
+      if (error) {
+        errors.push(`Appointment batch upsert: ${error.message}`);
+        console.error(`[EntitySync] Appointment batch upsert failed: ${error.message}`);
+      } else {
+        upsertedCount += batch.length;
       }
     }
+    console.log(`[EntitySync] syncAppointments: upserted ${upsertedCount}/${rows.length} appointments`);
+
+    // Create lead events for appointments — kept sequential because volume is manageable (~140)
+    // and the derived event type matters for funnel progression.
+    console.log('[EntitySync] syncAppointments: creating lead events...');
+    let eventsCreated = 0;
+    for (const apt of events) {
+      if (!apt.startTime) continue;
+      try {
+        const eventType = deriveAppointmentEventType(apt.status);
+        await createLeadEvent(apt.contactId, eventType, apt.id, apt.startTime, apt);
+        eventsCreated++;
+      } catch (err) {
+        errors.push(`Appointment event ${apt.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    console.log(`[EntitySync] syncAppointments: created ${eventsCreated} lead events`);
 
     // Soft-delete appointments no longer in GHL (within the synced time window)
     const activeAptIds = events.map((a) => a.id);
     await softDeleteMissing('appointments', 'ghl_appointment_id', activeAptIds, ghl.getLocationId());
 
     await updateLastSynced('appointments');
-    await logSyncComplete(syncLogId, synced);
-    console.log(`[EntitySync] Appointments synced: ${synced}`);
-    return { synced, errors };
+    await logSyncComplete(syncLogId, events.length);
+    console.log(`[EntitySync] Appointments synced: ${events.length}`);
+    return { synced: events.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
@@ -434,6 +492,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   const msgSyncLogId = await logSyncStart('messages');
 
   try {
+    console.log('[EntitySync] syncConversationsAndMessages: fetching contact list from Supabase...');
     // Get all contact IDs (exclude soft-deleted)
     const { data: allContacts, error: allError } = await supabase
       .from('contacts')
@@ -446,6 +505,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
       await logSyncComplete(syncLogId, 0);
       return { synced_conversations: 0, synced_messages: 0, errors: [] };
     }
+    console.log(`[EntitySync] syncConversationsAndMessages: ${allContacts.length} total contacts, determining mode...`);
 
     // Determine backfill vs incremental mode
     // Backfill: process contacts that have NEVER had conversations checked
@@ -494,6 +554,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
     let totalConversations = 0;
     let totalMessages = 0;
     let totalMessageFailures = 0;
+    let contactsProcessed = 0;
     const now = nowET();
 
     // Process contacts in batches
@@ -547,30 +608,27 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
               convCount++;
 
               // Fetch and upsert messages for this conversation (with pagination)
-              let messagesSucceeded = false;
               try {
                 const messageList = await ghl.getAllMessages(conv.id, 20);
-                for (const msg of messageList) {
-                  const { error: msgError } = await supabase.from('messages').upsert(
-                    {
-                      ghl_message_id: msg.id,
-                      ghl_conversation_id: msg.conversationId || conv.id,
-                      ghl_contact_id: msg.contactId || contactId,
-                      direction: normalizeDirection(msg.direction),
-                      type: msg.type || 'sms',
-                      body: msg.body || msg.message || msg.text || null,
-                      status: msg.status || 'delivered',
-                      sent_at: toISODate(msg.dateAdded) || now,
-                    },
-                    { onConflict: 'ghl_message_id' },
-                  );
+                if (messageList.length > 0) {
+                  // v1.4: Batch message upserts per conversation
+                  const msgRows = messageList.map((msg) => ({
+                    ghl_message_id: msg.id,
+                    ghl_conversation_id: msg.conversationId || conv.id,
+                    ghl_contact_id: msg.contactId || contactId,
+                    direction: normalizeDirection(msg.direction),
+                    type: msg.type || 'sms',
+                    body: msg.body || msg.message || msg.text || null,
+                    status: msg.status || 'delivered',
+                    sent_at: toISODate(msg.dateAdded) || now,
+                  }));
+                  const { error: msgError } = await supabase.from('messages').upsert(msgRows, { onConflict: 'ghl_message_id' });
                   if (msgError) {
-                    errors.push(`Msg upsert ${msg.id}: ${msgError.message}`);
-                    continue;
+                    errors.push(`Msg batch upsert conv ${conv.id}: ${msgError.message}`);
+                  } else {
+                    msgCount += msgRows.length;
                   }
-                  msgCount++;
                 }
-                messagesSucceeded = true;
               } catch (msgErr) {
                 const errMsg = msgErr instanceof Error ? msgErr.message : String(msgErr);
                 errors.push(`Messages for conv ${conv.id}: ${errMsg}`);
@@ -584,7 +642,7 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
                     .update({ synced_at: '2000-01-01T00:00:00Z' })
                     .eq('ghl_conversation_id', conv.id);
                   console.warn(`[EntitySync] Reset synced_at for conv ${conv.id} (message fetch failed: ${errMsg})`);
-                } catch (resetErr) {
+                } catch {
                   // Non-fatal — worst case it just won't be prioritized for retry
                   console.error(`[EntitySync] Failed to reset synced_at for conv ${conv.id}`);
                 }
@@ -612,6 +670,12 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
           totalMessages += result.value.msgCount;
           totalMessageFailures += result.value.msgFailures;
         }
+      }
+      contactsProcessed += batch.length;
+
+      // v1.4: Progress log every ~50 contacts so we can see the sync is alive
+      if (contactsProcessed % 50 === 0 || contactsProcessed === contacts.length) {
+        console.log(`[EntitySync] syncConversationsAndMessages progress: ${contactsProcessed}/${contacts.length} contacts, ${totalConversations} convs, ${totalMessages} msgs so far`);
       }
 
       // Pause between batches to avoid rate limits (skip after last batch)
