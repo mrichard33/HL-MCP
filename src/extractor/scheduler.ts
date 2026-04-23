@@ -51,11 +51,8 @@ function isJobRunning(name: string): boolean {
  *     a few minutes; 10 min ceiling is generous.
  *   - appointments: 2-week/30-day window is tiny (<1 min); 10 min ceiling
  *     covers the first-run 1-year backfill.
- *   - conversations: current conversations sync iterates up to
- *     MAX_CONTACTS_PER_SYNC contacts with batch + inter-conv delays and
- *     per-contact message fetches. Legitimately takes 10–15 min on backfill.
- *     20 min ceiling. Patch 2 (conversation-driven /conversations/search
- *     with a lastMessageDate watermark) will reduce this substantially.
+ *   - conversations: v1.7 watermark walk is typically <1 min per 15-min
+ *     cycle. 15 min ceiling is very generous.
  *   - Everything else defaults to 10 min.
  *
  * Override any job via env: JOB_TIMEOUT_MS_{NAME_UPPERCASED}
@@ -66,7 +63,7 @@ const JOB_TIMEOUTS_MS: Record<string, number> = {
   contacts: 10 * 60 * 1000,
   opportunities: 10 * 60 * 1000,
   appointments: 10 * 60 * 1000,
-  conversations: 20 * 60 * 1000,
+  conversations: 15 * 60 * 1000,
   funnel_progression: 5 * 60 * 1000,
   pipelines: 5 * 60 * 1000,
   custom_fields: 5 * 60 * 1000,
@@ -124,6 +121,11 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
   }
 }
 
+/** Small helper used by the serialized boot chain. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Check if a specific entity has ever been successfully synced.
  * The migration seeds sync_state rows with last_synced_at='1970-01-01',
@@ -162,8 +164,8 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  *     incremental cron and get skipped by the shared job-name mutex.
  *   - Time-windowed: appointments every 15 min (already bounded to a
  *     2-week back / 30-day forward window).
- *   - Smart round-robin: conversations/messages every 15 min (already
- *     drip-syncs by staleness).
+ *   - Watermark: conversations/messages every 15 min using v1.7 watermark
+ *     walk — DESC by last_message_date, stop at floor.
  *   - Low-volume config: pipelines, custom_fields, custom_values, tags,
  *     trigger_links, templates every 6 hours. These rarely change; 30-min
  *     cadence was overkill.
@@ -175,9 +177,22 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  *
  * v1.7: runJob now enforces a per-job hard timeout (see JOB_TIMEOUTS_MS)
  * so a stalled inner promise can never permanently pin the mutex.
+ *
+ * v1.8 — Boot-time entity syncs are now SERIALIZED for the four
+ * bucket-heavy ones (contacts, opportunities, appointments, conversations).
+ * The previous fan-out pattern (5-second setTimeout stagger) launched all
+ * four within 25s of boot, and each one needed 27-38 API calls, which
+ * instantly drained the 40-token bucket and triggered a 429 from GHL. The
+ * rate limiter then paused every queued caller for 5+ minutes, which
+ * manifested as the post-deploy "everything stuck running" symptom we saw
+ * after the 1a744e2a deploy. Running them sequentially instead lets each
+ * get full bucket access, so none of them get throttled and all four
+ * complete in less total wall time than the broken parallel version ever
+ * did. The recurring */15 crons stay parallel because they're in
+ * incremental mode (much smaller per-cycle cost).
  */
 export function startScheduledSync(): void {
-  console.log('[Scheduler] Starting scheduled sync jobs (v1.7)');
+  console.log('[Scheduler] Starting scheduled sync jobs (v1.8)');
 
   // One-time diagnostic: Firebase auth status affects workflow data quality
   const hasFirebaseAuth = !!(process.env.GHL_FIREBASE_API_KEY && process.env.GHL_FIREBASE_REFRESH_TOKEN);
@@ -218,7 +233,13 @@ export function startScheduledSync(): void {
       console.log('[Scheduler] First appointment sync detected — will perform 1-year historical backfill');
     }
 
-    // Run workflow sync immediately
+    // ─── Parallel: low-bucket jobs ──────────────────────────────────
+    //
+    // Workflows uses the Firebase backend API for per-workflow details
+    // (not the rate-limited bucket) — safe to start immediately alongside
+    // short config syncs. Short syncs each cost 1-5 bucket tokens and
+    // complete in seconds, so parallel fan-out here is fine.
+
     runJob('workflows', async () => {
       const result = await extractAndSyncWorkflows();
       console.log(
@@ -231,44 +252,59 @@ export function startScheduledSync(): void {
       }
     });
 
-    // v1.6: On-boot entity syncs run in FULL mode to establish a clean
-    // baseline. Subsequent 15-min crons run in incremental mode.
     setTimeout(() => runJob('pipelines', syncPipelines), 5_000);
-    setTimeout(() => runJob('contacts', () => syncContacts({ mode: 'full' })), 10_000);
-    setTimeout(() => runJob('opportunities', () => syncOpportunities({ mode: 'full' })), 15_000);
+    setTimeout(() => runJob('custom_fields', syncCustomFields), 10_000);
+    setTimeout(() => runJob('custom_values', syncCustomValues), 15_000);
+    setTimeout(() => runJob('tags', syncTags), 20_000);
+    setTimeout(() => runJob('trigger_links', syncTriggerLinks), 25_000);
+    setTimeout(() => runJob('templates', syncTemplates), 30_000);
 
-    // Appointments: 1-year lookback on first run, 2-week default otherwise
-    setTimeout(() => runJob('appointments', () => {
-      if (appointmentsFirstRun) {
-        return syncAppointments({
-          startTime: toET(Date.now() - 365 * 86_400_000),
-          endTime: toET(Date.now() + 60 * 86_400_000),
-        });
-      }
-      return syncAppointments();
-    }), 20_000);
+    // ─── Serialized: bucket-heavy boot-time syncs ──────────────────
+    //
+    // v1.8: contacts/opportunities/appointments/conversations each need
+    // many tokens in full mode (contacts full: 38 pages, opps full: 27
+    // pages, convs first-run backfill: up to ~300 conversations × 1-2
+    // message pages each). Running them in parallel guarantees 429s and
+    // a rate-limiter pause. Serialize them so each gets uncontested
+    // bucket access, and push the first big sync off until 45s after
+    // boot so the parallel shorts above have cleared the initial bucket
+    // usage.
+    (async () => {
+      await sleep(45_000);
+      console.log('[Scheduler] v1.8: starting serialized boot chain (contacts → opportunities → appointments → conversations)');
 
-    setTimeout(() => runJob('conversations', async () => {
-      const result = await syncConversationsAndMessages();
-      console.log(
-        `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
-      );
-    }), 25_000);
+      await runJob('contacts', () => syncContacts({ mode: 'full' }));
 
-    // Low-volume config entity syncs on boot (staggered)
-    setTimeout(() => runJob('custom_fields', syncCustomFields), 30_000);
-    setTimeout(() => runJob('custom_values', syncCustomValues), 35_000);
-    setTimeout(() => runJob('tags', syncTags), 40_000);
-    setTimeout(() => runJob('trigger_links', syncTriggerLinks), 45_000);
-    setTimeout(() => runJob('templates', syncTemplates), 50_000);
+      await runJob('opportunities', () => syncOpportunities({ mode: 'full' }));
 
-    // Run funnel computation after initial syncs complete (2 minutes)
+      await runJob('appointments', () => {
+        if (appointmentsFirstRun) {
+          return syncAppointments({
+            startTime: toET(Date.now() - 365 * 86_400_000),
+            endTime: toET(Date.now() + 60 * 86_400_000),
+          });
+        }
+        return syncAppointments();
+      });
+
+      await runJob('conversations', async () => {
+        const result = await syncConversationsAndMessages();
+        console.log(
+          `[Scheduler] Conversations: ${result.synced_conversations}, Messages: ${result.synced_messages}`,
+        );
+      });
+
+      console.log('[Scheduler] v1.8: serialized boot chain complete');
+    })();
+
+    // Funnel progression runs after boot chain typically completes (2 min).
+    // Not bucket-heavy (Supabase-only), so independent timer is fine.
     setTimeout(() => runJob('funnel_progression', computeFunnelProgression), 120_000);
   })();
 
   // ─── Recurring jobs ──────────────────────────────────────────────
 
-  // v1.5: Workflow sync cadence reduced from */10 to hourly. Workflow
+  // v1.5: Workflow sync cadence reduced from every-10-min to hourly. Workflow
   // definitions change rarely; hourly is plenty and reduces Firebase/GHL
   // internal-API load. Funnel progression also hourly — same top-of-hour slot.
   cron.schedule('0 * * * *', () => {
@@ -287,6 +323,16 @@ export function startScheduledSync(): void {
   // v1.6: 15-min cadence for contacts + opportunities now runs in INCREMENTAL
   // mode. Pulls only records with dateUpdated >= (last_synced_at - overlap)
   // for contacts, and skips unchanged-row upserts for opportunities.
+  //
+  // v1.8 note: recurring crons stay parallel (not serialized like boot)
+  // because incremental mode is much smaller per-cycle:
+  //   contacts incremental: a handful of API calls (only changed records)
+  //   opps incremental: full list fetch + client-side diff (~27 calls)
+  //   appointments: ~5 calls (one per calendar, 2-week window)
+  //   conversations watermark: 1-5 calls typical (only recent activity)
+  // Combined that's under 50 calls per cycle vs 60-token bucket capacity
+  // + 60/min refill — fits comfortably. If we ever see 429s on recurring
+  // cycles, serialize this block the same way boot was.
   cron.schedule('*/15 * * * *', () => {
     runJob('contacts', () => syncContacts({ mode: 'incremental' }));
   });
@@ -300,8 +346,7 @@ export function startScheduledSync(): void {
     runJob('appointments', syncAppointments);
   });
 
-  // Conversations/messages stays at 15 min — already smart-scheduled (drip
-  // by staleness with MAX_CONTACTS_PER_SYNC cap).
+  // Conversations/messages stays at 15 min — v1.7 watermark walk is fast.
   cron.schedule('*/15 * * * *', () => {
     runJob('conversations', async () => {
       const result = await syncConversationsAndMessages();
@@ -317,7 +362,7 @@ export function startScheduledSync(): void {
   // clock time year-round across the EST/EDT transition.
   //
   // IMPORTANT: Minute offsets are 5 and 10, NOT 0. A `0 3 * * *` daily cron
-  // would collide with the `*/15 * * * *` incremental cron (which fires at
+  // would collide with the every-15-min incremental cron (which fires at
   // :00/:15/:30/:45), and since both use the same job name the `runningJobs`
   // mutex would silently drop whichever fires second. If that happened to be
   // the daily full, we'd miss the nightly drift + soft-delete reconcile — the
@@ -362,7 +407,7 @@ export function startScheduledSync(): void {
     runJob('templates', syncTemplates);
   });
 
-  console.log('[Scheduler] Cron jobs registered (v1.7):');
+  console.log('[Scheduler] Cron jobs registered (v1.8):');
   console.log('  0 * * * *          — workflows, funnel progression (hourly)');
   console.log('  */15 * * * *       — contacts (incremental), opportunities (incremental), appointments, conversations/messages');
   console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
