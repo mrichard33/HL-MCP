@@ -1,5 +1,15 @@
 // ─── GHL API Client — src/clients/ghl.ts ─────────────────────────
 //
+// v1.7 — Extended getConversations() with sortBy/sort params and
+//         richer return type (meta, total) so callers can walk
+//         /conversations/search as a location-wide feed ordered by
+//         last_message_date. Extended getAllMessages() with an
+//         optional sinceIso cutoff that breaks pagination early and
+//         filters results to messages dateAdded >= sinceIso. Together
+//         these enable the watermark-based incremental sync in
+//         entity-syncer.ts — replacing the per-contact iteration that
+//         was the root cause of the 2026-04-07 message sync hang.
+//
 // v1.6 — Added searchContacts() + getContactsUpdatedSince() for
 //         incremental contact sync via POST /contacts/search with
 //         a dateUpdated filter. Lets the 15-min cron fetch only
@@ -545,12 +555,27 @@ export class GHLClient {
 
   // ---- Conversations ----
 
-  async getConversations(params?: { contactId?: string; limit?: number; startAfter?: string; startAfterId?: string }): Promise<{ conversations: GHLConversation[] }> {
+  /**
+   * v1.7: Accepts `sortBy` and `sort` for location-wide DESC-by-last_message_date
+   * walks. `meta` (startAfter cursors) and `total` are exposed in the return
+   * type so callers can paginate and sanity-check counts. `contactId` remains
+   * optional: omit it when using sortBy to get the location-wide feed.
+   */
+  async getConversations(params?: {
+    contactId?: string;
+    limit?: number;
+    startAfter?: string;
+    startAfterId?: string;
+    sortBy?: 'last_message_date' | 'last_manual_message_date' | 'last_outbound_message_date' | 'score_profile';
+    sort?: 'asc' | 'desc';
+  }): Promise<{ conversations: GHLConversation[]; meta?: GHLPaginationMeta; total?: number }> {
     const reqParams: Record<string, string> = { locationId: this.locationId };
     if (params?.contactId) reqParams.contactId = params.contactId;
     if (params?.limit) reqParams.limit = String(params.limit);
     if (params?.startAfter) reqParams.startAfter = params.startAfter;
     if (params?.startAfterId) reqParams.startAfterId = params.startAfterId;
+    if (params?.sortBy) reqParams.sortBy = params.sortBy;
+    if (params?.sort) reqParams.sort = params.sort;
     return this.request('/conversations/search', { method: 'GET', params: reqParams });
   }
 
@@ -588,7 +613,20 @@ export class GHLClient {
     return this.request(`/conversations/${conversationId}/messages`, { params: reqParams });
   }
 
-  async getAllMessages(conversationId: string, maxPages = 20): Promise<GHLMessage[]> {
+  /**
+   * Paginate through a conversation's messages. GHL returns messages DESC
+   * by dateAdded with cursor pagination via `lastMessageId`.
+   *
+   * v1.7: Optional `sinceIso` cutoff. When provided:
+   *   - Pagination breaks early once the oldest message in a page predates
+   *     the cutoff (all remaining pages would be even older).
+   *   - The returned array is filtered to messages with dateAdded >= sinceIso
+   *     (missing/unparseable dates are kept to be safe).
+   * This turns heavy-history conversations (years of messages) from an
+   * N-page re-fetch into a 1-page check on every incremental sync cycle.
+   */
+  async getAllMessages(conversationId: string, maxPages = 20, sinceIso?: string): Promise<GHLMessage[]> {
+    const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
     const all: GHLMessage[] = [];
     let lastMessageId: string | undefined;
 
@@ -598,12 +636,28 @@ export class GHLClient {
       const msgs: GHLMessage[] = Array.isArray(inner) ? inner : [];
       all.push(...msgs);
 
+      // v1.7: Early-exit when paginated past the cutoff.
+      if (sinceMs > 0 && msgs.length > 0) {
+        const oldestInPage = msgs[msgs.length - 1];
+        const d = (oldestInPage as { dateAdded?: string | number }).dateAdded;
+        const oldestMs = d
+          ? (typeof d === 'string' ? Date.parse(d) : Number(d))
+          : 0;
+        if (oldestMs > 0 && oldestMs < sinceMs) break;
+      }
+
       const nextPage = (raw.messages as any)?.nextPage;
       lastMessageId = (raw.messages as any)?.lastMessageId;
       if (!nextPage || !lastMessageId || msgs.length === 0) break;
     }
 
-    return all.filter(msg => isRealMessage(msg));
+    const realMsgs = all.filter(msg => isRealMessage(msg));
+    if (sinceMs === 0) return realMsgs;
+    return realMsgs.filter(m => {
+      const d = (m as { dateAdded?: string | number }).dateAdded;
+      const ms = d ? (typeof d === 'string' ? Date.parse(d) : Number(d)) : 0;
+      return ms === 0 || ms >= sinceMs;
+    });
   }
 
   async sendMessage(data: { conversationId: string; type: string; message: string; contactId: string }): Promise<GHLMessage> {
