@@ -78,7 +78,7 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  *   - Full reconcile: daily at 3:05 / 3:10 AM America/New_York for contacts
  *     and opportunities respectively. Runs softDeleteMissing and corrects
  *     any drift that webhooks + incremental missed. The minute offsets of 5
- *     and 10 are deliberate: they keep the daily crons off the */15-minute
+ *     and 10 are deliberate: they keep the daily crons off the every-15-minute
  *     boundary (:00/:15/:30/:45) so they can't collide with the recurring
  *     incremental cron and get skipped by the shared job-name mutex.
  *   - Time-windowed: appointments every 15 min (already bounded to a
