@@ -23,6 +23,70 @@ function isJobRunning(name: string): boolean {
   return runningJobs.get(name) === true;
 }
 
+/**
+ * Per-job hard timeout (milliseconds).
+ *
+ * v1.7: The previous `runJob` had no timeout. When a job's inner promise
+ * never settled — most commonly because a Supabase RPC or a chained GHL
+ * fetch stalled beneath the fetch-level timeout in clients/ghl.ts — the
+ * `runningJobs` mutex stayed `true` forever. Every subsequent `*/15` cron
+ * fire saw `isJobRunning(name) === true` and silently skipped. Result:
+ * contacts, opportunities, appointments, conversations, and messages
+ * all stopped advancing for days at a time (Apr 7 / Apr 9 / Apr 22 freezes
+ * all matched this signature — 0% failure rate because hung jobs are
+ * neither failed nor completed).
+ *
+ * The fix is a Promise.race between the job body and a rejecting timer.
+ * When the timer wins, we throw, the catch logs it, and finally releases
+ * the mutex so the next cron fire can take over. Background work from
+ * the lost race may continue briefly (we don't abort its fetches) but
+ * it will self-terminate when its own fetch timeouts expire, and any
+ * duplicate Supabase upserts are idempotent (ON CONFLICT keys set on all
+ * synced tables). Trading "possible brief overlap" for "no permanent
+ * deadlock" is the right call.
+ *
+ * Timeouts are sized to the realistic upper bound of a healthy sync:
+ *   - workflows: 234 workflows × ~5s each = ~20 min observed; 30 min ceiling.
+ *   - contacts / opportunities: full mode is ~38 pages × rate limit =
+ *     a few minutes; 10 min ceiling is generous.
+ *   - appointments: 2-week/30-day window is tiny (<1 min); 10 min ceiling
+ *     covers the first-run 1-year backfill.
+ *   - conversations: current conversations sync iterates up to
+ *     MAX_CONTACTS_PER_SYNC contacts with batch + inter-conv delays and
+ *     per-contact message fetches. Legitimately takes 10–15 min on backfill.
+ *     20 min ceiling. Patch 2 (conversation-driven /conversations/search
+ *     with a lastMessageDate watermark) will reduce this substantially.
+ *   - Everything else defaults to 10 min.
+ *
+ * Override any job via env: JOB_TIMEOUT_MS_{NAME_UPPERCASED}
+ *   e.g. JOB_TIMEOUT_MS_CONVERSATIONS=1800000 for 30 min.
+ */
+const JOB_TIMEOUTS_MS: Record<string, number> = {
+  workflows: 30 * 60 * 1000,
+  contacts: 10 * 60 * 1000,
+  opportunities: 10 * 60 * 1000,
+  appointments: 10 * 60 * 1000,
+  conversations: 20 * 60 * 1000,
+  funnel_progression: 5 * 60 * 1000,
+  pipelines: 5 * 60 * 1000,
+  custom_fields: 5 * 60 * 1000,
+  custom_values: 5 * 60 * 1000,
+  tags: 5 * 60 * 1000,
+  trigger_links: 5 * 60 * 1000,
+  templates: 5 * 60 * 1000,
+};
+const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+
+function getJobTimeoutMs(name: string): number {
+  const envKey = `JOB_TIMEOUT_MS_${name.toUpperCase()}`;
+  const envVal = process.env[envKey];
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return JOB_TIMEOUTS_MS[name] ?? DEFAULT_JOB_TIMEOUT_MS;
+}
+
 async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
   if (isJobRunning(name)) {
     console.warn(`[Scheduler] ${name} already in progress, skipping`);
@@ -31,16 +95,31 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
 
   runningJobs.set(name, true);
   const startTime = Date.now();
+  const timeoutMs = getJobTimeoutMs(name);
+
+  // v1.7: Hard timeout via Promise.race. Guarantees mutex release even if
+  // the inner promise never settles (see JOB_TIMEOUTS_MS doc comment above).
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error(
+        `[Scheduler] ${name} exceeded ${Math.round(timeoutMs / 1000)}s hard timeout — aborting to release mutex. ` +
+        `Background work may continue until its own fetch timeouts expire. ` +
+        `Override via env JOB_TIMEOUT_MS_${name.toUpperCase()}.`,
+      ));
+    }, timeoutMs);
+  });
 
   try {
-    console.log(`[Scheduler] Starting ${name}...`);
-    await fn();
+    console.log(`[Scheduler] Starting ${name}... (timeout: ${Math.round(timeoutMs / 1000)}s)`);
+    await Promise.race([fn(), timeoutPromise]);
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`[Scheduler] ${name} completed in ${duration}s`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Scheduler] ${name} failed: ${msg}`);
   } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     runningJobs.set(name, false);
   }
 }
@@ -70,7 +149,7 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
 /**
  * Starts all scheduled sync jobs.
  *
- * v1.6 sync architecture:
+ * v1.7 sync architecture:
  *   - Real-time: GHL webhooks (handled in src/webhooks/handler.ts)
  *   - Incremental: every 15 min for contacts + opportunities. Contacts uses
  *     POST /contacts/search with a dateUpdated filter; opportunities uses a
@@ -93,9 +172,12 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  * On first run (no prior sync_state), appointments use a 1-year lookback
  * to backfill historical data. Subsequent runs use the normal 2-week
  * back / 30-day forward window.
+ *
+ * v1.7: runJob now enforces a per-job hard timeout (see JOB_TIMEOUTS_MS)
+ * so a stalled inner promise can never permanently pin the mutex.
  */
 export function startScheduledSync(): void {
-  console.log('[Scheduler] Starting scheduled sync jobs (v1.6)');
+  console.log('[Scheduler] Starting scheduled sync jobs (v1.7)');
 
   // One-time diagnostic: Firebase auth status affects workflow data quality
   const hasFirebaseAuth = !!(process.env.GHL_FIREBASE_API_KEY && process.env.GHL_FIREBASE_REFRESH_TOKEN);
@@ -122,6 +204,12 @@ export function startScheduledSync(): void {
   // v1.6: Surface the incremental overlap buffer for easy verification in logs.
   const incrementalOverlap = parseInt(process.env.INCREMENTAL_SYNC_OVERLAP_MINUTES || '10', 10);
   console.log(`[Scheduler] Incremental sync overlap buffer: ${incrementalOverlap} min (override via INCREMENTAL_SYNC_OVERLAP_MINUTES)`);
+
+  // v1.7: Surface per-job timeout ceilings so hangs are easier to diagnose.
+  const timeoutSummary = Object.entries(JOB_TIMEOUTS_MS)
+    .map(([n, ms]) => `${n}:${Math.round(ms / 60000)}m`)
+    .join(', ');
+  console.log(`[Scheduler] Per-job hard timeouts: ${timeoutSummary}, default:${Math.round(DEFAULT_JOB_TIMEOUT_MS / 60000)}m (override via JOB_TIMEOUT_MS_{NAME})`);
 
   // Run initial sync with first-run detection
   (async () => {
@@ -274,7 +362,7 @@ export function startScheduledSync(): void {
     runJob('templates', syncTemplates);
   });
 
-  console.log('[Scheduler] Cron jobs registered (v1.6):');
+  console.log('[Scheduler] Cron jobs registered (v1.7):');
   console.log('  0 * * * *          — workflows, funnel progression (hourly)');
   console.log('  */15 * * * *       — contacts (incremental), opportunities (incremental), appointments, conversations/messages');
   console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
