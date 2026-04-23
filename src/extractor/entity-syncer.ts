@@ -4,7 +4,7 @@ import { createLeadEvent } from '../webhooks/handler.js';
 import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection } from '../utils/normalize.js';
-import type { GHLContact, GHLOpportunity } from '../types/ghl.js';
+import type { GHLContact, GHLOpportunity, GHLConversation, GHLPaginationMeta, GHLMessage } from '../types/ghl.js';
 
 // ---- Sync State Helpers ----
 
@@ -582,11 +582,29 @@ export async function syncPipelines(): Promise<{ synced: number; errors: string[
 }
 
 // ---- Conversation & Message Sync (every 15 min) ----
+//
+// v1.7 — Rewritten watermark-based. Walks GET /conversations/search
+// sorted DESC by last_message_date at the location level, stops when
+// we pass the floor (messages.last_synced_at - overlap). For each
+// conversation with recent activity, fetches only the NEW messages via
+// getAllMessages(..., sinceIso). Historical conversations with no new
+// activity are left alone — no backfill, no wasted API calls.
+//
+// Old behavior (v1.4-v1.6) iterated ~3,700 contacts in 300-size batches
+// with 5s/1s delays, hitting conversations+messages endpoints per-contact.
+// Best case: 7+ minutes per cycle. Worst case (hit any slow API call): the
+// runJob mutex pinned forever and the messages entity stopped syncing
+// for 16 days (2026-04-07 to 2026-04-23). That mode is gone.
 
-const BATCH_SIZE = 2; // Reduced from 3 to lower concurrent API pressure
-const BATCH_DELAY_MS = 5000; // 5s pause between batches (was 3s) to stay under GHL rate limits
-const INTER_CONV_DELAY_MS = 1000; // 1s pause between conversations within a contact
-const MAX_CONTACTS_PER_SYNC = 300; // Reduced from 500 to lower rate-limit pressure per cycle
+// v1.7: Max conversation pages to walk per cycle. 50 × 100/page = 5000
+// conversations max. In practice the watermark stops iteration well
+// before this — every conversation older than floor ends the walk.
+const MAX_CONV_PAGES_PER_CYCLE = 50;
+const CONV_PAGE_SIZE = 100;
+// Small pause between pages to stay well under rate limits. The token
+// bucket in ghl-rate-limiter.ts already enforces per-second caps, so
+// this is mostly defensive.
+const INTER_PAGE_DELAY_MS = 500;
 
 /** Convert GHL date values (ms timestamp or ISO string) to ISO string for PostgreSQL TIMESTAMPTZ. */
 function toISODate(value: string | number | null | undefined): string | null {
@@ -598,6 +616,16 @@ function toISODate(value: string | number | null | undefined): string | null {
   }
   // Already an ISO string or other valid date format
   return typeof value === 'string' ? value : null;
+}
+
+/** Parse GHL date (ISO string or ms timestamp) to epoch ms. Returns 0 if unparseable. */
+function toEpochMs(value: string | number | null | undefined): number {
+  if (value == null) return 0;
+  if (typeof value === 'number') return value;
+  const n = Number(value);
+  if (!isNaN(n) && n > 946684800000) return n;
+  const parsed = Date.parse(value);
+  return isNaN(parsed) ? 0 : parsed;
 }
 
 /** Small helper to pause between batches. */
@@ -639,242 +667,156 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
   const supabase = getSupabaseClient();
   const errors: string[] = [];
 
-  // Check if OAuth is configured
+  // OAuth required for /conversations/* endpoints.
   if (!ghl.isOAuthConfigured) {
     console.warn('[EntitySync] GHL OAuth not configured — skipping conversations/messages sync. ' +
       'Set GHL_OAUTH_CLIENT_ID and GHL_OAUTH_CLIENT_SECRET, then visit /crm-oauth/authorize.');
     return { synced_conversations: 0, synced_messages: 0, errors: ['GHL OAuth not configured'] };
   }
 
-  const syncLogId = await logSyncStart('conversations');
+  const convSyncLogId = await logSyncStart('conversations');
   const msgSyncLogId = await logSyncStart('messages');
 
-  try {
-    console.log('[EntitySync] syncConversationsAndMessages: fetching contact list from Supabase...');
-    // Get all contact IDs (exclude soft-deleted).
-    // v1.5: Paginate past PostgREST's 1000-row default cap. Contact count
-    // (~2,700+) was silently truncated to 1000, so backfill mode kept
-    // seeing the same slice as "unsynced" and never made forward progress
-    // past the first page of contacts.
-    const allContacts: { ghl_contact_id: string }[] = [];
-    for (let page = 0; ; page++) {
-      const from = page * PAGINATION_PAGE_SIZE;
-      const to = from + PAGINATION_PAGE_SIZE - 1;
-      const { data, error: allError } = await supabase
-        .from('contacts')
-        .select('ghl_contact_id')
-        .is('deleted_at', null)
-        .order('date_updated', { ascending: false })
-        .range(from, to);
-      if (allError) throw new Error(`Failed to fetch contacts (page ${page}): ${allError.message}`);
-      if (!data || data.length === 0) break;
-      allContacts.push(...(data as { ghl_contact_id: string }[]));
-      if (data.length < PAGINATION_PAGE_SIZE) break;
-    }
-    if (!allContacts.length) {
-      console.warn('[EntitySync] No contacts found in Supabase — sync contacts first');
-      await logSyncComplete(syncLogId, 0);
-      return { synced_conversations: 0, synced_messages: 0, errors: [] };
-    }
-    console.log(`[EntitySync] syncConversationsAndMessages: ${allContacts.length} total contacts, determining mode...`);
+  // Compute watermark floor from messages.last_synced_at.
+  // On first run (epoch sentinel), use a 30-day lookback rather than
+  // pulling the entire location history. Historical backfill is a
+  // separate concern addressed by one-time tooling if ever needed.
+  const lastSyncedMsgs = await getLastSynced('messages');
+  let floorMs: number;
+  if (lastSyncedMsgs.startsWith('1970-01-01')) {
+    floorMs = Date.now() - 30 * 86_400_000;
+    console.log('[EntitySync] syncConversationsAndMessages: first run — using 30-day lookback');
+  } else {
+    floorMs = Date.parse(lastSyncedMsgs) - INCREMENTAL_OVERLAP_MINUTES * 60_000;
+    console.log(`[EntitySync] syncConversationsAndMessages: floor=${new Date(floorMs).toISOString()} (overlap=${INCREMENTAL_OVERLAP_MINUTES}min)`);
+  }
+  const floorIso = new Date(floorMs).toISOString();
 
-    // Determine backfill vs incremental mode
-    // Backfill: process contacts that have NEVER had conversations checked
-    // Incremental: all contacts covered, refresh most recently updated
-    //
-    // v1.5: Also paginate this query. Once backfill has produced one row
-    // (real or `no-conv-*` sentinel) per contact, this table can exceed
-    // 1000 rows and the default cap would re-break the backfill/incremental
-    // decision — a subset of contacts would look unsynced forever.
-    const syncedIds = new Set<string>();
-    for (let page = 0; ; page++) {
-      const from = page * PAGINATION_PAGE_SIZE;
-      const to = from + PAGINATION_PAGE_SIZE - 1;
-      const { data, error: syncedErr } = await supabase
-        .from('conversations')
-        .select('ghl_contact_id')
-        .range(from, to);
-      if (syncedErr) {
-        console.warn(`[EntitySync] Failed to fetch synced conversation IDs (page ${page}): ${syncedErr.message}`);
+  let totalConversations = 0;
+  let totalMessages = 0;
+  let pagesWalked = 0;
+  let stopReason = 'end of pages';
+
+  try {
+    const now = nowET();
+    let startAfter: string | undefined;
+    let startAfterId: string | undefined;
+
+    pageLoop: for (let page = 0; page < MAX_CONV_PAGES_PER_CYCLE; page++) {
+      const result: { conversations: GHLConversation[]; meta?: GHLPaginationMeta; total?: number } =
+        await ghl.getConversations({
+          limit: CONV_PAGE_SIZE,
+          startAfter,
+          startAfterId,
+          sortBy: 'last_message_date',
+          sort: 'desc',
+        });
+      pagesWalked++;
+
+      const conversations = result.conversations || [];
+      if (conversations.length === 0) {
+        stopReason = 'no more conversations';
         break;
       }
-      if (!data || data.length === 0) break;
-      for (const r of data as { ghl_contact_id: string | null }[]) {
-        if (r.ghl_contact_id) syncedIds.add(r.ghl_contact_id);
-      }
-      if (data.length < PAGINATION_PAGE_SIZE) break;
-    }
-    const unsyncedContacts = allContacts.filter(c => !syncedIds.has(c.ghl_contact_id));
 
-    let contacts: { ghl_contact_id: string }[];
-    if (unsyncedContacts.length > 0) {
-      // Backfill mode — drip through unsynced contacts
-      contacts = unsyncedContacts.slice(0, MAX_CONTACTS_PER_SYNC);
-      console.log(`[EntitySync] Backfill: syncing ${contacts.length} of ${unsyncedContacts.length} remaining unsynced contacts (${allContacts.length} total)`);
-    } else {
-      // All contacts covered — incremental mode (round-robin by oldest synced_at)
-      // Prioritize contacts whose conversations were checked longest ago,
-      // ensuring all contacts are periodically re-checked for new messages.
-      const { data: staleConversations } = await supabase
-        .from('conversations')
-        .select('ghl_contact_id, synced_at')
-        .is('deleted_at', null)
-        .order('synced_at', { ascending: true })
-        .limit(MAX_CONTACTS_PER_SYNC);
+      for (const conv of conversations) {
+        const convLastMs = toEpochMs((conv as { lastMessageDate?: string | number }).lastMessageDate);
 
-      if (staleConversations && staleConversations.length > 0) {
-        // Deduplicate contact IDs (a contact may have multiple conversations)
-        const seen = new Set<string>();
-        contacts = [];
-        for (const row of staleConversations) {
-          if (!seen.has(row.ghl_contact_id)) {
-            seen.add(row.ghl_contact_id);
-            contacts.push({ ghl_contact_id: row.ghl_contact_id });
-          }
-          if (contacts.length >= MAX_CONTACTS_PER_SYNC) break;
+        // DESC order guarantees: once we see a conversation older than
+        // the floor, every subsequent conversation is also older — so
+        // we stop the entire walk, not just skip.
+        if (convLastMs > 0 && convLastMs < floorMs) {
+          stopReason = `watermark hit at conv ${conv.id} (lastMessageDate=${new Date(convLastMs).toISOString()})`;
+          break pageLoop;
         }
-        const oldestSyncedAt = staleConversations[0]?.synced_at || 'unknown';
-        console.log(`[EntitySync] Incremental (round-robin): refreshing ${contacts.length} contacts, oldest synced_at: ${oldestSyncedAt}`);
-      } else {
-        contacts = allContacts.slice(0, MAX_CONTACTS_PER_SYNC);
-        console.log(`[EntitySync] Incremental: refreshing ${contacts.length} contacts (fallback to all contacts)`);
-      }
-    }
 
-    let totalConversations = 0;
-    let totalMessages = 0;
-    let totalMessageFailures = 0;
-    let contactsProcessed = 0;
-    const now = nowET();
+        // Upsert conversation metadata.
+        const { error: convErr } = await supabase.from('conversations').upsert(
+          {
+            ghl_conversation_id: conv.id,
+            ghl_contact_id: (conv as { contactId?: string }).contactId || null,
+            ghl_location_id: (conv as { locationId?: string }).locationId || null,
+            type: (conv as { type?: string }).type || null,
+            last_message_at: toISODate((conv as { lastMessageDate?: string | number }).lastMessageDate),
+            unread_count: (conv as { unreadCount?: number }).unreadCount || 0,
+            synced_at: now,
+            updated_at: now,
+          },
+          { onConflict: 'ghl_conversation_id' },
+        );
+        if (convErr) {
+          errors.push(`Conv upsert ${conv.id}: ${convErr.message}`);
+          continue;
+        }
+        totalConversations++;
 
-    // Process contacts in batches
-    for (let i = 0; i < contacts.length; i += BATCH_SIZE) {
-      const batch = contacts.slice(i, i + BATCH_SIZE);
+        // Fetch messages for this conversation, filtered to >= floor.
+        // getAllMessages breaks pagination early once oldest-in-page
+        // predates floorIso, so heavy-history conversations cost ~1 API call.
+        try {
+          const newMsgs: GHLMessage[] = await ghl.getAllMessages(conv.id, 20, floorIso);
 
-      // Process each contact in the batch concurrently
-      const results = await Promise.allSettled(
-        batch.map(async (contact) => {
-          const contactId = contact.ghl_contact_id;
-          let convCount = 0;
-          let msgCount = 0;
-          let msgFailures = 0;
-
+          if (newMsgs.length > 0) {
+            const contactId = (conv as { contactId?: string }).contactId || null;
+            const msgRows = newMsgs.map((msg) => ({
+              ghl_message_id: msg.id,
+              ghl_conversation_id: (msg as { conversationId?: string }).conversationId || conv.id,
+              ghl_contact_id: (msg as { contactId?: string }).contactId || contactId,
+              direction: normalizeDirection((msg as { direction?: string }).direction),
+              type: (msg as { type?: string }).type || 'sms',
+              body: (msg as { body?: string; message?: string; text?: string }).body
+                || (msg as { message?: string }).message
+                || (msg as { text?: string }).text
+                || null,
+              status: (msg as { status?: string }).status || 'delivered',
+              sent_at: toISODate((msg as { dateAdded?: string | number }).dateAdded) || now,
+            }));
+            for (const batch of chunk(msgRows, UPSERT_BATCH_SIZE)) {
+              const { error: msgErr } = await supabase.from('messages').upsert(batch, { onConflict: 'ghl_message_id' });
+              if (msgErr) {
+                errors.push(`Msg batch conv ${conv.id}: ${msgErr.message}`);
+              } else {
+                totalMessages += batch.length;
+              }
+            }
+          }
+        } catch (msgErr) {
+          const m = msgErr instanceof Error ? msgErr.message : String(msgErr);
+          errors.push(`Messages for conv ${conv.id}: ${m}`);
+          console.error(`[EntitySync] Messages for conv ${conv.id}: ${m}`);
+          // Reset this conversation's synced_at so the next cycle will
+          // see it as stale and retry. Non-fatal — worst case we just
+          // re-attempt next cycle with the same watermark.
           try {
-            // Fetch conversations for this contact
-            const { conversations } = await ghl.getConversations({ contactId, limit: 50 });
-
-            if (conversations.length === 0) {
-              // Mark contact as checked so it won't appear in backfill again
-              await supabase.from('conversations').upsert({
-                ghl_conversation_id: `no-conv-${contactId}`,
-                ghl_contact_id: contactId,
-                type: 'none',
-                synced_at: now,
-                updated_at: now,
-              }, { onConflict: 'ghl_conversation_id' });
-            }
-
-            for (let ci = 0; ci < conversations.length; ci++) {
-              const conv = conversations[ci];
-
-              // Upsert conversation metadata (synced_at set to now initially)
-              const { error: convError } = await supabase.from('conversations').upsert(
-                {
-                  ghl_conversation_id: conv.id,
-                  ghl_contact_id: conv.contactId,
-                  ghl_location_id: conv.locationId || null,
-                  type: conv.type || null,
-                  last_message_at: toISODate(conv.lastMessageDate),
-                  unread_count: conv.unreadCount || 0,
-                  synced_at: now,
-                  updated_at: now,
-                },
-                { onConflict: 'ghl_conversation_id' },
-              );
-              if (convError) {
-                errors.push(`Conv upsert ${conv.id}: ${convError.message}`);
-                continue; // skip messages for this conversation
-              }
-              convCount++;
-
-              // Fetch and upsert messages for this conversation (with pagination)
-              try {
-                const messageList = await ghl.getAllMessages(conv.id, 20);
-                if (messageList.length > 0) {
-                  // v1.4: Batch message upserts per conversation
-                  const msgRows = messageList.map((msg) => ({
-                    ghl_message_id: msg.id,
-                    ghl_conversation_id: msg.conversationId || conv.id,
-                    ghl_contact_id: msg.contactId || contactId,
-                    direction: normalizeDirection(msg.direction),
-                    type: msg.type || 'sms',
-                    body: msg.body || msg.message || msg.text || null,
-                    status: msg.status || 'delivered',
-                    sent_at: toISODate(msg.dateAdded) || now,
-                  }));
-                  const { error: msgError } = await supabase.from('messages').upsert(msgRows, { onConflict: 'ghl_message_id' });
-                  if (msgError) {
-                    errors.push(`Msg batch upsert conv ${conv.id}: ${msgError.message}`);
-                  } else {
-                    msgCount += msgRows.length;
-                  }
-                }
-              } catch (msgErr) {
-                const errMsg = msgErr instanceof Error ? msgErr.message : String(msgErr);
-                errors.push(`Messages for conv ${conv.id}: ${errMsg}`);
-                msgFailures++;
-
-                // CRITICAL FIX: Reset synced_at to a stale timestamp so this
-                // conversation gets retried in the next round-robin cycle.
-                // Without this, the conversation appears "synced" but has no messages.
-                try {
-                  await supabase.from('conversations')
-                    .update({ synced_at: '2000-01-01T00:00:00Z' })
-                    .eq('ghl_conversation_id', conv.id);
-                  console.warn(`[EntitySync] Reset synced_at for conv ${conv.id} (message fetch failed: ${errMsg})`);
-                } catch {
-                  // Non-fatal — worst case it just won't be prioritized for retry
-                  console.error(`[EntitySync] Failed to reset synced_at for conv ${conv.id}`);
-                }
-              }
-
-              // Small delay between conversations to reduce rate limit pressure
-              if (ci < conversations.length - 1) {
-                await sleep(INTER_CONV_DELAY_MS);
-              }
-            }
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            errors.push(`Contact ${contactId}: ${errMsg}`);
-            console.error(`[EntitySync] Failed to sync conversations for contact ${contactId}: ${errMsg}`);
+            await supabase.from('conversations')
+              .update({ synced_at: '2000-01-01T00:00:00Z' })
+              .eq('ghl_conversation_id', conv.id);
+          } catch {
+            /* non-fatal */
           }
-
-          return { convCount, msgCount, msgFailures };
-        }),
-      );
-
-      // Aggregate counts from this batch
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          totalConversations += result.value.convCount;
-          totalMessages += result.value.msgCount;
-          totalMessageFailures += result.value.msgFailures;
         }
       }
-      contactsProcessed += batch.length;
 
-      // v1.4: Progress log every ~50 contacts so we can see the sync is alive
-      if (contactsProcessed % 50 === 0 || contactsProcessed === contacts.length) {
-        console.log(`[EntitySync] syncConversationsAndMessages progress: ${contactsProcessed}/${contacts.length} contacts, ${totalConversations} convs, ${totalMessages} msgs so far`);
+      // Advance pagination cursor.
+      startAfter = result.meta?.startAfter;
+      startAfterId = result.meta?.startAfterId;
+      if (!startAfter && !startAfterId) {
+        stopReason = 'no pagination cursor';
+        break;
+      }
+      if (conversations.length < CONV_PAGE_SIZE) {
+        stopReason = 'partial page';
+        break;
       }
 
-      // Pause between batches to avoid rate limits (skip after last batch)
-      if (i + BATCH_SIZE < contacts.length) {
-        await sleep(BATCH_DELAY_MS);
-      }
+      await sleep(INTER_PAGE_DELAY_MS);
     }
 
-    // Create lead events for any newly synced messages
+    if (pagesWalked >= MAX_CONV_PAGES_PER_CYCLE) {
+      stopReason = `page cap (${MAX_CONV_PAGES_PER_CYCLE}) — next cycle resumes from new watermark`;
+    }
+
+    // Lead events for any messages that landed in the last 20 min window.
     const eventsCreated = await createLeadEventsForRecentMessages();
     if (eventsCreated > 0) {
       console.log(`[EntitySync] Created ${eventsCreated} lead events for recent messages`);
@@ -882,27 +824,23 @@ export async function syncConversationsAndMessages(): Promise<{ synced_conversat
 
     await updateLastSynced('conversations');
     await updateLastSynced('messages');
-    await logSyncComplete(syncLogId, totalConversations);
+    await logSyncComplete(convSyncLogId, totalConversations);
     await logSyncComplete(msgSyncLogId, totalMessages);
-    console.log(`[EntitySync] Conversations synced: ${totalConversations}, Messages synced: ${totalMessages}${totalMessageFailures > 0 ? `, Message fetch failures: ${totalMessageFailures} (will retry)` : ''}`);
+    console.log(`[EntitySync] syncConversationsAndMessages: ${totalConversations} convs, ${totalMessages} msgs across ${pagesWalked} page(s) — ${stopReason}`);
 
     if (errors.length > 0) {
       console.error(`[EntitySync] ${errors.length} errors during conversation sync:`);
-      for (const e of errors.slice(0, 10)) {
-        console.error(`  - ${e}`);
-      }
-      if (errors.length > 10) {
-        console.error(`  ... and ${errors.length - 10} more`);
-      }
+      for (const e of errors.slice(0, 10)) console.error(`  - ${e}`);
+      if (errors.length > 10) console.error(`  ... and ${errors.length - 10} more`);
     }
 
     return { synced_conversations: totalConversations, synced_messages: totalMessages, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await logSyncFailed(syncLogId, msg);
+    await logSyncFailed(convSyncLogId, msg);
     await logSyncFailed(msgSyncLogId, msg);
     console.error(`[EntitySync] Conversation sync failed: ${msg}`);
-    return { synced_conversations: 0, synced_messages: 0, errors: [msg] };
+    return { synced_conversations: totalConversations, synced_messages: totalMessages, errors: [msg] };
   }
 }
 
