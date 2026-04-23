@@ -29,8 +29,8 @@ function isJobRunning(name: string): boolean {
  * v1.7: The previous `runJob` had no timeout. When a job's inner promise
  * never settled — most commonly because a Supabase RPC or a chained GHL
  * fetch stalled beneath the fetch-level timeout in clients/ghl.ts — the
- * `runningJobs` mutex stayed `true` forever. Every subsequent `*/15` cron
- * fire saw `isJobRunning(name) === true` and silently skipped. Result:
+ * `runningJobs` mutex stayed `true` forever. Every subsequent every-15-minute
+ * cron fire saw `isJobRunning(name) === true` and silently skipped. Result:
  * contacts, opportunities, appointments, conversations, and messages
  * all stopped advancing for days at a time (Apr 7 / Apr 9 / Apr 22 freezes
  * all matched this signature — 0% failure rate because hung jobs are
@@ -319,7 +319,7 @@ export function startScheduledSync(): void {
   // IMPORTANT: Minute offsets are 5 and 10, NOT 0. A `0 3 * * *` daily cron
   // would collide with the `*/15 * * * *` incremental cron (which fires at
   // :00/:15/:30/:45), and since both use the same job name the `runningJobs`
-  // mutex would silently drop whichever fired second. If that happened to be
+  // mutex would silently drop whichever fires second. If that happened to be
   // the daily full, we'd miss the nightly drift + soft-delete reconcile — the
   // whole point of having a daily full. Offsets to :05 and :10 keep the daily
   // crons off the 15-min boundary entirely. 3:10 ET for opportunities (rather
