@@ -1,6 +1,6 @@
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
-import { createLeadEvent } from '../webhooks/handler.js';
+import { createLeadEvent, createLeadEventsBatch, type LeadEventSpec } from '../webhooks/handler.js';
 import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection } from '../utils/normalize.js';
@@ -284,22 +284,30 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     }
     console.log(`[EntitySync] syncContacts: upserted ${upsertedCount}/${rows.length} contacts`);
 
-    // v1.4: createLeadEvent stays sequential for ordering. In incremental
-    // mode this only iterates the changed subset, not all 3,400+ contacts.
-    console.log('[EntitySync] syncContacts: creating lead events...');
-    let eventsCreated = 0;
+    // v1.8 (T2.1b): Batch lead_events instead of 3,774 sequential upserts.
+    // Build all event specs, then hand to createLeadEventsBatch which does
+    // ceil(N/500) bulk upserts. Turns a ~3-5 min sequential loop into a
+    // ~3-5 second batched operation on full contact sync. Dedup semantics
+    // preserved via event_hash unique constraint with ignoreDuplicates:true.
+    console.log('[EntitySync] syncContacts: building lead event specs...');
+    const leadEventSpecs: LeadEventSpec[] = [];
     for (const c of contacts) {
       const stableTs = c.dateUpdated || c.dateAdded;
       if (!stableTs) continue;
       try {
-        const eventType = deriveContactEventType({ dateAdded: c.dateAdded, dateUpdated: c.dateUpdated });
-        await createLeadEvent(c.id, eventType, c.id, stableTs, c);
-        eventsCreated++;
+        leadEventSpecs.push({
+          contactId: c.id,
+          eventType: deriveContactEventType({ dateAdded: c.dateAdded, dateUpdated: c.dateUpdated }),
+          sourceId: c.id,
+          timestamp: stableTs,
+          rawJson: c,
+        });
       } catch (err) {
-        errors.push(`Contact event ${c.id}: ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(`Contact event spec ${c.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    console.log(`[EntitySync] syncContacts: created ${eventsCreated} lead events`);
+    const eventsWritten = await createLeadEventsBatch(leadEventSpecs);
+    console.log(`[EntitySync] syncContacts: wrote ${eventsWritten}/${leadEventSpecs.length} lead events (batched)`);
 
     // v1.6: Soft-delete only runs in full mode — incremental can't see
     // records that GHL has removed since there's nothing to diff against.
@@ -507,21 +515,29 @@ export async function syncAppointments(options?: {
     }
     console.log(`[EntitySync] syncAppointments: upserted ${upsertedCount}/${rows.length} appointments`);
 
-    // Create lead events for appointments — kept sequential because volume is manageable (~140)
-    // and the derived event type matters for funnel progression.
-    console.log('[EntitySync] syncAppointments: creating lead events...');
-    let eventsCreated = 0;
+    // v1.8 (T2.1b): Batched lead events for appointments. Previously a 500-
+    // to-1000-iteration sequential loop per 15-min cycle. Now a single
+    // batched upsert. Appointments have useful derived event types for
+    // funnel progression (appointment_booked / appointment_showed /
+    // appointment_cancelled), so we keep this path intact — just batch it.
+    console.log('[EntitySync] syncAppointments: building lead event specs...');
+    const leadEventSpecs: LeadEventSpec[] = [];
     for (const apt of events) {
-      if (!apt.startTime) continue;
+      if (!apt.startTime || !apt.contactId) continue;
       try {
-        const eventType = deriveAppointmentEventType(apt.status);
-        await createLeadEvent(apt.contactId, eventType, apt.id, apt.startTime, apt);
-        eventsCreated++;
+        leadEventSpecs.push({
+          contactId: apt.contactId,
+          eventType: deriveAppointmentEventType(apt.status),
+          sourceId: apt.id,
+          timestamp: apt.startTime,
+          rawJson: apt,
+        });
       } catch (err) {
-        errors.push(`Appointment event ${apt.id}: ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(`Appointment event spec ${apt.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    console.log(`[EntitySync] syncAppointments: created ${eventsCreated} lead events`);
+    const eventsWritten = await createLeadEventsBatch(leadEventSpecs);
+    console.log(`[EntitySync] syncAppointments: wrote ${eventsWritten}/${leadEventSpecs.length} lead events (batched)`);
 
     // Soft-delete appointments no longer in GHL (within the synced time window)
     const activeAptIds = events.map((a) => a.id);
