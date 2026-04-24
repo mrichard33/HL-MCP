@@ -188,8 +188,8 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  * after the 1a744e2a deploy. Running them sequentially instead lets each
  * get full bucket access, so none of them get throttled and all four
  * complete in less total wall time than the broken parallel version ever
- * did. The recurring */15 crons stay parallel because they're in
- * incremental mode (much smaller per-cycle cost).
+ * did. The recurring every-15-minute crons stay parallel because they're
+ * in incremental mode (much smaller per-cycle cost).
  */
 export function startScheduledSync(): void {
   console.log('[Scheduler] Starting scheduled sync jobs (v1.8)');
