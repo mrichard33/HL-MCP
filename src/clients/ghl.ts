@@ -9,6 +9,11 @@
 //         search endpoint is less stable than contacts — the fallback
 //         path (and daily full reconcile) keeps the sync safe even if
 //         GHL changes the schema.
+//         2026-04-24 production fix: searchOpportunities body sends
+//         `locationId` (camelCase) not `location_id` (snake_case). GHL's
+//         POST body convention differs from the GET query-param
+//         convention on the same resource (matches searchContacts which
+//         has always used locationId).
 //
 // v1.7 — Extended getConversations() with sortBy/sort params and
 //         richer return type (meta, total) so callers can walk
@@ -501,6 +506,16 @@ export class GHLClient {
    *
    * The caller in entity-syncer.ts::syncOpportunities handles both cases.
    * The daily 3:10 AM ET full reconcile catches any drift regardless.
+   *
+   * 2026-04-24 production fix: body uses `locationId` (camelCase) because
+   * POST /opportunities/search expects camelCase field names in the JSON
+   * body — even though the corresponding GET /opportunities/search accepts
+   * `location_id` (snake_case) as a query param. GHL's naming convention
+   * differs between GET query-params and POST bodies on this resource.
+   * Sending `location_id` in the body produces
+   *   400 {"message":"LocationId is missing in body"}
+   * which we observed in deploy 90c2cde8's first */15 cycle. This matches
+   * searchContacts() which has always sent `locationId` in the body.
    */
   async searchOpportunities(params: {
     updatedSinceIso?: string;
@@ -508,7 +523,7 @@ export class GHLClient {
     pageLimit?: number;
   }): Promise<{ opportunities: GHLOpportunity[]; total?: number }> {
     const body: Record<string, unknown> = {
-      location_id: this.locationId,
+      locationId: this.locationId,
       page: params.page ?? 1,
       pageLimit: params.pageLimit ?? 100,
     };
