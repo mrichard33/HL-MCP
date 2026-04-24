@@ -334,17 +334,30 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
 /**
  * Sync opportunities from GHL to Supabase.
  *
- * v1.6: Supports 'incremental' and 'full' modes.
- *   - 'full': current v1.4 behavior — fetch all, upsert all, softDelete sweep.
- *   - 'incremental': fetch all from GHL (the opportunities search endpoint
- *     doesn't reliably accept a server-side dateUpdated filter, so we still
- *     pay the GHL API cost), then diff against Supabase's date_updated
- *     column to find only records that actually changed. Upsert only the
- *     changed subset. Skip softDeleteMissing. Saves the ~2,700 row-per-cycle
- *     Supabase write amplification, which was the larger issue.
+ * Supports 'incremental' and 'full' modes.
  *
- *     TODO v1.7: investigate POST /opportunities/search with a filter body;
- *     some tenants support it and it would let us skip the GHL fetch too.
+ *   - 'full': fetch all via GET /opportunities/search, upsert all,
+ *     run softDeleteMissing. Used on boot and by the daily 3:10 AM
+ *     ET reconcile cron.
+ *
+ *   - 'incremental' (T2.3b, v1.8):
+ *       1. Try POST /opportunities/search with a server-side
+ *          dateUpdated filter first via getOpportunitiesUpdatedSince.
+ *          Expected cost: 1-3 API calls, ~1-2s runtime, returns only
+ *          the handful of opps that actually changed.
+ *       2. If the server reports a suspiciously high total (>1500)
+ *          the filter was probably ignored by GHL — fall back to
+ *          the legacy path.
+ *       3. If the search throws (400, 500, etc.) fall back to the
+ *          legacy path.
+ *       4. LEGACY FALLBACK: fetch all opps via GET, build a
+ *          date_updated map from Supabase, client-side diff.
+ *          Same behavior as the pre-T2.3b code. Works fine, just
+ *          slower (~27 API calls, ~10-12s).
+ *
+ *   Either incremental path skips softDeleteMissing (can't see
+ *   GHL-side deletions reliably from an incremental result set).
+ *   The daily full reconcile handles that.
  */
 export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<SyncResult> {
   const mode: SyncMode = options?.mode ?? 'full';
@@ -354,55 +367,103 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
   const syncLogId = await logSyncStart('opportunities');
 
   try {
-    console.log(`[EntitySync] syncOpportunities: ${mode} mode — fetching all opportunities from GHL...`);
-    const opportunities = await ghl.getAllOpportunities();
-    console.log(`[EntitySync] syncOpportunities: fetched ${opportunities.length} opportunities from GHL`);
-
-    let toUpsert: GHLOpportunity[] = opportunities;
+    let toUpsert: GHLOpportunity[] = [];
     let skippedUnchanged = 0;
+    // In full mode we always need the full list for softDelete. In
+    // incremental we only populate it on the fallback path.
+    let fullList: GHLOpportunity[] | null = null;
+    let incrementalPath: 'server-filter' | 'client-diff' | 'none' = 'none';
 
     if (mode === 'incremental') {
-      // Build a map of existing opportunity id → date_updated from Supabase.
-      // Paginated past the 1000-row PostgREST cap (v1.5 lesson).
-      const existingDates = new Map<string, string>();
-      for (let page = 0; ; page++) {
-        const from = page * PAGINATION_PAGE_SIZE;
-        const to = from + PAGINATION_PAGE_SIZE - 1;
-        const { data, error } = await supabase
-          .from('opportunities')
-          .select('ghl_opportunity_id, date_updated')
-          .is('deleted_at', null)
-          .range(from, to);
-        if (error) {
-          console.warn(`[EntitySync] syncOpportunities: failed to load date_updated map (page ${page}): ${error.message} — falling back to full upsert`);
-          existingDates.clear();
-          break;
-        }
-        if (!data || data.length === 0) break;
-        for (const row of data as { ghl_opportunity_id: string; date_updated: string | null }[]) {
-          if (row.ghl_opportunity_id && row.date_updated) {
-            existingDates.set(row.ghl_opportunity_id, row.date_updated);
-          }
-        }
-        if (data.length < PAGINATION_PAGE_SIZE) break;
-      }
+      const sinceIso = await computeIncrementalFloor('opportunities');
+      if (!sinceIso) {
+        console.log('[EntitySync] syncOpportunities: incremental requested but no prior sync — running full');
+        // Re-route to full mode within this run
+        console.log('[EntitySync] syncOpportunities: full mode — fetching all from GHL...');
+        fullList = await ghl.getAllOpportunities();
+        console.log(`[EntitySync] syncOpportunities: fetched ${fullList.length} opportunities from GHL`);
+        toUpsert = fullList;
+      } else {
+        console.log(`[EntitySync] syncOpportunities: incremental, floor=${sinceIso} (overlap=${INCREMENTAL_OVERLAP_MINUTES}min)`);
 
-      if (existingDates.size > 0) {
-        toUpsert = opportunities.filter((o) => {
-          const incomingTs = o.dateUpdated || o.updatedAt;
-          if (!incomingTs) return true; // Unknown freshness — upsert to be safe
-          const existing = existingDates.get(o.id);
-          if (!existing) return true; // New record never seen before
-          // Strictly greater — equal means identical row, skip.
-          return new Date(incomingTs).getTime() > new Date(existing).getTime();
-        });
-        skippedUnchanged = opportunities.length - toUpsert.length;
-        console.log(`[EntitySync] syncOpportunities: diff — ${toUpsert.length} changed, ${skippedUnchanged} unchanged (skipped)`);
+        // ── Path 1: server-side filter (T2.3b) ──────────────────
+        try {
+          const result = await ghl.getOpportunitiesUpdatedSince(sinceIso);
+          const reported = result.totalReportedByServer;
+          // Sanity threshold: a normal 15-min window should return a
+          // small subset. If the server reports >1500 opps it almost
+          // certainly means the filter was silently ignored — GHL
+          // returned the entire location. Fall back to client-diff.
+          if (typeof reported === 'number' && reported > 1500) {
+            console.warn(`[EntitySync] syncOpportunities: server filter returned total=${reported} — appears ignored, falling back to GET + client diff`);
+          } else {
+            toUpsert = result.opportunities;
+            incrementalPath = 'server-filter';
+            console.log(`[EntitySync] syncOpportunities: server-filtered ${toUpsert.length} changed opps (server total=${reported ?? 'n/a'})`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[EntitySync] syncOpportunities: server-side search failed (${msg}) — falling back to GET + client diff`);
+        }
+
+        // ── Path 2 (fallback): client-side diff ─────────────────
+        if (incrementalPath === 'none') {
+          console.log('[EntitySync] syncOpportunities: fallback path — fetching all opportunities from GHL for client-side diff...');
+          fullList = await ghl.getAllOpportunities();
+          console.log(`[EntitySync] syncOpportunities: fetched ${fullList.length} opportunities from GHL`);
+
+          // Build a map of existing opportunity id → date_updated from
+          // Supabase. Paginated past the 1000-row PostgREST cap.
+          const existingDates = new Map<string, string>();
+          for (let page = 0; ; page++) {
+            const from = page * PAGINATION_PAGE_SIZE;
+            const to = from + PAGINATION_PAGE_SIZE - 1;
+            const { data, error } = await supabase
+              .from('opportunities')
+              .select('ghl_opportunity_id, date_updated')
+              .is('deleted_at', null)
+              .range(from, to);
+            if (error) {
+              console.warn(`[EntitySync] syncOpportunities: failed to load date_updated map (page ${page}): ${error.message} — falling back to full upsert`);
+              existingDates.clear();
+              break;
+            }
+            if (!data || data.length === 0) break;
+            for (const row of data as { ghl_opportunity_id: string; date_updated: string | null }[]) {
+              if (row.ghl_opportunity_id && row.date_updated) {
+                existingDates.set(row.ghl_opportunity_id, row.date_updated);
+              }
+            }
+            if (data.length < PAGINATION_PAGE_SIZE) break;
+          }
+
+          if (existingDates.size > 0) {
+            toUpsert = fullList.filter((o) => {
+              const incomingTs = o.dateUpdated || o.updatedAt;
+              if (!incomingTs) return true; // Unknown freshness — upsert to be safe
+              const existing = existingDates.get(o.id);
+              if (!existing) return true; // New record never seen before
+              // Strictly greater — equal means identical row, skip.
+              return new Date(incomingTs).getTime() > new Date(existing).getTime();
+            });
+            skippedUnchanged = fullList.length - toUpsert.length;
+            console.log(`[EntitySync] syncOpportunities: diff — ${toUpsert.length} changed, ${skippedUnchanged} unchanged (skipped)`);
+          } else {
+            toUpsert = fullList;
+          }
+          incrementalPath = 'client-diff';
+        }
       }
+    } else {
+      // Full mode
+      console.log('[EntitySync] syncOpportunities: full mode — fetching all opportunities from GHL...');
+      fullList = await ghl.getAllOpportunities();
+      console.log(`[EntitySync] syncOpportunities: fetched ${fullList.length} opportunities from GHL`);
+      toUpsert = fullList;
     }
 
     if (toUpsert.length === 0) {
-      console.log('[EntitySync] syncOpportunities: no rows to write');
+      console.log(`[EntitySync] syncOpportunities: no rows to write (path=${incrementalPath === 'none' ? 'full' : incrementalPath})`);
       await updateLastSynced('opportunities');
       await logSyncComplete(syncLogId, 0);
       return { synced: 0, skipped: skippedUnchanged, mode, errors };
@@ -442,15 +503,18 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
 
     // v1.4: createLeadEvent skipped in bulk — opportunity webhooks handle real-time events.
 
-    // v1.6: Soft-delete only runs in full mode.
-    if (mode === 'full') {
-      const activeOppIds = opportunities.map((o) => o.id);
+    // v1.6: Soft-delete only runs in full mode (requires the full remote list
+    // to diff against Supabase). fullList is guaranteed non-null here because
+    // full mode always populates it above.
+    if (mode === 'full' && fullList) {
+      const activeOppIds = fullList.map((o) => o.id);
       await softDeleteMissing('opportunities', 'ghl_opportunity_id', activeOppIds, ghl.getLocationId());
     }
 
     await updateLastSynced('opportunities');
     await logSyncComplete(syncLogId, toUpsert.length);
-    console.log(`[EntitySync] Opportunities synced (${mode}): ${toUpsert.length} (skipped ${skippedUnchanged})`);
+    const pathLabel = mode === 'full' ? 'full' : incrementalPath;
+    console.log(`[EntitySync] Opportunities synced (${pathLabel}): ${toUpsert.length} (skipped ${skippedUnchanged})`);
     return { synced: toUpsert.length, skipped: skippedUnchanged, mode, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
