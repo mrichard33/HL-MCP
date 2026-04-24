@@ -514,8 +514,8 @@ export class GHLClient {
    * differs between GET query-params and POST bodies on this resource.
    * Sending `location_id` in the body produces
    *   400 {"message":"LocationId is missing in body"}
-   * which we observed in deploy 90c2cde8's first */15 cycle. This matches
-   * searchContacts() which has always sent `locationId` in the body.
+   * which we observed in deploy 90c2cde8's first every-15-minute cycle.
+   * This matches searchContacts() which has always sent `locationId`.
    */
   async searchOpportunities(params: {
     updatedSinceIso?: string;
