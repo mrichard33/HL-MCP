@@ -14,6 +14,13 @@
 //         POST body convention differs from the GET query-param
 //         convention on the same resource (matches searchContacts which
 //         has always used locationId).
+//         2026-04-24 follow-up fix: body uses `limit` (not `pageLimit`)
+//         for pagination. After the locationId fix, GHL responded with
+//         HTTP 422 "property pageLimit should not exist" — the opp
+//         search DTO uses a different pagination property name than
+//         the contacts search DTO. The caller-facing parameter name
+//         stays `pageLimit` for consistency with searchContacts; only
+//         the wire format changes.
 //
 // v1.7 — Extended getConversations() with sortBy/sort params and
 //         richer return type (meta, total) so callers can walk
@@ -507,15 +514,22 @@ export class GHLClient {
    * The caller in entity-syncer.ts::syncOpportunities handles both cases.
    * The daily 3:10 AM ET full reconcile catches any drift regardless.
    *
-   * 2026-04-24 production fix: body uses `locationId` (camelCase) because
-   * POST /opportunities/search expects camelCase field names in the JSON
-   * body — even though the corresponding GET /opportunities/search accepts
-   * `location_id` (snake_case) as a query param. GHL's naming convention
-   * differs between GET query-params and POST bodies on this resource.
-   * Sending `location_id` in the body produces
-   *   400 {"message":"LocationId is missing in body"}
-   * which we observed in deploy 90c2cde8's first every-15-minute cycle.
-   * This matches searchContacts() which has always sent `locationId`.
+   * 2026-04-24 production fix #1: body uses `locationId` (camelCase)
+   * because POST /opportunities/search expects camelCase in the body —
+   * even though the GET endpoint uses `location_id` (snake_case) as a
+   * query param. Sending `location_id` in the body produced:
+   *   400 "LocationId is missing in body"
+   *
+   * 2026-04-24 production fix #2: body uses `limit` (not `pageLimit`)
+   * for page size. After fix #1, GHL responded with:
+   *   422 "property pageLimit should not exist"
+   * NestJS class-validator strict whitelist on the opportunities DTO
+   * rejected `pageLimit`. The opportunities DTO accepts `limit`
+   * (matching the GET counterpart convention), while the contacts
+   * search DTO accepts `pageLimit` — different DTO definitions per
+   * resource. The method signature keeps `pageLimit` as the caller
+   * parameter name for API consistency with searchContacts; the
+   * field-name remap happens only when building the body.
    */
   async searchOpportunities(params: {
     updatedSinceIso?: string;
@@ -525,7 +539,7 @@ export class GHLClient {
     const body: Record<string, unknown> = {
       locationId: this.locationId,
       page: params.page ?? 1,
-      pageLimit: params.pageLimit ?? 100,
+      limit: params.pageLimit ?? 100,
     };
     if (params.updatedSinceIso) {
       body.filters = [
