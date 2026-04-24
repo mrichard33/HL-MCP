@@ -1,5 +1,15 @@
 // ─── GHL API Client — src/clients/ghl.ts ─────────────────────────
 //
+// v1.8 (T2.3) — Added searchOpportunities() + getOpportunitiesUpdatedSince()
+//         for incremental opportunity sync via POST /opportunities/search
+//         with a dateUpdated filter. Mirrors the v1.6 contacts pattern.
+//         Caller in entity-syncer.ts tries this first and falls back to
+//         the existing GET /opportunities/search + client-side diff when
+//         the filter is unsupported or appears ignored. The opportunity
+//         search endpoint is less stable than contacts — the fallback
+//         path (and daily full reconcile) keeps the sync safe even if
+//         GHL changes the schema.
+//
 // v1.7 — Extended getConversations() with sortBy/sort params and
 //         richer return type (meta, total) so callers can walk
 //         /conversations/search as a location-wide feed ordered by
@@ -14,10 +24,7 @@
 //         incremental contact sync via POST /contacts/search with
 //         a dateUpdated filter. Lets the 15-min cron fetch only
 //         changed records instead of re-pulling all 3,400+ contacts
-//         every cycle. Opportunities stay on the simple GET
-//         /opportunities/search (client-side dateUpdated diff in
-//         entity-syncer) because the GHL opportunities search
-//         endpoint doesn't reliably accept a server-side date filter.
+//         every cycle.
 //
 // v1.3 — Added 429 retry logic to request() and requestWithOAuth().
 //         Per CONVERSATION_SYNC_CHANGES.md, this was the planned 2026-04-04
@@ -473,6 +480,76 @@ export class GHLClient {
       if (!result.opportunities?.length || (!startAfter && !startAfterId)) break;
     } while (pageCount < MAX_PAGES);
     return all;
+  }
+
+  /**
+   * v1.8 (T2.3): Incremental opportunity search via POST /opportunities/search.
+   *
+   * Attempts to fetch only opportunities whose `dateUpdated` is >= a floor
+   * timestamp, rather than re-pulling all 4,000+ opportunities every cycle.
+   * Request body shape mirrors searchContacts() (v1.6) which GHL accepts
+   * reliably. GHL's opportunity search endpoint is LESS stable than
+   * contacts — it historically only accepted GET query params, and some
+   * tenants reject POST filter bodies with 400 or silently ignore the
+   * filter and return the full location.
+   *
+   * BECAUSE OF THAT, ALL CALLERS MUST:
+   *   1. Catch thrown errors (400/500) and fall back to GET + client diff.
+   *   2. Sanity-check the returned total: if it looks like the full
+   *      location size (>1500 here, since normal incremental is < a few
+   *      hundred), assume the filter was ignored and fall back.
+   *
+   * The caller in entity-syncer.ts::syncOpportunities handles both cases.
+   * The daily 3:10 AM ET full reconcile catches any drift regardless.
+   */
+  async searchOpportunities(params: {
+    updatedSinceIso?: string;
+    page?: number;
+    pageLimit?: number;
+  }): Promise<{ opportunities: GHLOpportunity[]; total?: number }> {
+    const body: Record<string, unknown> = {
+      location_id: this.locationId,
+      page: params.page ?? 1,
+      pageLimit: params.pageLimit ?? 100,
+    };
+    if (params.updatedSinceIso) {
+      body.filters = [
+        {
+          field: 'dateUpdated',
+          operator: 'range',
+          value: { gte: params.updatedSinceIso },
+        },
+      ];
+      body.sort = [{ field: 'dateUpdated', direction: 'asc' }];
+    }
+    const res = await this.request<{ opportunities?: GHLOpportunity[]; total?: number }>(
+      '/opportunities/search',
+      { method: 'POST', body },
+    );
+    return { opportunities: res.opportunities || [], total: res.total };
+  }
+
+  /**
+   * v1.8 (T2.3): Fetch all opportunities with dateUpdated >= `updatedSinceIso`,
+   * paginating through POST /opportunities/search until exhausted.
+   *
+   * Returns the fetched records and the server-reported total so the caller
+   * can sanity-check the filter against location size. If returned total is
+   * close to 100% of location opps, the filter likely wasn't applied and
+   * caller should fall back to full fetch + client-side diff.
+   */
+  async getOpportunitiesUpdatedSince(updatedSinceIso: string): Promise<{ opportunities: GHLOpportunity[]; totalReportedByServer: number | null }> {
+    const all: GHLOpportunity[] = [];
+    const PAGE_LIMIT = 100;
+    const MAX_PAGES = 50;
+    let totalReported: number | null = null;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const result = await this.searchOpportunities({ updatedSinceIso, page, pageLimit: PAGE_LIMIT });
+      if (page === 1 && typeof result.total === 'number') totalReported = result.total;
+      all.push(...(result.opportunities || []));
+      if (!result.opportunities.length || result.opportunities.length < PAGE_LIMIT) break;
+    }
+    return { opportunities: all, totalReportedByServer: totalReported };
   }
 
   async getOpportunity(opportunityId: string): Promise<GHLOpportunity> {
