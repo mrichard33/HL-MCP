@@ -80,6 +80,13 @@ const REQUEST_TIMEOUT_MS = parseInt(process.env.GHL_REQUEST_TIMEOUT_MS || '60000
 const MAX_RETRIES_ON_429 = 3;
 const RETRY_BACKOFF_MS = [2000, 4000, 8000];
 
+// v1.8 (T2.2b): Gate verbose per-workflow diagnostic logging shared with
+// workflow-extractor.ts. When false, getWorkflowTriggers() suppresses
+// its per-workflow "Trigger API response" log. Matches the flag defined
+// in workflow-extractor.ts so one env toggle controls the full workflow
+// sync debug surface.
+const DEBUG_WORKFLOW_SYNC = process.env.DEBUG_WORKFLOW_SYNC === 'true';
+
 /**
  * fetch() with an AbortController-based timeout.
  * Uses AbortController + setTimeout (Node 16+) rather than
@@ -538,9 +545,14 @@ export class GHLClient {
       const response = await fetchWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json', channel: 'APP', 'token-id': idToken } }, `GET workflow triggers ${workflowId}`);
       if (!response.ok) { console.warn(`[GHL] Trigger API failed for workflow ${workflowId} (${response.status})`); return []; }
       const data = await response.json();
-      const dataType = Array.isArray(data) ? `Array[${data.length}]` : typeof data;
-      const dataKeys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data).join(',') : 'N/A';
-      console.log(`[GHL] Trigger API response for ${workflowId}: type=${dataType}, keys=${dataKeys}`);
+      // v1.8 (T2.2b): Gated behind DEBUG_WORKFLOW_SYNC. Previously printed
+      // a diagnostic line for every workflow (~234 lines/cycle) — useful
+      // only when diagnosing GHL trigger API schema drift.
+      if (DEBUG_WORKFLOW_SYNC) {
+        const dataType = Array.isArray(data) ? `Array[${data.length}]` : typeof data;
+        const dataKeys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data).join(',') : 'N/A';
+        console.log(`[GHL] Trigger API response for ${workflowId}: type=${dataType}, keys=${dataKeys}`);
+      }
       if (Array.isArray(data)) return data;
       if (data && typeof data === 'object') {
         if (Array.isArray(data.triggers)) return data.triggers;
