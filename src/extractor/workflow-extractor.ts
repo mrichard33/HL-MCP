@@ -5,6 +5,16 @@ import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
 import { updateLastSynced, softDeleteMissing } from './entity-syncer.js';
 
+// v1.8: Verbose per-workflow diagnostic logging is gated behind
+// DEBUG_WORKFLOW_SYNC=true. When enabled, every workflow prints its
+// top-level Internal API keys + nested key structure (~7 lines/workflow).
+// For 234 workflows that's ~1,600 lines per hourly sync, which drowns
+// the 500-line Railway log buffer and pushes real diagnostics out.
+// When disabled, only the first workflow per sync cycle prints the
+// key structure (useful for catching GHL schema drift) and a
+// one-line summary prints at the end.
+const DEBUG_WORKFLOW_SYNC = process.env.DEBUG_WORKFLOW_SYNC === 'true';
+
 export interface SyncResult {
   workflows_synced: number;
   workflows_total: number;
@@ -332,6 +342,11 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
     result.workflows_total = workflows.length;
     let noNodesCount = 0;
     let firebaseFailureLogged = false;
+    // v1.8: Track whether we've logged the schema sample. Previously this used
+    // `noNodesCount === 0` which only logged on the first workflow that had
+    // zero parsed nodes — potentially never logging in a healthy cycle.
+    // Now logs once per cycle on the first successful internal API response.
+    let loggedSchemaSample = false;
 
     for (let wIdx = 0; wIdx < workflows.length; wIdx++) {
       const workflowSummary = workflows[wIdx];
@@ -378,16 +393,23 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
           // Internal API returned data — parse the full node graph
           fullJson = internalJson;
 
-          // Diagnostic: log the actual JSON structure so we can match it in findNodes()
-          if (noNodesCount === 0) {
+          // v1.8: Schema diagnostic log — gated behind DEBUG_WORKFLOW_SYNC.
+          // Without the gate this prints ~7 lines for EVERY workflow (234 per
+          // hourly cycle = ~1600 lines), drowning the log buffer. With the gate
+          // it prints only when debugging. Either way, log once per cycle on
+          // the first internal API response so we can catch schema drift.
+          if (!loggedSchemaSample) {
+            loggedSchemaSample = true;
             const topKeys = Object.keys(fullJson);
-            console.log(`[WorkflowSync] Internal API top-level keys for "${workflowSummary.name}": [${topKeys.join(', ')}]`);
-            for (const key of topKeys) {
-              const val = fullJson[key];
-              if (val && typeof val === 'object' && !Array.isArray(val)) {
-                console.log(`[WorkflowSync]   .${key} keys: [${Object.keys(val as object).join(', ')}]`);
-              } else if (Array.isArray(val)) {
-                console.log(`[WorkflowSync]   .${key}: Array(${val.length})`);
+            console.log(`[WorkflowSync] Internal API sample schema for "${workflowSummary.name}": top-level keys [${topKeys.join(', ')}]`);
+            if (DEBUG_WORKFLOW_SYNC) {
+              for (const key of topKeys) {
+                const val = fullJson[key];
+                if (val && typeof val === 'object' && !Array.isArray(val)) {
+                  console.log(`[WorkflowSync]   .${key} keys: [${Object.keys(val as object).join(', ')}]`);
+                } else if (Array.isArray(val)) {
+                  console.log(`[WorkflowSync]   .${key}: Array(${val.length})`);
+                }
               }
             }
           }
@@ -427,6 +449,11 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
 
           // Fetch triggers from the dedicated backend trigger endpoint
           const backendTriggers = await ghl.getWorkflowTriggers(workflowSummary.id);
+
+          // v1.8: Trigger API response logging — gated behind DEBUG_WORKFLOW_SYNC.
+          // This log line runs inside ghl.getWorkflowTriggers() in ghl.ts, not
+          // here — the gating applies at the source. We still log trigger
+          // diagnostics for the first workflow of each cycle below.
 
           // Merge trigger sources: prefer backend triggers, fall back to parsed/summary
           let mergedTriggers: GHLWorkflow['triggers'];
