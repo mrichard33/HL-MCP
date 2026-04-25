@@ -133,23 +133,210 @@ async function logWebhookFailure(
   }
 }
 
+// ─── workflow_executions tag-diff tracking ────────────────────────────
+//
+// GHL does not emit a native "workflow-executed" webhook event type, so
+// the /webhooks/highlevel/workflow endpoint is effectively dead (no calls
+// observed across 600k+ lead_events). Instead, every GHL workflow in this
+// account follows the active-w* tag convention:
+//
+//   - Entering a workflow: the workflow's first step adds active-w{ID}
+//   - Leaving a workflow: the exit conditions remove active-w{ID}
+//
+// We exploit this by diffing each contact webhook's incoming tags vs the
+// tags we already have stored. Any active-w* addition becomes a
+// workflow_executions row with status='running'; any removal closes the
+// open row to status='completed'. This gives us the workflow enrollment
+// analytics we never had, automatically, for every workflow in the system.
+//
+// Tag naming has two formats in this account:
+//   1) Dotted:  active-w5.2, active-w8.0, active-w11.1 (matches W5.2, W8.0…)
+//   2) Padded:  active-w04, active-w02 (matches W0.4, W0.2 — legacy two-digit)
+//
+// Resolution ranks published workflows above drafts and prefers main
+// workflows over exit-condition (*E) siblings (e.g., active-w0.2 resolves
+// to W0.2 rather than W0.2E).
+
+const WORKFLOW_TAG_CACHE: Map<string, string> = new Map();
+let workflowTagCacheExpiry = 0;
+const WORKFLOW_TAG_CACHE_TTL_MS = 10 * 60 * 1000;
+
+async function refreshWorkflowTagCache(): Promise<void> {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('workflows')
+    .select('ghl_workflow_id, name, status')
+    .is('deleted_at', null);
+  if (error || !data) {
+    console.warn(`[Webhook] workflow_tag cache refresh failed: ${error?.message || 'no data'}`);
+    return;
+  }
+
+  // Sort: published first, then by UUID for stable tie-breaks. This is
+  // the same order the backfill SQL uses, so tag → UUID resolution at
+  // runtime matches the one-time backfill done on 2026-04-24.
+  const sorted = [...data].sort((a, b) => {
+    const aPub = a.status === 'published' ? 0 : 1;
+    const bPub = b.status === 'published' ? 0 : 1;
+    if (aPub !== bPub) return aPub - bPub;
+    return String(a.ghl_workflow_id).localeCompare(String(b.ghl_workflow_id));
+  });
+
+  const fresh = new Map<string, string>();
+  for (const wf of sorted) {
+    const name = (wf.name as string) || '';
+    // Extract short name: matches W<digits>.<digits> followed by space/dash.
+    // This is the same pattern the backfill SQL uses ((^|non-alphanumeric)
+    // W<digits>.<digits>(space|dash)), which prevents W5.2 from matching
+    // W5.2E — exit-condition siblings are excluded from the tag mapping.
+    const match = name.match(/(?:^|[^A-Za-z0-9])(W\d+(?:\.\d+)?)(?:\s|-)/);
+    if (!match) continue;
+    const shortName = match[1]; // e.g. "W5.2", "W10.0", "W0.4"
+
+    // Dotted tag: W5.2 -> active-w5.2
+    const dottedTag = 'active-' + shortName.toLowerCase();
+    if (!fresh.has(dottedTag)) fresh.set(dottedTag, wf.ghl_workflow_id as string);
+
+    // Padded legacy tag: W0.4 -> active-w04, W0.2 -> active-w02
+    const paddedMatch = shortName.match(/^W0\.(\d)$/);
+    if (paddedMatch) {
+      const paddedTag = `active-w0${paddedMatch[1]}`;
+      if (!fresh.has(paddedTag)) fresh.set(paddedTag, wf.ghl_workflow_id as string);
+    }
+  }
+
+  WORKFLOW_TAG_CACHE.clear();
+  for (const [k, v] of fresh) WORKFLOW_TAG_CACHE.set(k, v);
+  workflowTagCacheExpiry = Date.now() + WORKFLOW_TAG_CACHE_TTL_MS;
+  console.log(`[Webhook] workflow_tag cache refreshed: ${WORKFLOW_TAG_CACHE.size} mappings`);
+}
+
+async function resolveWorkflowIdFromTag(tag: string): Promise<string | null> {
+  if (!tag || !tag.startsWith('active-w')) return null;
+  if (Date.now() > workflowTagCacheExpiry) {
+    await refreshWorkflowTagCache();
+  }
+  return WORKFLOW_TAG_CACHE.get(tag.toLowerCase()) ?? null;
+}
+
+/**
+ * Diffs active-w* tags between the previous and new tag arrays for a
+ * contact and writes workflow_executions rows accordingly.
+ *
+ *   - Added active-w* tag  -> INSERT (status='running', started_at=now)
+ *   - Removed active-w* tag -> UPDATE the open 'running' row for that
+ *                              (workflow, contact) to status='completed'
+ *
+ * Idempotent: if an 'active-w*' tag is added and a 'running' row already
+ * exists for (workflow, contact), we skip the INSERT. This keeps the
+ * behaviour sane when GHL re-fires a contact update webhook without any
+ * actual tag change, or when a workflow re-adds its own active-w tag as
+ * part of a self-rearming pattern.
+ *
+ * Silent on lookup or write failures — this function is ancillary to
+ * webhook processing and must never break a webhook response. All errors
+ * are logged at warn level.
+ */
+async function syncWorkflowExecutionsFromTagDiff(
+  contactId: string,
+  locationId: string | null,
+  newTags: string[],
+  previousTags: string[],
+): Promise<void> {
+  const prevSet = new Set(previousTags);
+  const newSet = new Set(newTags);
+
+  const addedActiveW = newTags.filter((t) => t.startsWith('active-w') && !prevSet.has(t));
+  const removedActiveW = previousTags.filter((t) => t.startsWith('active-w') && !newSet.has(t));
+
+  if (addedActiveW.length === 0 && removedActiveW.length === 0) return;
+
+  const supabase = getSupabaseClient();
+  const now = nowET();
+
+  for (const tag of addedActiveW) {
+    const workflowId = await resolveWorkflowIdFromTag(tag);
+    if (!workflowId) {
+      console.warn(`[Webhook] active-w tag "${tag}" did not resolve to a workflow UUID (contact ${contactId})`);
+      continue;
+    }
+
+    // Skip if an open 'running' row already exists for (workflow, contact).
+    // Avoids duplicate rows when a webhook re-fires without true tag change.
+    const { data: existing } = await supabase
+      .from('workflow_executions')
+      .select('id')
+      .eq('ghl_workflow_id', workflowId)
+      .eq('ghl_contact_id', contactId)
+      .eq('status', 'running')
+      .limit(1);
+    if (existing && existing.length > 0) continue;
+
+    const { error: insertError } = await supabase.from('workflow_executions').insert({
+      ghl_workflow_id: workflowId,
+      ghl_contact_id: contactId,
+      ghl_location_id: locationId,
+      status: 'running',
+      started_at: now,
+      execution_data: { source: 'tag_diff_webhook', tag },
+    });
+    if (insertError) {
+      console.warn(`[Webhook] workflow_executions INSERT failed for ${workflowId} / ${contactId}: ${insertError.message}`);
+    }
+  }
+
+  for (const tag of removedActiveW) {
+    const workflowId = await resolveWorkflowIdFromTag(tag);
+    if (!workflowId) continue; // already warned on add path if unresolvable
+
+    const { error: updateError } = await supabase
+      .from('workflow_executions')
+      .update({ status: 'completed', completed_at: now })
+      .eq('ghl_workflow_id', workflowId)
+      .eq('ghl_contact_id', contactId)
+      .eq('status', 'running');
+    if (updateError) {
+      console.warn(`[Webhook] workflow_executions UPDATE (completed) failed for ${workflowId} / ${contactId}: ${updateError.message}`);
+    }
+  }
+}
+
 // ---- Individual webhook handlers ----
 
 async function handleContactWebhook(payload: Record<string, unknown>): Promise<void> {
   const supabase = getSupabaseClient();
   const id = (payload.id || payload.contactId) as string;
+  const locationId = (payload.locationId as string) || null;
   const now = nowET();
+
+  // Fetch previous tags BEFORE the upsert so we can diff. Missing contact
+  // (first webhook for this id) is fine — previousTags is empty and any
+  // active-w* tags in the incoming payload are treated as fresh enrollments.
+  let previousTags: string[] = [];
+  try {
+    const { data: prev } = await supabase
+      .from('contacts')
+      .select('tags')
+      .eq('ghl_contact_id', id)
+      .maybeSingle();
+    previousTags = (prev?.tags as string[]) || [];
+  } catch {
+    // Non-critical — fall through with empty previousTags. The upsert below
+    // will still run. Tag-diff simply won't detect any removals this pass.
+  }
+
+  const newTags = (payload.tags as string[]) || [];
 
   await supabase.from('contacts').upsert(
     {
       ghl_contact_id: id,
-      ghl_location_id: (payload.locationId as string) || null,
+      ghl_location_id: locationId,
       first_name: (payload.firstName as string) || null,
       last_name: (payload.lastName as string) || null,
       email: (payload.email as string) || null,
       phone: (payload.phone as string) || null,
       company_name: (payload.companyName as string) || null,
-      tags: (payload.tags as string[]) || [],
+      tags: newTags,
       source: (payload.source as string) || null,
       custom_fields: payload.customFields || {},
       date_added: (payload.dateAdded as string) || null,
@@ -171,6 +358,12 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
       await createLeadEvent(id, action, id, stableTs, payload);
     }
   }
+
+  // ── Populate workflow_executions from active-w* tag diff (non-blocking) ──
+  // See comment block above syncWorkflowExecutionsFromTagDiff for rationale.
+  syncWorkflowExecutionsFromTagDiff(id, locationId, newTags, previousTags).catch((err) => {
+    console.warn(`[Webhook] workflow_executions tag-diff failed for contact ${id}: ${err instanceof Error ? err.message : String(err)}`);
+  });
 
   // ── Forward to agentic event bus (non-blocking) ──
   const systemEvent = contactToSystemEvent(payload);
@@ -307,7 +500,9 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
   const stableTs = (payload.dateAdded || now) as string;
   await createLeadEvent(contactId, 'workflow_executed', id, stableTs, payload);
 
-  // Also populate workflow_executions table
+  // Also populate workflow_executions table. This path is dead in practice
+  // (GHL does not emit a workflow-executed event type), but we keep it so
+  // any future GHL-side webhook actions that POST here continue to work.
   try {
     await supabase.from('workflow_executions').insert({
       ghl_workflow_id: id,
