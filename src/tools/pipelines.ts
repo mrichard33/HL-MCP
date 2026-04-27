@@ -78,13 +78,14 @@ export const pipelineTools = {
   },
 
   update_opportunity: {
-    description: 'Update an existing opportunity in GoHighLevel. Supports custom fields via customFields array.',
+    description: 'Update an existing opportunity in GoHighLevel. Supports custom fields via customFields array, and GHL\'s built-in Lost Reason picker via lostReasonId. To mark an opp lost in a way that satisfies WF1 P1 Loss Router (which reads the built-in lostReasonId field, not the custom Lost Type field), pass status="lost" together with lostReasonId.',
     inputSchema: z.object({
       opportunityId: z.string().describe('Opportunity ID'),
       name: z.string().optional(),
       stageId: z.string().optional(),
       status: z.enum(['open', 'won', 'lost', 'abandoned']).optional(),
       monetaryValue: z.number().optional(),
+      lostReasonId: z.string().optional().describe('GHL built-in Lost Reason picker ID. Required when status="lost" and any workflow (e.g. WF1 P1 Loss Router) gates on the built-in lostReasonId field. Get reason IDs from GHL → Settings → Pipelines → Lost Reasons, or via GET /opportunities/loss-reasons?locationId=...'),
       customFields: z.array(z.object({
         id: z.string().describe('Custom field ID'),
         field_value: z.union([z.string(), z.number(), z.boolean()]).describe('Value to set'),
