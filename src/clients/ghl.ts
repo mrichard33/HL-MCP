@@ -1,5 +1,15 @@
 // ─── GHL API Client — src/clients/ghl.ts ─────────────────────────
 //
+// v1.9 (2026-04-27) — Added getLossReasons() to fetch the location's
+//         configured built-in Lost Reasons. Pairs with the
+//         lostReasonId param added to the update_opportunity MCP tool
+//         in the same change-set. Reason: WF1 P1 Loss Router (and any
+//         workflow that gates on lost-marking) reads GHL's built-in
+//         `lostReasonId` field, not the custom "Lost Type" field. The
+//         MCP previously had no way to populate it, so loss-needs-reason
+//         tags re-applied on every agentic loss-marking attempt
+//         (surfaced during 2026-04-27 Lisa Mackinnon cleanup).
+//
 // v1.8 (T2.3) — Added searchOpportunities() + getOpportunitiesUpdatedSince()
 //         for incremental opportunity sync via POST /opportunities/search
 //         with a dateUpdated filter. Mirrors the v1.6 contacts pattern.
@@ -460,6 +470,37 @@ export class GHLClient {
   async getPipelines(): Promise<GHLPipeline[]> {
     const res = await this.request<{ pipelines: GHLPipeline[] }>('/opportunities/pipelines', { params: { locationId: this.locationId } });
     return res.pipelines;
+  }
+
+  /**
+   * v1.9 (2026-04-27): Fetch the location's configured Lost Reasons (the
+   * built-in GHL Lost Reason picker shown when marking an opportunity as
+   * Lost). Returns the raw response so the tool layer can normalize across
+   * any schema drift.
+   *
+   * Endpoint: GET /opportunities/loss-reasons?locationId=...
+   * (parallel construction with /opportunities/pipelines)
+   *
+   * Why this exists: WF1 P1 Loss Router (and any workflow that gates on
+   * lost-marking) reads GHL's built-in `lostReasonId` field, NOT the custom
+   * "Lost Type" field (m86JGp47yteVL0FV7MFW). Pairs with the lostReasonId
+   * param on update_opportunity so agentic loss-marking can fully clear
+   * downstream gates without manual GHL UI intervention.
+   *
+   * Response shape — has been observed as any of:
+   *   { lossReasons: [{ id, name, ... }] }    (parallel with pipelines)
+   *   { data: [{ id, name, ... }] }           (collection wrapper convention)
+   *   [{ id, name, ... }]                     (bare array)
+   * Returns unknown — get_lost_reasons in src/tools/pipelines.ts normalizes.
+   *
+   * If GHL returns 404 on this path, try the singular form
+   * `/opportunities/loss-reason` — both have been documented at various
+   * points in the GHL API docs.
+   */
+  async getLossReasons(): Promise<unknown> {
+    return this.request<unknown>('/opportunities/loss-reasons', {
+      params: { locationId: this.locationId },
+    });
   }
 
   // ---- Opportunities ----

@@ -78,13 +78,14 @@ export const pipelineTools = {
   },
 
   update_opportunity: {
-    description: 'Update an existing opportunity in GoHighLevel. Supports custom fields via customFields array.',
+    description: 'Update an existing opportunity in GoHighLevel. Supports custom fields via customFields array, and GHL\'s built-in Lost Reason picker via lostReasonId. To mark an opp lost in a way that satisfies WF1 P1 Loss Router (which reads the built-in lostReasonId field, not the custom Lost Type field), pass status="lost" together with lostReasonId. Use the get_lost_reasons tool to look up valid IDs.',
     inputSchema: z.object({
       opportunityId: z.string().describe('Opportunity ID'),
       name: z.string().optional(),
       stageId: z.string().optional(),
       status: z.enum(['open', 'won', 'lost', 'abandoned']).optional(),
       monetaryValue: z.number().optional(),
+      lostReasonId: z.string().optional().describe('GHL built-in Lost Reason picker ID. Required when status="lost" and any workflow (e.g. WF1 P1 Loss Router) gates on the built-in lostReasonId field. Look up valid IDs with the get_lost_reasons tool.'),
       customFields: z.array(z.object({
         id: z.string().describe('Custom field ID'),
         field_value: z.union([z.string(), z.number(), z.boolean()]).describe('Value to set'),
@@ -99,6 +100,34 @@ export const pipelineTools = {
         delete data.stageId;
       }
       return ghl.updateOpportunity(opportunityId, data);
+    },
+  },
+
+  get_lost_reasons: {
+    description: 'List the configured Lost Reasons for the location — the built-in GHL Lost Reason picker options shown when marking an opportunity as Lost. Returns each reason\'s id and name. Use the returned id with update_opportunity\'s lostReasonId parameter when marking an opp lost — this is required for WF1 P1 Loss Router (and any workflow that gates on the built-in lostReasonId field) to clear loss-needs-reason cleanly. No caching — always queries GHL live.',
+    inputSchema: z.object({}),
+    handler: async () => {
+      const ghl = new GHLClient();
+      const raw = await ghl.getLossReasons();
+      // GHL response shape has drifted across API versions — normalize to
+      // a flat array regardless of which wrapper key (or none) GHL returns.
+      // Observed shapes:
+      //   { lossReasons: [...] }   (parallel with /opportunities/pipelines)
+      //   { data: [...] }          (collection wrapper convention)
+      //   [...]                    (bare array)
+      let reasons: unknown[];
+      if (Array.isArray(raw)) {
+        reasons = raw;
+      } else if (raw && typeof raw === 'object') {
+        const obj = raw as Record<string, unknown>;
+        reasons = (obj.lossReasons as unknown[])
+          ?? (obj.data as unknown[])
+          ?? (obj.reasons as unknown[])
+          ?? [];
+      } else {
+        reasons = [];
+      }
+      return { lossReasons: reasons, count: reasons.length, source: 'ghl_api' };
     },
   },
 
