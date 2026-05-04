@@ -36,6 +36,9 @@ import { adminTools } from './tools/admin/index.js';
 // MVI v2.5 — agentic integrity tools (audit_namespace_violations,
 // get_drift_candidates). Pair with LP MCP MVI Antifragile patches.
 import { agenticIntegrityTools } from './tools/agentic-integrity.js';
+// MVI v2.5.1 — REST shim that wraps the integrity tools for service-to-service
+// HTTP callers (LP MCP drift detector, audit cron).
+import { tryHandleAgenticRoute } from './http/agentic-routes.js';
 import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
 import {
@@ -140,6 +143,12 @@ async function startHttpServer(port: number) {
         res.end();
         return;
       }
+    }
+
+    // MVI v2.5.1 — agentic integrity REST shim. Slotted before /health so
+    // /internal/* never falls through to oauth/diagnostics or the 404.
+    if (await tryHandleAgenticRoute(req, res, url.pathname)) {
+      return;
     }
 
     // Health check endpoint
