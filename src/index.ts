@@ -33,6 +33,9 @@ import { conversationTools } from './tools/conversations.js';
 import { workflowAnalysisTools } from './tools/workflow-analysis.js';
 import { templateTools } from './tools/templates.js';
 import { adminTools } from './tools/admin/index.js';
+// MVI v2.5 — agentic integrity tools (audit_namespace_violations,
+// get_drift_candidates). Pair with LP MCP MVI Antifragile patches.
+import { agenticIntegrityTools } from './tools/agentic-integrity.js';
 import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
 import {
@@ -64,6 +67,7 @@ function createMcpServer() {
     ...workflowAnalysisTools,
     ...templateTools,
     ...adminTools,
+    ...agenticIntegrityTools,
   };
 
   for (const [name, tool] of Object.entries(allTools)) {
