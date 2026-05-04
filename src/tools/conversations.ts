@@ -57,6 +57,37 @@ async function persistMessages(
   return { persisted, skipped };
 }
 
+/**
+ * MVI v2.5 — Advisory outbound-lock check against LP MCP.
+ * Returns { held: boolean, ... } or { advisory_unavailable: true } on any
+ * failure path. Fail-open: this is observability, not enforcement.
+ */
+async function checkAdvisoryLock(
+  contactId: string,
+  triggerId: string,
+): Promise<{ held: boolean; held_by?: string; advisory_unavailable?: boolean }> {
+  const lpUrl = process.env.LP_MCP_URL;
+  if (!lpUrl) return { held: false, advisory_unavailable: true };
+  const lpToken = process.env.LP_MCP_TOKEN;
+  try {
+    const url = `${lpUrl.replace(/\/$/, '')}/internal/check-outbound-lock`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(lpToken ? { 'Authorization': `Bearer ${lpToken}` } : {}),
+      },
+      body: JSON.stringify({ contact_id: contactId, trigger_id: triggerId }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) return { held: false, advisory_unavailable: true };
+    const body = await res.json() as { held?: boolean; held_by?: string };
+    return { held: !!body.held, held_by: body.held_by };
+  } catch {
+    return { held: false, advisory_unavailable: true };
+  }
+}
+
 export const conversationTools = {
   list_conversations: {
     description: 'List conversations, optionally filtered by contact. Queries Supabase by default. Set forceLive=true for live GHL API (requires contactId).',
@@ -141,16 +172,45 @@ export const conversationTools = {
   },
 
   send_message: {
-    description: 'Send a message in a conversation via GoHighLevel.',
+    description:
+      'Send a message in a conversation via GoHighLevel. Optionally pass triggerId to trigger an advisory check against the LP MCP outbound-lock table — useful when the send is in response to an inbound message and you want to know if LP MCP already queued a reply for the same trigger.',
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
       contactId: z.string().describe('GHL contact ID'),
       type: z.enum(['SMS', 'Email', 'WhatsApp', 'GMB', 'IG', 'FB', 'Live_Chat']).default('SMS'),
       message: z.string().describe('Message body'),
+      triggerId: z
+        .string()
+        .optional()
+        .describe(
+          'Optional. When set, HL MCP performs an advisory check against LP MCP /internal/check-outbound-lock. Lock-held → warning logged but send proceeds. Use the inbound message_id you are replying to as the value.',
+        ),
     }),
-    handler: async (args: { conversationId: string; contactId: string; type: string; message: string }) => {
+    handler: async (args: {
+      conversationId: string;
+      contactId: string;
+      type: string;
+      message: string;
+      triggerId?: string;
+    }) => {
+      let advisory: { held: boolean; held_by?: string; advisory_unavailable?: boolean } | undefined;
+      if (args.triggerId) {
+        advisory = await checkAdvisoryLock(args.contactId, args.triggerId);
+        if (advisory.held && !advisory.advisory_unavailable) {
+          console.warn(
+            `[hl-mcp send_message] outbound lock held by ${advisory.held_by} for trigger=${args.triggerId} — proceeding anyway (manual send)`,
+          );
+        }
+      }
+
       const ghl = new GHLClient();
-      return ghl.sendMessage(args);
+      const result = await ghl.sendMessage({
+        conversationId: args.conversationId,
+        contactId: args.contactId,
+        type: args.type,
+        message: args.message,
+      });
+      return advisory ? { ...result, _advisory_lock: advisory } : result;
     },
   },
 
