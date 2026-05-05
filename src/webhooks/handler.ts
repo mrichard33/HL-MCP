@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
-import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
+import { deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection, extractMessageBody } from '../utils/normalize.js';
 import {
   emitSystemEvent,
@@ -347,7 +347,7 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
     { onConflict: 'ghl_contact_id' },
   );
 
-  const eventType = deriveContactEventType({ dateAdded: payload.dateAdded as string, dateUpdated: payload.dateUpdated as string });
+  const eventType = payload.type === 'ContactCreate' ? 'contact_created' : 'contact_updated';
   const stableTs = (payload.dateUpdated || payload.dateAdded || now) as string;
   await createLeadEvent(id, eventType, id, stableTs, payload);
 
