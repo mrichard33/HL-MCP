@@ -400,7 +400,10 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
     { onConflict: 'ghl_opportunity_id' },
   );
 
-  const eventType = payload.previousStageId ? 'pipeline_stage_changed' : 'opportunity_created';
+  const eventType =
+    payload.type === 'OpportunityCreate' ? 'opportunity_created' :
+    payload.previousStageId ? 'pipeline_stage_changed' :
+    'opportunity_updated';
   const stableTs = (payload.dateUpdated || payload.updatedAt || payload.dateAdded || payload.createdAt || now) as string;
   await createLeadEvent(contactId, eventType, id, stableTs, payload);
 
