@@ -237,7 +237,7 @@ async function resolveWorkflowIdFromTag(tag: string): Promise<string | null> {
  * webhook processing and must never break a webhook response. All errors
  * are logged at warn level.
  */
-async function syncWorkflowExecutionsFromTagDiff(
+export async function syncWorkflowExecutionsFromTagDiff(
   contactId: string,
   locationId: string | null,
   newTags: string[],
