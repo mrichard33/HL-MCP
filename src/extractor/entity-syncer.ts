@@ -1,6 +1,6 @@
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
-import { createLeadEvent, createLeadEventsBatch, type LeadEventSpec } from '../webhooks/handler.js';
+import { createLeadEvent, createLeadEventsBatch, syncWorkflowExecutionsFromTagDiff, type LeadEventSpec } from '../webhooks/handler.js';
 import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection } from '../utils/normalize.js';
@@ -254,6 +254,32 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
       return { synced: 0, skipped: 0, mode: effectiveMode, errors };
     }
 
+    // v2.0 (workflow_executions repair, 2026-05-05): pre-fetch existing
+    // tags so we can diff active-w* enrollments after the upsert (see
+    // tag-diff loop below). Populates workflow_executions even when GHL
+    // contact webhooks aren't being delivered — which has been the case
+    // all along: 0 [Webhook] log lines all-time, 0 webhook_failures rows
+    // ever, 0 tag_added/tag_removed/workflow_executed event types in
+    // 782k+ lead_events. EntitySync runs every 15 min, so workflow
+    // enrollment analytics stay current at that resolution as long as
+    // this sync runs. The tag-diff path is documented in handler.ts.
+    const previousTagsByContact = new Map<string, string[]>();
+    {
+      const ids = contacts.map((c) => c.id);
+      for (let i = 0; i < ids.length; i += UPSERT_BATCH_SIZE) {
+        const slice = ids.slice(i, i + UPSERT_BATCH_SIZE);
+        const { data: existing } = await supabase
+          .from('contacts')
+          .select('ghl_contact_id, tags')
+          .in('ghl_contact_id', slice);
+        if (existing) {
+          for (const row of existing as { ghl_contact_id: string; tags: string[] | null }[]) {
+            previousTagsByContact.set(row.ghl_contact_id, row.tags || []);
+          }
+        }
+      }
+    }
+
     const now = nowET();
     const rows = contacts.map((c) => ({
       ghl_contact_id: c.id,
@@ -283,6 +309,33 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
       }
     }
     console.log(`[EntitySync] syncContacts: upserted ${upsertedCount}/${rows.length} contacts`);
+
+    // v2.0 (workflow_executions repair): populate workflow_executions
+    // from active-w* tag diffs. syncWorkflowExecutionsFromTagDiff inserts
+    // a 'running' row for any active-w* tag added since previousTags,
+    // and updates the matching open row to 'completed' for any active-w*
+    // tag removed. Same mechanism the webhook handler uses; this hook
+    // ensures it runs every sync cycle regardless of webhook delivery.
+    // Per-contact errors are logged but never break the sync. Sequential
+    // is intentional — the function's existing-row check + insert pattern
+    // has a TOCTOU race under concurrent execution.
+    let tagDiffsRan = 0;
+    let tagDiffsFailed = 0;
+    for (const c of contacts) {
+      const prev = previousTagsByContact.get(c.id) || [];
+      const next = c.tags || [];
+      try {
+        await syncWorkflowExecutionsFromTagDiff(c.id, c.locationId || null, next, prev);
+        tagDiffsRan++;
+      } catch (err) {
+        tagDiffsFailed++;
+        const m = err instanceof Error ? err.message : String(err);
+        console.warn(`[EntitySync] syncContacts: tag-diff failed for ${c.id}: ${m}`);
+      }
+    }
+    if (tagDiffsRan + tagDiffsFailed > 0) {
+      console.log(`[EntitySync] syncContacts: tag-diff processed ${tagDiffsRan} contacts (${tagDiffsFailed} failed)`);
+    }
 
     // v1.8 (T2.1b): Batch lead_events instead of 3,774 sequential upserts.
     // Build all event specs, then hand to createLeadEventsBatch which does
