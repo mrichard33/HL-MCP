@@ -14,6 +14,14 @@
  * Designed for nightly cron via n8n. Optionally posts a GroupMe alert on
  * first violation (only when post_alert=true and violations exist).
  *
+ * MVI v1.1 (2026-05-06) — orphan check refinement.
+ *   Tag-triggered standalone entry points are NOT orphans. Workflows with
+ *   entry_trigger_type='tag-based' fire from external events (LP sync,
+ *   webhooks, behavioral tags) and may legitimately have no upstream
+ *   funnel parent — exactly like the E.x bridges that the system-family
+ *   allowlist already excludes. Examples: L.6 P2 Loss Classification,
+ *   S1.6 Guide-Sent Re-engagement.
+ *
  * MVI v1.0 (2026-05-06).
  */
 
@@ -43,11 +51,18 @@ type RegistryRow = {
   routes_to: string[] | null;
   receives_from: string[] | null;
   status: string | null;
+  entry_trigger_type: string | null;
 };
 
 const REACTIVATION_STAGES = new Set(['reactivation', 'conversion', 'support']);
 const HIGH_PRESSURE = new Set(['high', 'compression']);
 const SYSTEM_FAMILIES = new Set(['I', 'U', 'B', 'EXT', 'LEGACY', 'A']);
+
+// Entry trigger types that legitimately produce graph-edge-less workflows.
+// A tag-based or webhook-triggered workflow fires from an external event
+// rather than being routed from another GHL workflow, so empty
+// routes_to / receives_from is expected, not a contamination signal.
+const STANDALONE_ENTRY_TRIGGERS = new Set(['tag-based', 'webhook', 'external']);
 
 function arrayLen(arr: string[] | null | undefined): number {
   return Array.isArray(arr) ? arr.length : 0;
@@ -77,7 +92,7 @@ export const contaminationCheckTools = {
       const { data, error } = await supabase
         .from('workflow_registry')
         .select(
-          'canonical_code, canonical_name, stage_family, psychological_stage, message_pressure_level, primary_copy_levers, allowed_trust_states, is_user_facing, routes_to, receives_from, status',
+          'canonical_code, canonical_name, stage_family, psychological_stage, message_pressure_level, primary_copy_levers, allowed_trust_states, is_user_facing, routes_to, receives_from, status, entry_trigger_type',
         );
 
       if (error) throw new Error(`Supabase error: ${error.message}`);
@@ -161,10 +176,16 @@ export const contaminationCheckTools = {
         }
 
         // 5. Orphan workflow
+        // Excludes:
+        //   - System families (I/U/B/EXT/LEGACY/A) — infrastructure, not topology
+        //   - Tag-triggered / webhook-triggered standalone entry points whose
+        //     parent is an external event, not another GHL workflow
         if (
           includeOrphans &&
           row.status === 'active' &&
           !SYSTEM_FAMILIES.has(row.stage_family) &&
+          (row.entry_trigger_type === null ||
+            !STANDALONE_ENTRY_TRIGGERS.has(row.entry_trigger_type)) &&
           arrayLen(row.routes_to) === 0 &&
           arrayLen(row.receives_from) === 0
         ) {
