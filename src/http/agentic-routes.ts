@@ -1,24 +1,26 @@
 /**
  * Agentic Routes — src/http/agentic-routes.ts
  *
- * Thin REST shim around agenticIntegrityTools so service-to-service
- * callers (LP MCP drift detector, audit cron) can reach the integrity
- * tools over plain HTTP without speaking the MCP protocol. Handlers
- * delegate to the same agenticIntegrityTools.handler functions the MCP
- * server uses — no logic is duplicated here.
+ * Thin REST shim around agenticIntegrityTools and contaminationCheckTools
+ * so service-to-service callers (LP MCP drift detector, audit cron, n8n
+ * nightly contamination check) can reach these tools over plain HTTP
+ * without speaking the MCP protocol. Handlers delegate to the same tool
+ * handler functions the MCP server uses — no logic is duplicated here.
  *
  * Routes:
  *   POST /internal/get-drift-candidates
  *   POST /internal/audit-namespace-violations
+ *   POST /internal/check-contamination
  *
  * Auth: Bearer HL_INTERNAL_TOKEN. Fail-closed if the env var is unset
  * (refuses every call rather than running open).
  *
- * MVI v2.5.1 (2026-05-04).
+ * MVI v2.6.0 (2026-05-06) — added contamination-check route.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { agenticIntegrityTools } from '../tools/agentic-integrity.js';
+import { contaminationCheckTools } from '../tools/contamination-check.js';
 
 type AgenticHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
@@ -27,6 +29,8 @@ const AGENTIC_ROUTES: Record<string, AgenticHandler> = {
     agenticIntegrityTools.get_drift_candidates.handler as unknown as AgenticHandler,
   '/internal/audit-namespace-violations':
     agenticIntegrityTools.audit_namespace_violations.handler as unknown as AgenticHandler,
+  '/internal/check-contamination':
+    contaminationCheckTools.check_contamination.handler as unknown as AgenticHandler,
 };
 
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
