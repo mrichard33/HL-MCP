@@ -36,8 +36,11 @@ import { adminTools } from './tools/admin/index.js';
 // MVI v2.5 — agentic integrity tools (audit_namespace_violations,
 // get_drift_candidates). Pair with LP MCP MVI Antifragile patches.
 import { agenticIntegrityTools } from './tools/agentic-integrity.js';
+// MVI v2.6 — workflow_registry contamination check (Phase 2.5 of Workflow
+// Registry rollout). Pairs with the n8n nightly cron workflow.
+import { contaminationCheckTools } from './tools/contamination-check.js';
 // MVI v2.5.1 — REST shim that wraps the integrity tools for service-to-service
-// HTTP callers (LP MCP drift detector, audit cron).
+// HTTP callers (LP MCP drift detector, audit cron, contamination cron).
 import { tryHandleAgenticRoute } from './http/agentic-routes.js';
 import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
@@ -71,6 +74,7 @@ function createMcpServer() {
     ...templateTools,
     ...adminTools,
     ...agenticIntegrityTools,
+    ...contaminationCheckTools,
   };
 
   for (const [name, tool] of Object.entries(allTools)) {
