@@ -465,6 +465,25 @@ export class GHLClient {
     return res.contact;
   }
 
+  /**
+   * Add an internal note to a contact's GHL record.
+   * Uses POST /contacts/{id}/notes
+   */
+  async addContactNote(
+    contactId: string,
+    body: string,
+    userId?: string,
+  ): Promise<{ id: string; body: string; dateAdded: string }> {
+    const res = await this.request<{ note: { id: string; body: string; dateAdded: string } }>(
+      `/contacts/${contactId}/notes`,
+      {
+        method: 'POST',
+        body: userId ? { body, userId } : { body },
+      },
+    );
+    return res.note;
+  }
+
   // ---- Pipelines ----
 
   async getPipelines(): Promise<GHLPipeline[]> {

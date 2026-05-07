@@ -117,6 +117,27 @@ export const contactTools = {
     },
   },
 
+  add_note: {
+    description: 'Add an internal note to a contact\'s GoHighLevel record. Notes are visible to all reps. Body must be 1–2000 chars; HTML tags are stripped.',
+    inputSchema: z.object({
+      contactId: z.string().describe('GoHighLevel contact ID'),
+      body: z.string().describe('Note body (1–2000 chars, HTML stripped)'),
+      userId: z.string().optional().describe('GHL user ID to attribute the note to (default: API user)'),
+    }),
+    handler: async (args: { contactId: string; body: string; userId?: string }) => {
+      const stripped = (args.body || '').replace(/<[^>]+>/g, '').trim();
+      if (!stripped) {
+        throw new Error('Note body must not be empty.');
+      }
+      if (stripped.length > 2000) {
+        throw new Error(`Note body must be ≤ 2000 chars (got ${stripped.length}).`);
+      }
+      const ghl = new GHLClient();
+      const note = await ghl.addContactNote(args.contactId, stripped, args.userId);
+      return { note_id: note.id, created_at: note.dateAdded, body: note.body };
+    },
+  },
+
   update_custom_fields: {
     description: 'Update custom fields on a contact without touching tags or other standard fields. Pass an array of {id, field_value} objects.',
     inputSchema: z.object({
