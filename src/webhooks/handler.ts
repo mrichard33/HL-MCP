@@ -370,6 +370,40 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
   if (systemEvent) {
     emitSystemEvent(systemEvent).catch(() => {}); // fire-and-forget
   }
+
+  // ── Forward to LP MCP for tag-event emission (Wave 1.2) ──
+  // LP MCP /webhooks/ghl-tag diffs vs contact_tag_snapshot and emits
+  // ghl.tag_added / ghl.tag_removed system_events for the Decision
+  // Engine. Fire-and-forget — never block the GHL webhook ack.
+  if (payload.type === 'ContactTagUpdate') {
+    const lpMcpBaseUrl = process.env.LP_MCP_BASE_URL
+      || 'https://lp-mcp-production.up.railway.app';
+    fetch(`${lpMcpBaseUrl}/webhooks/ghl-tag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contact_id: id, tags: newTags }),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const text = await response.text().catch(() => '<no body>');
+          await logWebhookFailure(
+            'lp-mcp:/webhooks/ghl-tag',
+            'ContactTagUpdate',
+            `LP MCP returned ${response.status}: ${text}`,
+            { contact_id: id, tags: newTags },
+          );
+        }
+      })
+      .catch(async (err) => {
+        await logWebhookFailure(
+          'lp-mcp:/webhooks/ghl-tag',
+          'ContactTagUpdate',
+          err instanceof Error ? err.message : String(err),
+          { contact_id: id, tags: newTags },
+        );
+      });
+  }
 }
 
 async function handleOpportunityWebhook(payload: Record<string, unknown>): Promise<void> {
