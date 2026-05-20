@@ -422,8 +422,38 @@ export class GHLClient {
     return res.contact;
   }
 
+  /**
+   * Update a contact via PUT /contacts/{id}.
+   *
+   * SAFETY: GHL's PUT endpoint WHOLESALE-REPLACES the contact's tag set
+   * if a `tags` field is present in the body. Past incidents:
+   *   - n8n LP Lead Enrichment v2.0 (2026-05-15) — Mark Test contact
+   *   - Kristen Nichols (2026-05-19) — jVpX2i4EXSQccsdAP8xR lost
+   *     entry:estimate-calculator, active-entry:estimate-calculator,
+   *     and ghl-attributed
+   * Both wiped because unrelated upstream code passed a tags array
+   * through a PUT path. Defense in depth: this method strips `tags`
+   * from the body before sending. Callers that need to mutate tags
+   * must use addContactTags() (POST) or removeContactTags() (DELETE),
+   * which are additive/subtractive.
+   *
+   * If a caller passes `tags`, log a loud error with the payload so the
+   * misuse surfaces in Railway logs and can be traced to its source.
+   */
   async updateContact(contactId: string, data: Partial<GHLContact>): Promise<GHLContact> {
-    const res = await this.request<{ contact: GHLContact }>(`/contacts/${contactId}`, { method: 'PUT', body: data });
+    let safeData = data;
+    if (data && 'tags' in (data as Record<string, unknown>)) {
+      const offendingTags = (data as Record<string, unknown>).tags;
+      console.error(
+        `[GHLClient.updateContact] BLOCKED tags-wipe on contact ${contactId}. ` +
+        `Caller passed tags=${JSON.stringify(offendingTags)}. ` +
+        `Tags stripped from PUT body. Use addContactTags / removeContactTags instead.`
+      );
+      const stripped = { ...(data as Record<string, unknown>) };
+      delete stripped.tags;
+      safeData = stripped as Partial<GHLContact>;
+    }
+    const res = await this.request<{ contact: GHLContact }>(`/contacts/${contactId}`, { method: 'PUT', body: safeData });
     return res.contact;
   }
 

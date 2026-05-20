@@ -74,7 +74,7 @@ export const contactTools = {
   },
 
   update_contact: {
-    description: 'Update an existing contact in GoHighLevel. WARNING: tags array does FULL REPLACEMENT — use add_tags/remove_tags for safe additive operations.',
+    description: 'Update standard contact fields (name, email, phone, company) in GoHighLevel. Does NOT accept tags — tag mutations MUST go through add_tags / remove_tags. GHL\'s PUT /contacts/{id} wholesale-replaces the tag array, which has caused production tag-wipe incidents (Kristen Nichols 2026-05-19, n8n LP Enrichment v2.0 2026-05-15).',
     inputSchema: z.object({
       contactId: z.string().describe('GoHighLevel contact ID'),
       firstName: z.string().optional(),
@@ -82,11 +82,23 @@ export const contactTools = {
       email: z.string().optional(),
       phone: z.string().optional(),
       companyName: z.string().optional(),
-      tags: z.array(z.string()).optional().describe('FULL REPLACEMENT — replaces ALL tags. Use add_tags/remove_tags instead for safe operations.'),
+      // tags intentionally omitted — PUT /contacts/{id} with a tags array
+      // wholesale-replaces the contact's full tag set. Use add_tags or
+      // remove_tags (POST/DELETE /contacts/{id}/tags) which are additive.
     }),
     handler: async (args: { contactId: string; [key: string]: unknown }) => {
       const ghl = new GHLClient();
       const { contactId, ...data } = args;
+      // Defense in depth: strip tags even if a caller bypasses the schema
+      // (e.g. via direct JSON-RPC). Log loudly so the source can be traced.
+      if ('tags' in data) {
+        console.error(
+          `[update_contact] BLOCKED tags-wipe attempt on ${contactId}. ` +
+          `Caller passed tags=${JSON.stringify((data as Record<string, unknown>).tags)}. ` +
+          `Tags stripped from PUT body. Use add_tags / remove_tags instead.`
+        );
+        delete (data as Record<string, unknown>).tags;
+      }
       return ghl.updateContact(contactId, data);
     },
   },
