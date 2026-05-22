@@ -163,52 +163,114 @@ const WORKFLOW_TAG_CACHE_TTL_MS = 10 * 60 * 1000;
 
 async function refreshWorkflowTagCache(): Promise<void> {
   const supabase = getSupabaseClient();
-  const { data, error } = await supabase
-    .from('workflows')
-    .select('ghl_workflow_id, name, status')
-    .is('deleted_at', null);
-  if (error || !data) {
-    console.warn(`[Webhook] workflow_tag cache refresh failed: ${error?.message || 'no data'}`);
+
+  // v2.1 (2026-05-22): Source the tag→workflow mapping from BOTH
+  // workflow_registry.legacy_name AND workflows.name. The original
+  // implementation only read workflows.name and matched a W-prefix
+  // regex against it. That worked until the May 2026 workflow rename,
+  // which moved every user-facing workflow from W-prefix (W0.x, W5.2,
+  // W11.1) to canonical codes (E.0, S5.2, O.0-COOL). After the rename,
+  // workflows.name no longer contains any W-prefix names, so the regex
+  // returns 0 matches and the cache is empty. Every active-w* tag then
+  // fails to resolve and workflow_executions silently stops accepting
+  // writes — which is exactly what happened: writes stopped on
+  // 2026-05-13 (1,420 rows total, last row 2026-05-13 09:35:34, zero
+  // rows in the last 7 days as of 2026-05-22).
+  //
+  // The fix: workflow_registry preserves the old W-name in its
+  // legacy_name column for every renamed workflow (e.g., S5.2's
+  // legacy_name is "W5.2 - Appointment Rescue"). Reading that column
+  // lets us restore the active-w5.2 → workflow_id mapping using the
+  // same regex without changing any tag conventions in GHL itself.
+  // workflows.name is kept as a fallback for any workflow that happens
+  // to still carry a W-prefix name but isn't registered (rare).
+  const [registryResult, workflowResult] = await Promise.all([
+    supabase
+      .from('workflow_registry')
+      .select('workflow_id, legacy_name, ghl_status')
+      .not('legacy_name', 'is', null),
+    supabase
+      .from('workflows')
+      .select('ghl_workflow_id, name, status')
+      .is('deleted_at', null),
+  ]);
+
+  const registryData = registryResult.data || [];
+  const workflowData = workflowResult.data || [];
+
+  if (registryResult.error && workflowResult.error) {
+    console.warn(
+      `[Webhook] workflow_tag cache refresh failed: registry=${registryResult.error.message} workflows=${workflowResult.error.message}`,
+    );
+    return;
+  }
+  if (registryData.length === 0 && workflowData.length === 0) {
+    console.warn('[Webhook] workflow_tag cache refresh: both sources empty — keeping prior cache');
     return;
   }
 
-  // Sort: published first, then by UUID for stable tie-breaks. This is
-  // the same order the backfill SQL uses, so tag → UUID resolution at
-  // runtime matches the one-time backfill done on 2026-04-24.
-  const sorted = [...data].sort((a, b) => {
+  // Merge into a single normalized list. workflow_registry wins on
+  // duplicate workflow_ids because legacy_name is the authoritative
+  // post-rename source. Status comes from ghl_status (registry) or
+  // status (workflows) — used only for the published-first tie-break.
+  type CacheRow = { id: string; nameSource: string; status: string };
+  const seen = new Set<string>();
+  const rows: CacheRow[] = [];
+
+  for (const r of registryData) {
+    const id = (r.workflow_id as string) || '';
+    const legacy = (r.legacy_name as string) || '';
+    if (!id || !legacy || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({ id, nameSource: legacy, status: (r.ghl_status as string) || 'unknown' });
+  }
+  for (const w of workflowData) {
+    const id = (w.ghl_workflow_id as string) || '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({ id, nameSource: (w.name as string) || '', status: (w.status as string) || 'unknown' });
+  }
+
+  // Sort: published first, then by UUID for stable tie-breaks. This
+  // matches the order the backfill SQL uses, so runtime tag→UUID
+  // resolution stays consistent with the one-time backfill done on
+  // 2026-04-24.
+  const sorted = rows.sort((a, b) => {
     const aPub = a.status === 'published' ? 0 : 1;
     const bPub = b.status === 'published' ? 0 : 1;
     if (aPub !== bPub) return aPub - bPub;
-    return String(a.ghl_workflow_id).localeCompare(String(b.ghl_workflow_id));
+    return a.id.localeCompare(b.id);
   });
 
   const fresh = new Map<string, string>();
-  for (const wf of sorted) {
-    const name = (wf.name as string) || '';
+  for (const row of sorted) {
     // Extract short name: matches W<digits>.<digits> followed by space/dash.
     // This is the same pattern the backfill SQL uses ((^|non-alphanumeric)
     // W<digits>.<digits>(space|dash)), which prevents W5.2 from matching
     // W5.2E — exit-condition siblings are excluded from the tag mapping.
-    const match = name.match(/(?:^|[^A-Za-z0-9])(W\d+(?:\.\d+)?)(?:\s|-)/);
+    const match = row.nameSource.match(/(?:^|[^A-Za-z0-9])(W\d+(?:\.\d+)?)(?:\s|-)/);
     if (!match) continue;
     const shortName = match[1]; // e.g. "W5.2", "W10.0", "W0.4"
 
     // Dotted tag: W5.2 -> active-w5.2
     const dottedTag = 'active-' + shortName.toLowerCase();
-    if (!fresh.has(dottedTag)) fresh.set(dottedTag, wf.ghl_workflow_id as string);
+    if (!fresh.has(dottedTag)) fresh.set(dottedTag, row.id);
 
     // Padded legacy tag: W0.4 -> active-w04, W0.2 -> active-w02
     const paddedMatch = shortName.match(/^W0\.(\d)$/);
     if (paddedMatch) {
       const paddedTag = `active-w0${paddedMatch[1]}`;
-      if (!fresh.has(paddedTag)) fresh.set(paddedTag, wf.ghl_workflow_id as string);
+      if (!fresh.has(paddedTag)) fresh.set(paddedTag, row.id);
     }
   }
 
   WORKFLOW_TAG_CACHE.clear();
   for (const [k, v] of fresh) WORKFLOW_TAG_CACHE.set(k, v);
   workflowTagCacheExpiry = Date.now() + WORKFLOW_TAG_CACHE_TTL_MS;
-  console.log(`[Webhook] workflow_tag cache refreshed: ${WORKFLOW_TAG_CACHE.size} mappings`);
+  console.log(
+    `[Webhook] workflow_tag cache refreshed: ${WORKFLOW_TAG_CACHE.size} mappings ` +
+    `(scanned ${registryData.length} registry + ${workflowData.length} workflows)`,
+  );
 }
 
 async function resolveWorkflowIdFromTag(tag: string): Promise<string | null> {
