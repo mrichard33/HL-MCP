@@ -11,6 +11,9 @@ import {
   syncConversationsAndMessages,
 } from '../extractor/entity-syncer.js';
 
+// Guards sync_all_entities so a manual trigger can't stack background runs.
+let hlSyncInProgress = false;
+
 export const workflowTools = {
   list_workflows: {
     description: 'List all workflows. Queries Supabase by default. Set forceLive=true for live GHL API.',
@@ -290,48 +293,73 @@ export const workflowTools = {
     description: 'Full sync of all entities (contacts, opportunities, appointments, pipelines, conversations, messages) from GHL to Supabase.',
     inputSchema: z.object({}),
     handler: async () => {
-      const results: Record<string, unknown> = {};
-
-      try {
-        const contactResult = await syncContacts();
-        results.contacts = { synced: contactResult.synced, errors: contactResult.errors.length };
-      } catch (err) {
-        results.contacts = { error: err instanceof Error ? err.message : String(err) };
-      }
-
-      try {
-        const oppResult = await syncOpportunities();
-        results.opportunities = { synced: oppResult.synced, errors: oppResult.errors.length };
-      } catch (err) {
-        results.opportunities = { error: err instanceof Error ? err.message : String(err) };
-      }
-
-      try {
-        const aptResult = await syncAppointments();
-        results.appointments = { synced: aptResult.synced, errors: aptResult.errors.length };
-      } catch (err) {
-        results.appointments = { error: err instanceof Error ? err.message : String(err) };
-      }
-
-      try {
-        const pipResult = await syncPipelines();
-        results.pipelines = { synced: pipResult.synced, errors: pipResult.errors.length };
-      } catch (err) {
-        results.pipelines = { error: err instanceof Error ? err.message : String(err) };
-      }
-
-      try {
-        const convResult = await syncConversationsAndMessages();
-        results.conversations = {
-          synced_conversations: convResult.synced_conversations,
-          synced_messages: convResult.synced_messages,
-          errors: convResult.errors.length,
+      if (hlSyncInProgress) {
+        return {
+          ok: true,
+          status: 'already_running',
+          message: 'A sync is already in progress.',
         };
-      } catch (err) {
-        results.conversations = { error: err instanceof Error ? err.message : String(err) };
       }
+      hlSyncInProgress = true;
 
-      return results;
+      // Run the full multi-entity sync in the background. Awaiting it inline can
+      // exceed the MCP client's request timeout (the dashboard saw MCP error
+      // -32001), so we return immediately and let callers poll get_sync_health.
+      void (async () => {
+        const results: Record<string, unknown> = {};
+        try {
+          try {
+            const contactResult = await syncContacts();
+            results.contacts = { synced: contactResult.synced, errors: contactResult.errors.length };
+          } catch (err) {
+            results.contacts = { error: err instanceof Error ? err.message : String(err) };
+          }
+
+          try {
+            const oppResult = await syncOpportunities();
+            results.opportunities = { synced: oppResult.synced, errors: oppResult.errors.length };
+          } catch (err) {
+            results.opportunities = { error: err instanceof Error ? err.message : String(err) };
+          }
+
+          try {
+            const aptResult = await syncAppointments();
+            results.appointments = { synced: aptResult.synced, errors: aptResult.errors.length };
+          } catch (err) {
+            results.appointments = { error: err instanceof Error ? err.message : String(err) };
+          }
+
+          try {
+            const pipResult = await syncPipelines();
+            results.pipelines = { synced: pipResult.synced, errors: pipResult.errors.length };
+          } catch (err) {
+            results.pipelines = { error: err instanceof Error ? err.message : String(err) };
+          }
+
+          try {
+            const convResult = await syncConversationsAndMessages();
+            results.conversations = {
+              synced_conversations: convResult.synced_conversations,
+              synced_messages: convResult.synced_messages,
+              errors: convResult.errors.length,
+            };
+          } catch (err) {
+            results.conversations = { error: err instanceof Error ? err.message : String(err) };
+          }
+
+          console.log('[sync_all_entities] completed:', JSON.stringify(results));
+        } catch (err) {
+          console.error('[sync_all_entities] background sync failed:', err);
+        } finally {
+          hlSyncInProgress = false;
+        }
+      })();
+
+      return {
+        ok: true,
+        status: 'started',
+        message: 'Sync started. Poll get_sync_health for progress.',
+      };
     },
   },
 
