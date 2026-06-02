@@ -1,0 +1,23 @@
+name: CI
+# Deterministic gate for the main-default workflow (Option A).
+# Installs deps from the committed lockfile and runs the TypeScript
+# typecheck (tsc --noEmit). No secrets, no network calls to LP/GHL/Supabase.
+# Mark this check "required" in branch protection ONLY after it has gone
+# green on at least one PR (it may surface pre-existing type errors).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [dev]
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: TypeScript typecheck (tsc --noEmit)
+        run: npm run typecheck
