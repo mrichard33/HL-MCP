@@ -1,0 +1,870 @@
+---
+config:
+  layout: dagre
+  themeVariables:
+    fontSize: 24px
+  flowchart:
+    wrappingWidth: 900
+    padding: 24
+    nodeSpacing: 30
+    rankSpacing: 40
+---
+flowchart LR
+ subgraph COL1[" "]
+    direction TB
+        COL1_H["1. Traffic Sources"]
+        TH["NEW TRAFFIC (Paid)"]
+        T1["Home Risk Report Traffic<br>diagnostic intent<br>compliance / risk awareness<br>USUALLY STAGE #1-#2<br>DATA MODEL: First-touch prospect-level 2021+ only"]
+        T2["Estimate Calculator Traffic<br>pricing intent<br>wants quick numbers<br>USUALLY STAGE #2-#3"]
+        TE["EARNED TRAFFIC (Organic / SEO / Social)"]
+        T4["Chatbot Leads<br>mixed intent<br>STAGE #1-#4 depending on inquiry"]
+        T8["High-Intent Digital<br>Google PPC / Organic / Service Ads / Direct Site<br>searched for Reece or impact windows specifically<br>USUALLY STAGE #2-#3 with pre-built awareness<br>FIRST-TOUCH PROSPECT-LEVEL 2021+:<br>Google Service Ads: 74 | 39.2% close | $21,880 avg<br>MySafeFloridaHome: 159 | 33.3% close | $22,209 avg<br>Google Organic: 198 | 32.3% close | $33,991 avg<br>Google PPC Windows: 790 | 27.5% close | $23,260 avg<br>Reecewindows.com: 470 | 23.2% close | $23,417 avg<br>Route: abbreviated 2-msg indoc (S2.3) + fast-track to booking"]
+        TO["OWNED TRAFFIC (Outbound / Referral / List)"]
+        T5["Canvassing Leads<br>cold interrupted lead<br>USUALLY STAGE #1<br>FIRST-TOUCH: 12,508 prospects | 29.3% close | $24,248 avg | $88.5M rev<br>NOTE: Canvassing is the origination engine - 39.6% of total system revenue<br>Many internet re-entries are canvass-originated prospects returning online"]
+        T6["Referral Leads<br>warm - trust pre-built by referrer<br>USUALLY STAGE #2-#4 depending on context<br>FIRST-TOUCH PROSPECT-LEVEL 2021+:<br>Self Generated: 343 prospects | 89.2% close | $27,128 avg<br>Customer Referral: 426 prospects | 64.6% close | $26,910 avg<br>Previous Customer: 325 prospects | 44.6% close | $14,212 avg<br>REMOVED from active tiers: Employee Referral (0 prospects since 2021)<br>REMOVED from active tiers: Home Show (3 prospects since 2021)"]
+        T7["Manual / Other / Unknown Entry<br>unknown intent<br>STAGE VARIES - needs qualification<br>ALSO: Old Sub Source (46 prospects | 71.7% close 2021+) - reclassify to referral"]
+  end
+ subgraph COL1B[" "]
+    direction TB
+        COL1B_H["1B. Attractive Character Layer - DS Rec #2"]
+        AC1["REECE ATTRACTIVE CHARACTER SPEC<br>All messaging channels express the AC persona<br>BACKSTORY: Why Reece exists, founder motivation, pivotal moment<br>PARABLES: Real homeowner stories used repeatedly across sequences<br>FLAWS: We are not the cheapest - and we own that<br>POLARITY: Strong positions on code compliance, DIY risks, real vs fake protection<br>MAPPING:<br>Backstory - Indoctrination (S2.0-3.x first email)<br>Parables - Education (S2.4-6.x) + Solution Pitch (S3.x)<br>Flaws - Positioning in Booking (S4.x)<br>Polarity - Objection Handling (O.0)<br>VLMS (Value Ladder Mission Statement - DS Rec #1):<br>We help South Florida homeowners protect their families<br>and increase their home value through expert-installed<br>hurricane impact windows and doors"]
+  end
+ subgraph COL1C[" "]
+    direction TB
+        COL1C_H["1C. Value Ladder - DS Rec #1"]
+        VL0["TIER 0 - BAIT (Free)<br>Home Risk Report | Free Estimate | Free Consultation<br>Funnel Type: Lead Squeeze<br>Maps to: COL2-COL4 (TOFU)<br>Buyer Stage: #1-#2"]
+        VL1["TIER 1 - TRIP-WIRE (Free Appointment)<br>The in-home appointment IS the trip-wire<br>3 calendar names, same experience: WE | MV | HPA<br>Optional phone pre-qualification: Review Session<br>Funnel Type: Presentation (VSL + Booking Page)<br>Maps to: COL5-COL6 (SOFU to MOFU)<br>Buyer Stage: #2-#4"]
+        VL2["TIER 2 - CORE OFFER (Primary Sale)<br>Window / Door Installation Project<br>Funnel Type: Application (Appointment + Proposal)<br>Maps to: COL8-COL8D (MOFU to BOFU)<br>Buyer Stage: #4"]
+        VL3["TIER 3 - PROFIT MAXIMIZER<br>Add-ons: shutters, doors, expanded scope, premium glass<br>Financing packages + bundled upgrades<br>Funnel Type: Upsell at point of sale + post-sale follow-up<br>Maps to: COL8D + C.3<br>Buyer Stage: #5"]
+        VL4["TIER 4 - CONTINUITY<br>Maintenance plan | Annual inspection | Warranty extension<br>Referral rewards program<br>Funnel Type: Customer Journey follow-up funnels<br>Maps to: COL11 (C.x)<br>Buyer Stage: #5"]
+  end
+ subgraph COL1D[" "]
+    direction TB
+        COL1D_H["1D. Story Arc Library - The Fuel for the Engine"]
+        SAL_HEADER@{ label: "STORY ARC LIBRARY<br>The architecture is the engine. These stories are the fuel.<br>Every email, VSL, retargeting ad, and sales script is built<br>from one of these core story arcs. Each story creates a<br>SYNTHETIC EXPERIENCE in the prospect's imagination<br>that strengthens desire and dissolves resistance.<br>Stories are not decoration - they ARE the persuasion." }
+        SA1["STORY ARC 1 - HURRICANE DAMAGE<br>The family who thought they were safe until the storm hit<br>EMOTION: Fear to Relief to Gratitude<br>BELIEF SHIFT: My home is fine - My home is vulnerable<br>DEPLOYS IN: E.1 Pre-Frame (hook), S2.0 Myth-Bust, S2.4 VSL opening,<br>S4.0 Booking urgency, S4.5 Seinfeld episodes, S4.6 Confirmation,<br>Retargeting ads"]
+        SA2["STORY ARC 2 - CODE COMPLIANCE MISTAKE<br>The homeowner who discovered their house failed inspection<br>EMOTION: Surprise to Anxiety to Determination<br>BELIEF SHIFT: Rules do not apply to me - I could be next<br>DEPLOYS IN: E.1 Pre-Frame (credibility), S2.0 Secrets Revealed,<br>S2.4 VSL indoc section, S3.0 Solution Pitch intro,<br>O.0 Objection Trust branch, Retargeting ads"]
+        SA3["STORY ARC 3 - CHEAP WINDOW REGRET<br>The homeowner who saved money upfront and paid 3x to fix it<br>EMOTION: Frustration to Regret to Resolve<br>BELIEF SHIFT: Price is the deciding factor - Cheap is most expensive<br>DEPLOYS IN: S2.0 Mistakes Exposed, S2.1 Est Calc track,<br>S3.1 Solution Pitch flaw, S4.x Booking positioning,<br>O.0 Price + Competitor branches, S4.5 Seinfeld epiphanies, Sales scripts"]
+        SA4["STORY ARC 4 - INSURANCE CLAIM DISASTER<br>The family whose claim was denied because windows were not rated<br>EMOTION: Shock to Anger to Urgency<br>BELIEF SHIFT: Insurance covers everything - Protection gaps can bankrupt you<br>DEPLOYS IN: E.1 Pre-Frame (urgency hook), S2.0 Alternatives Debunked,<br>S2.4 VSL flaw/X-factor, S3.0 Solution Pitch social proof,<br>S4.5 Seinfeld educational, O.0 Timing branch, Retargeting ads"]
+        SA5["STORY ARC 5 - HOME VALUE INCREASE<br>The homeowner whose property value jumped after impact window install<br>EMOTION: Hope to Excitement to Pride<br>BELIEF SHIFT: Windows are an expense - Windows are an investment<br>DEPLOYS IN: E.2 Pre-Frame, S2.1 Est Calc indoc, S3.x Solution Pitch proof,<br>S4.x Booking investment reframe, S4.10 Sales offer stack,<br>C.3 Expansion offers, S4.5 Seinfeld epiphanies, Customer Journey referral"]
+        SAL_MAP["STORY ARC DEPLOYMENT MATRIX<br>PRE-FRAME BRIDGES: SA1 (hook) + SA2 (credibility) + SA4 (urgency)<br>INDOCTRINATION: SA1 (myth) + SA2 (secret) + SA3 (mistake) + SA4 (alternative)<br>EDUCATION / VSL: SA1 (opening) + SA2 (indoc) + SA4 (flaw) + SA5 (hope)<br>SOLUTION PITCH: SA2 (intro) + SA3 (flaw) + SA5 (social proof)<br>BOOKING: SA3 (positioning) + SA5 (investment reframe) + SA1 (urgency)<br>CONFIRMATION: SA5 (funnel stack) + SA1 (show-rate motivation)<br>SEINFELD BROADCAST: All 5 arcs rotating across 12 weeks<br>OBJECTION HANDLING: SA3 (price) + SA4 (timing) + SA2 (trust) + SA1 (competitor)<br>SALES CLOSE: SA5 (value stack) + SA3 (risk reversal)<br>CUSTOMER JOURNEY: SA5 (expansion) + all arcs in referral stories<br>RETARGETING ADS: SA1 + SA3 + SA4 (highest emotional impact arcs)"]
+  end
+ subgraph COL1E[" "]
+    direction TB
+        COL1E_H["1E. Trust Escalation Layer - Explicit Trust Stacking Progression"]
+        TEL_HEADER["TRUST ESCALATION LAYER<br>If your audience trusts that you have the best solution,<br>they will gladly hand you their money.<br>Trust is not built in one step. It is stacked deliberately,<br>layer by layer, through a sequence of micro-experiences<br>that each add a new dimension of confidence."]
+        TE1["TRUST LEVEL 1 - ATTENTION TRUST (COL1-COL4)<br>BUYER PSYCHOLOGY: PROBLEM AWARENESS<br>Type: Convenience<br>Prospect thinks: This brand noticed me and made it easy to engage<br>Built by: relevant ad, personalized pre-frame bridge, fast response<br>Story arcs: SA1 hook, SA4 hook<br>Evidence: lead captured, bridge email opened<br>Micro-commitment: gave email/phone, engaged with first message"]
+        TE2["TRUST LEVEL 2 - CREDIBILITY TRUST (COL5)<br>BUYER PSYCHOLOGY: PROBLEM AWARENESS to SOLUTION EDUCATION<br>Type: Competence<br>Prospect thinks: These people actually know what they are talking about<br>Built by: indoctrination content with credible sources, myth-busting, data<br>Story arcs: SA2 (code compliance expertise), SA3 (industry knowledge)<br>Evidence: indoctrination completion, multiple email opens, link clicks<br>Micro-commitment: watched/read indoctrination content, clicked through"]
+        TE3["TRUST LEVEL 3 - SOLUTION TRUST (COL5B-COL5C)<br>BUYER PSYCHOLOGY: SOLUTION EDUCATION<br>Type: Competence + Character<br>Prospect thinks: This type of solution actually works and these people care<br>Built by: VSL/education content, solution pitch with social proof, case studies<br>Story arcs: SA5 (home value proof), SA1 (families protected), SA3 (flaw exposure)<br>Evidence: VSL 50%+ watched, solution pitch engaged, case study clicked<br>Micro-commitment: consumed education content, considering appointment"]
+        TE4["TRUST LEVEL 4 - COMMITMENT TRUST (COL6-COL7)<br>BUYER PSYCHOLOGY: VENDOR DIFFERENTIATION<br>Type: Character + Convenience<br>Prospect thinks: I trust them enough to let them into my home<br>Built by: positioning in booking, application qualifier, environment change frame<br>Story arcs: SA5 (investment reframe), SA2 (professional authority)<br>Evidence: booking page visited, micro-qualifier completed, appointment booked<br>Micro-commitment: booked appointment, confirmed attendance"]
+        TE5["TRUST LEVEL 5 - EXPERIENCE TRUST (COL8-COL8D)<br>BUYER PSYCHOLOGY: DECISION<br>Type: Competence + Character + Charisma<br>Prospect thinks: The in-home experience exceeded my expectations<br>Built by: professional appointment, personalized findings, expert consultation<br>Story arcs: SA2 (demonstrated expertise), SA5 (showed ROI specific to their home)<br>Evidence: appointment completed, proposal reviewed, questions asked<br>Micro-commitment: engaged with proposal, considering purchase"]
+        TE6["TRUST LEVEL 6 - OWNERSHIP TRUST (COL11)<br>BUYER PSYCHOLOGY: POST-DECISION (Loyalty + Advocacy)<br>Type: All four - Convenience + Charisma + Competence + Character<br>Prospect thinks: I made the right decision and I would do it again<br>Built by: smooth onboarding, proactive updates, quality installation, follow-up care<br>Story arcs: SA5 (their own story now - they ARE the case study)<br>Evidence: install completed, positive check-in, review left<br>Micro-commitment: left review, made referral, purchased add-on"]
+        TEL_RULE["TRUST ESCALATION RULES<br>Never ask for commitment beyond current trust level<br>Objections = trust gaps: Price=L3 | Timing=L4 | Trust=L2 | Spouse=L4x2 | Competitor=L3<br>S4.5 Seinfeld deepens L2-L3 | HOT1 fast-tracks L1-L3 to L4<br>Story arcs are the PRIMARY tool for building trust at every level<br>3 companion systems sit alongside trust escalation:<br>MOMENTUM LAYER | BEHAVIORAL STATES | NEGATIVE SIGNALS"]
+        FUNNEL_COLLAPSE["MOMENTUM LAYER + FUNNEL COLLAPSE (v5.13)<br>Desire spikes unpredictably - capture the moment or restart the cycle<br>The goal is NOT to move prospects through the funnel<br>The goal is to CAPTURE them the moment they are ready<br>TRUST SPIKE TRIGGERS (collapse funnel immediately):<br>Referral from high-trust source | Buying-intent reply to first message<br>Neighbor/friend mention | External urgency (hurricane, code change)<br>COLLAPSE RULE: Remove from sequence, booking SMS in 60 seconds,<br>rep alert with full context, calendar surfaced instantly<br>Do NOT re-educate someone already sold - convert NOW<br>EVENT-DRIVEN: System reacts to what prospect DOES, not where they ARE<br>All event responses fire within 60 seconds to 5 minutes<br>See MOMENTUM1 node (COL2) for full signal/action spec"]
+        BEHAVIOR_STATES["6 BEHAVIORAL STATES (v5.13)<br>Route on STATE not sequence position<br>A: CURIOUS-SKEPTICAL (opens, never clicks) = increase social proof + SA2<br>B: INTERESTED-DISTRACTED (irregular engagement) = pattern interrupt + channel switch<br>C: READY-HESITANT (high engagement, no book) = MOMENTUM CAPTURE<br>D: COMPARING (competitor clicks, delays) = SA3 positioning + risk reversal<br>E: STALLED (was engaged, 14+ days silent) = sprint reactivation burst<br>F: NEGATIVE (unsubscribe, negative reply) = suppress or O.0<br>buyer-state:* tags OVERRIDE sequence position for content selection<br>State Detection utility workflow checks patterns every 48h per prospect"]
+        NEG_SIGNALS["NEGATIVE SIGNAL ROUTING (v5.13)<br>Drop-off behavior is DIAGNOSTIC - each pattern = specific gap + specific fix:<br>NEG-1: Opens no clicks = message mismatch - switch story arc<br>NEG-2: Clicks no book = trust gap - inject SA2 + guarantee<br>NEG-3: Watches no action = urgency gap - sprint burst + external constraint<br>NEG-4: Books then cancels = commitment anxiety - Environment Change reinforcement<br>NEG-5: Engaged then silent = distraction - channel switch after 7d<br>NEG-6: Unsubscribe/stop = explicit rejection - suppress all automation<br>neg-signal:* tags trigger specific remediation workflows<br>This is the feedback loop: drop-off data rewrites messaging upstream"]
+  end
+ subgraph COL2[" "]
+    direction TB
+        COL2_H["2. System Entry - TOFU Begins - L1 ATTENTION TRUST"]
+        E1["Lead Enters System<br>AUTOMATED<br>ATTRIBUTION MODEL: First-touch source | Prospect-level | 2021+ data only<br>Each prospect attributed to source of EARLIEST lead record (MIN created_at_lp)<br>49,974 unique prospects | 18.4% close rate | $24,409 avg job | $223.6M total rev<br>TWO ENTRY PATHWAYS:<br>PATH A - DIGITAL DIRECT: form submit / chatbot / API / manual add / rep-created<br>PATH B - LP DAY 15 HANDOFF: LP sync detects last_contact_date more than 15 days AND no appointment set<br>  Applies lp-day15-handoff tag - GHL enrolls in LP Disposition Pre-Routing Gate before S1.0<br>NOTE: GHL sequences E.x-S3.x run PARALLEL to LP call center Days 1-14<br>They warm the lead before each call lands - they do not replace call center activity<br>Purpose: Rep calling after Email 2 (Code Compliance) has a warmer conversation<br>than a rep cold-dialing a lead who has never heard of Reece"]
+        LS1["Lead Score Initialized<br>AUTOMATED<br>Initial Scoring Model - calibrate after data<br>open = 1pt | link click = 2pt | reply = 5pt<br>VSL 25% = 3pt / 50% = 5pt / 75% = 8pt<br>CTA click = 10pt | booking page visit = 10pt<br>Thresholds: 0-10 Cold | 11-25 Warm | 26-50 Hot | 51+ On Fire"]
+        SPEED_TO_LEAD["SPEED-TO-LEAD PROTOCOL (v5.14 FINAL)<br>The moment of highest intent is IMMEDIATELY after conversion<br>Intent decays faster than any sequence can recover it<br>The difference between 5 min and 2 hours is not incremental - it is exponential<br>TIER A + B SOURCES (close rate 15%+):<br>  Step 1: Immediate call attempt within 5 minutes of entry<br>  Step 2: If missed - SMS fires within 60 seconds of missed call<br>  Step 3: If engaged on call - live transfer to available rep (priority queue)<br>  Step 4: If voicemail - personalized SMS + email within 5 minutes<br>TIER C SOURCES (close rate 8-15%):<br>  Step 1: Call attempt within 30 minutes<br>  Step 2: If missed - SMS within 60 seconds<br>  Step 3: Begin indoctrination sequence in parallel<br>TIER D SOURCES (close rate under 8%):<br>  Step 1: Automated welcome SMS within 5 minutes<br>  Step 2: Call attempt within 2 hours<br>  Step 3: Begin full indoctrination sequence immediately<br>RULE: Speed-to-Lead is the single highest-leverage operational variable<br>No amount of content, sequencing, or trust-building compensates for slow first contact<br>MEASUREMENT: Track time-to-first-contact by source tier - alert if above threshold"]
+        HOT1["HYPERACTIVE BUYER ALERT - DS Rec #6<br>AUTOMATED | BUILD NEW<br>Trigger: score more than 50 within 48 hours<br>Immediate priority rep task with engagement history<br>Pause current drip workflow<br>If no rep contact in 2h - personalized AC SMS fires<br>Fast-track to booking or selling environment change<br>Goal: capture acute-pain buyers before competitor does"]
+        MOMENTUM1["MOMENTUM LAYER - EVENT-DRIVEN FUNNEL (v5.12 - real-time interruption)<br>MOMENTUM SIGNALS (codified - each triggers forced capture):<br>SIG-1: Multiple page visits within 24h window (2+ booking page or VSL page)<br>SIG-2: Video completion (VSL watched 75%+ or CTA clicked)<br>SIG-3: SMS reply to any automated message<br>SIG-4: Email click cluster (3+ link clicks across any 48h window)<br>SIG-5: Return visit after 7+ days of inactivity (re-engagement spike)<br>SIG-6: Booking page visit without booking (hesitation signal)<br>SIG-7: Lead score crosses 25 within 7 days (mid-tier acceleration)<br>SIG-8: Lead score crosses 50 within 48h (hyperactive buyer - existing HOT1)<br>MOMENTUM ACTIONS (fire immediately when ANY signal detected):<br>ACT-1: Immediate SMS - Want to skip ahead and grab a time? [calendar link]<br>ACT-2: Calendar surfaced instantly (booking link in SMS + email)<br>ACT-3: Rep notification - priority callback with full engagement history<br>ACT-4: Urgency injection - dynamic offer or scarcity message based on context<br>ACT-5: Pause current drip sequence (do NOT compete with the momentum capture)<br>EVENT-DRIVEN MODEL (v5.12 - replaces time-based and sequence-based logic):<br>CURRENT MODEL: day-based waits, tier-based routing, workflow-based progression<br>NEW MODEL: EVENT-BASED - the system reacts to what the prospect DOES, not where they ARE<br>HARD-CODED EVENT RESPONSES (fire in real-time, not next workflow step):<br>EVENT: HIGH INTENT SPIKE (2+ clicks in 10 min OR pricing page visit OR video completion)<br>  Response: Immediate SMS with calendar + rep alert + urgency injection<br>  Timing: within 60 seconds of detection<br>EVENT: RETURN AFTER INACTIVITY (any visit after 7+ days silence)<br>  Response: Pattern interrupt SMS + urgency hook + offer-driven CTA<br>  Timing: within 2 minutes of detection<br>EVENT: PARTIAL ENGAGEMENT (started content but did not finish)<br>  Response: Curiosity re-entry - Most people miss this part...<br>  Timing: 30 minutes after abandonment<br>EVENT: BOOKING PAGE ABANDONMENT (visited booking page, left without booking)<br>  Response: What is holding you back? One reply gets you the answer. + rep alert<br>  Timing: within 5 minutes of page exit<br>EVENT: REFERRAL RECEIVED (new lead enters with referral source tag)<br>  Response: immediate personalized welcome + fast-track to booking<br>  Timing: within 60 seconds of entry<br>CAPTURE WINDOW: All event responses fire within 60 seconds to 5 minutes<br>If booking does not occur within 4 hours: resume drip sequence<br>PRINCIPLE: Momentum is perishable. Curiosity and desire decay rapidly without action.<br>The system does not log intent. It INTERRUPTS and CONVERTS.<br>DESIGN PRINCIPLE: Every touchpoint is dual-track:<br>Track 1: Continue the designed sequence (trust building)<br>Track 2: Offer an immediate booking path (momentum capture)<br>Both always present. Never optional.<br>BOOKING ESCAPE HATCH: Every email in S2.0-S3.x includes persistent booking link<br>P.S. or footer: Ready now? Skip ahead and book: [link]<br>If clicked: exit sequence, apply tags, route to S4.2 directly"]
+        LP_BOUNDARY["LP / GHL SYSTEM BOUNDARY<br>LEAD PERFECTION = System of Record (all contacts, jobs, dispositions, financing, installs, rep activity)<br>GOHIGHLEVEL = Marketing Automation + Conversion Layer<br>THE HANDOFF RULES:<br>Days 1-14: LP + call center own the lead - GHL runs parallel warming sequences<br>Day 15 trigger: formal handoff - LP sync detects inactivity - applies lp-day15-handoff tag<br>  Routes through LP Disposition Pre-Routing Gate (see COL9) before S1.0/S1.1 enrollment<br>  Gate prevents misrouting: OPPFDN goes to O.0, CXL goes to FS3, 1Leg goes to O.0 Spouse<br>Appointment Completed: GHL pushes pre-sale intelligence to LP<br>  (entry source, pain point bucket, lead score, engagement history)<br>  Rep walks into in-home with full marketing context from GHL<br>Post-close: LP owns job management - GHL fires C.x based on LP milestone changes<br>LP STATUS to GHL TRIGGER MAP (via Railway sync engine + Supabase):<br>LP Milestone: Install Completed - fires C.3 Referral Request<br>LP Milestone: Financing Denied - routes to Recycle pipeline<br>LP Disposition: Closed Lost - suppress all GHL sequences immediately<br>LP Disposition: Permit/HOA Pending - pause all GHL marketing automation<br>LP Days Inactive 15+ AND no appointment set - LP Disposition Gate entry<br>LP Days Inactive 90+ AND not closed - surface to S1.1 Reactivation<br>SYNC ENGINE: Railway/Node.js single service (not n8n)<br>Incremental sync every 15 min via LP API GetLeadData + GetJobStatusChanges<br>Full sync daily via GetLead for full prospect + job + milestone data"]
+  end
+ subgraph COL3[" "]
+    direction TB
+        COL3_H["3. Master Router - L1 ATTENTION TRUST"]
+        R1["E.0 Master Router<br>AUTOMATED | DRAFT - publishes end of Phase 3<br>GHL: *E.0 - Master Router (draft, 130+ steps)<br>wait 1 min for data sync<br>create / update opportunity<br>update Lead Source field<br>add stage:new-lead<br>PIPELINE: move to 1. Lead Captured<br>remove stale stage tags and stale booked tags<br>apply entry:* source tag (7 sources with high-intent-digital)<br>assign rep if required<br>initialize lead score = 0<br>route by entry source<br>FIXED (Phase 0): canvassing/referral/other routing branches<br>FIXED (Phase 0): Step 27 tag corrected to active-w0"]
+        D1{"Entry Source?"}
+  end
+ subgraph COL4[" "]
+    direction TB
+        COL4_H["4. Pre-Frame Bridges - L1 ATTENTION TRUST - PROBLEM AWARENESS"]
+        PF_HEADER["PRE-FRAME BRIDGE LAYER<br>Primary function: set the emotional + intellectual frame<br>for everything that follows - not just administrative routing<br>The frame determines how the prospect will perceive<br>ALL subsequent messaging<br>Every bridge uses HSO structure (DS Rec #8)<br>TIME-LAPSE MESSAGING LAYER (applies to ALL recovery and reactivation paths):<br>TIER 1 (0-90 days since last contact): warm continuity - reference prior interaction naturally<br>TIER 2 (91-365 days): cool re-relevance - lead with problem relevance, not relationship claim<br>  Entry source informs TONE but message does not claim active relationship<br>TIER 3 (365+ days): cold pattern interrupt - treat as new lead with data advantage<br>  Pure SA1/SA4 relevance hook - no reference to prior contact<br>  If they engage THEN acknowledge history: We connected back in [year]<br>CHECK: days_since_last_contact field drives which tier applies"]
+        B1["E.1 Risk Report Pre-Frame Bridge<br>AUTOMATED | BUILD NEW<br>STAGE #1-#2 MESSAGING | HSO STRUCTURE<br>Hook: confirm report request + curiosity seed<br>Story: problem relevant / critical / urgent<br>Offer: breadcrumb to indoctrination content<br>AC element: backstory excerpt<br>STORY ARCS: SA1 hook + SA4 insurance hint<br>target = Compliance VSL + Review Session path"]
+        B2["E.2 Estimate Calculator Pre-Frame Bridge<br>AUTOMATED | PUBLISHED | 29 steps | DONE<br>STAGE #2-#3 MESSAGING | HSO STRUCTURE<br>3 emails + 4 SMS | Handoff to S2.1 (da06ee55)<br>Hook: confirm estimate received + gap tease<br>Story: price is directional - measurements matter<br>Offer: route to pricing accuracy content<br>AC element: parable (homeowner story)<br>STORY ARCS: SA3 cheap regret + SA5 investment ROI"]
+        B3["E.3 Chatbot Intent Qualifier - SURVEY FUNNEL - DS Rec #7<br>AI-ASSISTED | BUILD NEW<br>STAGE DETECTION | SURVEY FUNNEL STRUCTURE<br>Q1: Self-identifying (homeowner/renter, property type)<br>Q2: Self-identifying (current windows, age of home)<br>Q3: BUCKET QUESTION - primary concern:<br>  storm protection | energy efficiency | home value | insurance savings<br>Q4: Urgency level (timeline for action)<br>Bucket determines messaging track + follow-up soap opera sequence<br>Route to correct education or booking based on bucket + intent"]
+        D2{"Chatbot Bucket / Intent?"}
+        B4["E.4 Canvassing Pre-Frame Bridge<br>AUTOMATED | BUILD NEW<br>STAGE #1 MESSAGING | HSO STRUCTURE<br>Hook: authority + local relevance<br>Story: make problem relevant to THEIR home<br>Offer: softer awareness content<br>AC element: neighbor parable<br>STORY ARCS: SA1 local angle + SA2 compliance hook<br>qualify interest level before routing deeper"]
+        D3{"Canvassing Engaged?"}
+        B5["E.5 Other / Unknown Pre-Frame Bridge<br>AUTOMATED + REP TASK | BUILD NEW<br>STAGE DETECTION<br>determine likely intent<br>rep task if unclear<br>route by best guess or qualification<br>NOTE: Old Sub Source (72.6% close rate) should be<br>reclassified to referral bucket in lp_source_mapping"]
+        D4{"Unknown Intent?"}
+        B6["E.6 Referral Pre-Frame Bridge<br>AUTOMATED | BUILD NEW<br>USUALLY STAGE #2-#4 (warmer lead) | HSO STRUCTURE<br>Hook: personalized welcome referencing referrer<br>Story: why referrer trusts Reece (social proof by proxy)<br>Offer: fast-track to solution pitch or booking<br>Skip heavy indoctrination - trust is pre-built<br>AC element: character trust (referrer validates)<br>Previous Customer + Customer Referral + Employee Referral<br>+ Self Generated all route through this bridge<br>target = appointment type based on referrer context"]
+        D6B{"Referral - Which Path?"}
+        B7["E.7 High-Intent Digital Pre-Frame Bridge<br>AUTOMATED | BUILD NEW<br>STAGE #2-#3 MESSAGING | HSO STRUCTURE<br>For: Google PPC / Organic / Service Ads / Direct Website leads<br>These leads searched for Reece or impact windows specifically<br>They have awareness but not yet competence-level trust<br>Hook: You found us for a reason - here is what you should know<br>Story: abbreviated 2-email path (SA2 authority + SA5 ROI)<br>Offer: fast-track to S3.2 Solution Pitch then direct booking<br>Skip full 4-email indoctrination (they have pre-built category awareness)<br>STORY ARCS: SA2 + SA5 primary | SA1 urgency hook secondary"]
+        TASK1["Manual Rep Qualification Task<br>REP-OWNED<br>call / text lead<br>determine Buyer Journey Stage<br>determine correct appointment type<br>route to correct path"]
+  end
+ subgraph IND_RISK[" "]
+    direction TB
+        IND_RISK_H["S2.0 Risk Report Indoctrination Track<br>AUTOMATED | REBUILD from Nurturing Sequence"]
+        I1_MYTH["Myth-Busting Message<br>My home is fine / nothing will happen<br>reveal hidden compliance gaps<br>STORY ARC: SA1 Hurricane Damage<br>TRUST: builds Level 2 credibility"]
+        I1_SECRET["Secrets Revealed Message<br>The real reason homes fail inspections<br>cite credible source + data<br>STORY ARC: SA2 Code Compliance Mistake<br>TRUST: deepens Level 2 with authority"]
+        I1_MISTAKE["Mistakes Exposed Message<br>What most homeowners get wrong about protection<br>STORY ARC: SA3 Cheap Window Regret<br>TRUST: shifts from Level 2 to Level 3"]
+        I1_ALT["Alternatives Debunked Message<br>Why DIY fixes and ignoring it cost more<br>STORY ARC: SA4 Insurance Claim Disaster<br>TRUST: solidifies Level 3 (solution trust)"]
+  end
+ subgraph IND_EST[" "]
+    direction TB
+        IND_EST_H["S2.1 Estimate Calculator Indoctrination Track<br>AUTOMATED | PUBLISHED | 30 steps<br>3 GPT emails + GPT SMS | Handoff to S2.5 (69fdc012)"]
+        I2_MYTH["Myth-Busting Message<br>Online estimates are accurate enough<br>reveal measurement gap<br>STORY ARC: SA3 Cheap Window Regret"]
+        I2_SECRET["Secrets Revealed Message<br>Why 80% of online estimates miss the mark<br>scope vs quote reality<br>STORY ARC: SA5 Home Value Increase (ROI angle)"]
+        I2_MISTAKE["Mistakes Exposed Message<br>The costly mistake of buying on price alone<br>STORY ARC: SA3 Cheap Window Regret"]
+  end
+ subgraph IND_CANV[" "]
+    direction TB
+        IND_CANV_H["S2.2 Canvassing / Chatbot Indoctrination Track<br>AUTOMATED | BUILD NEW"]
+        I3_MYTH["Myth-Busting Message<br>My current setup is good enough<br>localized risk + relevance<br>STORY ARC: SA1 Hurricane Damage (local angle)"]
+        I3_SECRET["Secrets Revealed Message<br>What your neighbors discovered<br>about their home protection gaps<br>STORY ARC: SA2 Code Compliance Mistake"]
+  end
+ subgraph IND_HIDIG[" "]
+    direction TB
+        IND_HIDIG_H["S2.3 High-Intent Digital Abbreviated Indoctrination<br>AUTOMATED | BUILD NEW<br>2-message track only - these leads have category awareness<br>Do NOT run full 4-email myth/secret/mistake/alternative sequence"]
+        I4_AUTHORITY["Authority Email<br>Why the in-home assessment is different from<br>every other quote they have received<br>STORY ARC: SA2 Code Compliance (expertise proof)<br>TRUST: shortcut to Level 2 credibility (they came to us)"]
+        I4_ROI["Investment ROI Email<br>What homeowners in South Florida discovered<br>after their installation was complete<br>STORY ARC: SA5 Home Value Increase<br>TRUST: bridges Level 2 to Level 3 (solution trust)<br>CTA: direct path to S3.2 Solution Pitch"]
+  end
+ subgraph COL5[" "]
+    direction TB
+        COL5_H["5. Indoctrination - L2 CREDIBILITY TRUST - PROBLEM AWARENESS to SOLUTION EDUCATION"]
+        IND_HEADER["INDOCTRINATION LAYER (Soap Opera Sequence 1)<br>Goal: Move prospect from Indifferent to Curious<br>Debunk myths, reveal secrets, expose mistakes, debunk alternatives<br>HSO: Each message = Hook + Story + Offer (next micro-commitment)<br>AC: Backstory woven into first message of each track<br>STORY ARCS: SA1 (myth-bust) + SA2 (secret) + SA3 (mistake) + SA4 (alternative)<br>TRUST ESCALATION: Level 1 to Level 2 (Attention Trust to Credibility Trust)<br>EXCEPTION: S2.3 High-Intent Digital uses 2-message track only (pre-built category awareness)<br>MOMENTUM LAYER: Every message includes persistent booking escape hatch<br>P.S. line or footer: Ready to skip ahead? Book your assessment: [booking link]<br>If clicked: exit sequence, apply tags, route directly to S4.2 booking push"]
+        IND_RISK
+        IND_EST
+        IND_CANV
+        IND_HIDIG
+  end
+ subgraph COL5B[" "]
+    direction TB
+        COL5B_H["5B. Education Content - L3 SOLUTION TRUST - SOLUTION EDUCATION"]
+        V1["S2.4 Compliance / Protection VSL<br>AUTOMATED | REBUILD from S3.0<br>Used for: Risk Report, some chatbot, some canvassing<br>FORMAT: Webinar-style or VSL<br>CONTENT: Hook to Story (Indoctrination to Solution Pitch) to Offer (Book Review)<br>CTA: Book Review Session<br>Track: 25% / 50% / 75% / CTA click<br>STORY ARC STRUCTURE:<br>Opening (SA1): Hurricane damage - high drama + backstory + wall<br>Indoctrination (SA2): Code compliance - credible sources + data<br>Flaw/X-Factor (SA4): Insurance claim - the risk nobody talks about<br>Solution transition (SA5): Home value - hope + investment reframe<br>TRUST ESCALATION: deepens Level 2 to begins Level 3"]
+        D5{"VSL Engagement Level?"}
+        V2["S2.5 Pricing Accuracy Bridge Content<br>AUTOMATED | PUBLISHED | 55 steps (v8)<br>Used for: Estimate Calculator leads<br>2 emails + 3 SMS | Dual-path (email/no-email)<br>S2.5-E Exit Conditions: PUBLISHED (v7) 12 triggers active<br>CONTENT: Hook + Story (why measurements matter) + Offer (Book MV)<br>CTA: Book Measurement Verification - this IS the in-home appointment for Est Calc leads<br>Handoff: S3.1 (d693f40a)"]
+        D6{"Pricing Content Engagement?"}
+        V3["S2.6 Window Estimate Education Content<br>AUTOMATED | BUILD NEW<br>Used for: leads routed to WE path via chatbot, canvassing, or rep qualification<br>FORMAT: Short video or email<br>CONTENT: Hook + Story (what happens in the appointment) + Offer (Book WE)<br>CTA: Book Window Estimate"]
+        D7{"WE Content Engagement?"}
+  end
+ subgraph SP_REVIEW[" "]
+    direction TB
+        SP_REVIEW_H["S3.0 Solution Pitch - Review Session Path<br>AUTOMATED | BUILD NEW"]
+        SPR1["Introduction<br>Why a professional home protection review<br>is the right type of solution<br>AC: Parable - homeowner who almost skipped<br>STORY ARC: SA2 Code Compliance (authority)<br>TRUST: Level 3 - solution trust"]
+        SPR2["Social Proof<br>Homeowner stories + local case studies<br>who got a review and what they discovered<br>STORY ARC: SA1 Hurricane + SA5 Home Value<br>TRUST: deepens Level 3 with proof"]
+        SPR3["Flaw / X-Factor<br>The risk of skipping the review<br>or hiring the wrong company to do it<br>AC: Polarity - what separates real from fake<br>STORY ARC: SA3 Cheap Window Regret<br>TRUST: Level 3 to readiness for Level 4"]
+  end
+ subgraph SP_MV[" "]
+    direction TB
+        SP_MV_H["S3.1 Solution Pitch - Measurement Verification Path<br>AUTOMATED | PUBLISHED | 32 steps (v10)<br>5 GPT emails + GPT SMS | S3.1-E PUBLISHED<br>Handoff: S4.1 (dc355550)"]
+        SPM1["Introduction<br>Why verified measurements<br>are the only way to get an accurate price<br>STORY ARC: SA3 Cheap Window Regret"]
+        SPM2["Social Proof<br>Stories of homeowners whose online estimate<br>was off by 30%+ and what happened<br>STORY ARC: SA5 Home Value (ROI of accuracy)"]
+        SPM3["Flaw / X-Factor<br>The cost of buying based on an unverified quote<br>STORY ARC: SA3 Cheap Window Regret"]
+  end
+ subgraph SP_WE[" "]
+    direction TB
+        SP_WE_H["S3.2 Solution Pitch - Window Estimate Path<br>AUTOMATED | BUILD NEW"]
+        SPW1["Introduction<br>Why an expert in-home estimate<br>is different from an online quote<br>STORY ARC: SA2 Code Compliance (expertise)"]
+        SPW2["Social Proof<br>Customers who were surprised by what<br>a real expert found during the estimate<br>STORY ARC: SA5 Home Value + SA1 Hurricane"]
+        SPW3["Flaw / X-Factor<br>What most estimate companies skip<br>and why that costs you later<br>STORY ARC: SA3 Cheap Window Regret"]
+  end
+ subgraph COL5C[" "]
+    direction TB
+        COL5C_H["5C. Solution Pitch - L3 SOLUTION TRUST - SOLUTION EDUCATION to VENDOR DIFFERENTIATION"]
+        SP_REVIEW
+        SP_MV
+        SP_WE
+  end
+ subgraph QUAL_TIER[" "]
+    direction TB
+        QUAL_TIER_H["OPTIONAL: Phone Qualification - Review Session Only"]
+        D_SKIP{"Skip Phone Qualification?<br>High intent / referral / rep-qualified / High-Intent Digital = skip<br>Est Calc = skip (goes to MV directly)<br>Early-stage HRR / unclear intent = qualify first"}
+        AQ_QUAL["APPLICATION MICRO-QUALIFIER - DS Rec #10<br>If qualifying: 2-3 questions before booking<br>Timeline for action? Decision-makers both available? Prior quotes?"]
+        BK_RS["S4.0 Review Session Booking (Phone Qualification)<br>AUTOMATED | REBUILD from current S4.0<br>15-MINUTE PHONE CALL - not in-home<br>For: Risk Report leads, early-stage leads, chatbot stage 1-2<br>Goal: Phone-qualify the lead for readiness for in-home visit<br>POSITIONING: authority, credibility, risk awareness<br>Actions: add appt:review-session + stage:booking-qualification<br>PIPELINE: move to 4. Active Nurture<br>GHL Calendar: DQYMaJ22N6zL4SXjHukw<br>Tags: HPRC-Booked / HPRC-Completed / HPRC-No Show<br>GHL: W5.0 (published 22 steps) + S5.1 Exit + S4.6 No-Show + W6.1 Exit"]
+        D_QUAL{"Review Session Booked?"}
+  end
+ subgraph MAIN_TIER[" "]
+    direction TB
+        MAIN_TIER_H["THE IN-HOME APPOINTMENT - 3 Calendar Names, Same Experience"]
+        AQ_MAIN["APPLICATION MICRO-QUALIFIER - DS Rec #10<br>Before in-home booking CTA: 2-3 qualifying questions<br>What prompted your interest today?<br>Will all decision-makers be present at the visit?<br>Are you comparing other companies?<br>Positions appointment as exclusive<br>Surfaces objections early (spouse - two-decision-maker routing)"]
+        BK_MV["S4.1 Measurement Verification Booking<br>AUTOMATED | PUBLISHED | 47 steps (v8) | REBUILT<br>1.5-HOUR IN-HOME APPOINTMENT - THE appointment for Est Calc leads<br>This IS the in-home appointment - NOT a qualification step<br>3 HTML emails + 3 SMS (MV/pricing framing) | SA3+SA5+SA1<br>City-check branch for SMS personalization<br>3 booking suppress checks | Micro-qualifier in SMS #2 (DS Rec #10)<br>Actions: add appt:measurement-verification + stage:booked-main-appointment<br>PIPELINE: move to 6. Conversion Sequence<br>GHL Calendar: zEdPmkNccR2ovo3rQAd3<br>GHL: APPT Handler MV (published) + A.MV-1 stack (published)<br>S4.1-E Exit Conditions: PUBLISHED (v9) 2 triggers active<br>CONFIRMATION CALL auto-fires after booking<br>Timeout: S1.0 (750f1b7f)"]
+        BK_WE["S4.2 Window Estimate / Home Protection Assessment Booking<br>AUTOMATED | BUILD NEW (or enhance from L.2 draft)<br>GHL: S4.2 draft exists (ID: 27eb4d09) - empty shell<br>1.5-HOUR IN-HOME APPOINTMENT - the selling environment change<br>This is THE appointment. Any lead can schedule directly.<br>GHL has 2 calendar names for the same appointment:<br>Window Estimate (aJj14ONxh1oFyDcQ706O) - direct bookings<br>Home Protection Assessment (zS1wg0JqQ1zsszJyJqKX) - stage 1-2 leads<br>BOTH route to the same in-home experience and automation stack<br>For: ALL leads - chatbot / canvassing / referral / High-Intent Digital / rep<br>OR leads routed here after passing phone qualification (Review Session)<br>POSITIONING: expertise, local knowledge, consultation-first approach<br>Actions: add appt:window-estimate OR appt:home-assessment + stage:booked-main-appointment<br>PIPELINE: move to 6. Conversion Sequence<br>STORY ARCS: SA5 (investment reframe) + SA3 (why Reece specifically)<br>GHL: APPT Handler WE (published) + A.WE-1 stack (published)<br>GHL: L.2 HPA workflow (draft 30 steps) - merge/align with WE stack<br>CONFIRMATION CALL auto-fires after booking<br>Exit: Booked - Confirmation Call - Prep | Timeout - FS1 | Dead - S1.0"]
+        D_MAIN{"In-Home Appointment Booked?<br>(WE, MV, or HPA)"}
+  end
+ subgraph COL6[" "]
+    direction TB
+        COL6_H["6. Booking - L4 COMMITMENT TRUST - VENDOR DIFFERENTIATION - MOFU"]
+        POS_HEADER["POSITIONING EMBEDDED IN BOOKING PUSH<br>Prove Relevance, Superiority, Uniqueness of YOUR brand<br>TRUST ESCALATION: Level 3 to Level 4 (Solution Trust to Commitment Trust)<br>STORY ARCS: SA3 (positioning) + SA5 (investment reframe) + SA1 (urgency)<br>5 APPOINTMENT TYPES IN GHL (3 functional categories):<br>THE IN-HOME APPOINTMENT (3 calendar names, same experience):<br>  Window Estimate (direct bookings) | MV (Est Calc leads) | HPA (stage 1-2 name)<br>PHONE QUALIFICATION (optional, for early-stage only): Review Session (15m phone)<br>CONFIRMATION UTILITY (mandatory for ALL in-home): Confirmation Call (5m phone)"]
+        QUAL_TIER
+        MAIN_TIER
+  end
+ subgraph COL6B[" "]
+    direction TB
+        COL6B_H["6B. Flash Sale / Urgency - Split by Context"]
+        FS1["W5.0 FS1: Cold Booking Push<br>AUTOMATED | BUILD NEW<br>For: engaged leads who did NOT book<br>came from education or booking timeout<br>Msg 1: Prepare - limited availability tease<br>Msg 2: Promote - make offer with deadline<br>Msg 3: Remind - time running out<br>Msg 4: Urgency - final notice + scarcity<br>Msg 5: Downsell - lower commitment option"]
+        D_FS1{"FS1 Response?"}
+        ANB1["S4.5 Active Nurture Broadcast - SEINFELD LAYER - DS Rec #3<br>GHL STATUS: PUBLISHED (ID: 40d77229) - audit content and trigger<br>For: leads past indoc + solution pitch who did NOT respond to flash sale or downsell<br>NOT YET unresponsive - still engaged enough to open/read<br>CADENCE: 1 email per week for up to 90 days (12 emails)<br>STYLE: Hook + Story + Offer (soft CTA back to booking)<br>STORY ARC ROTATION (12 weeks):<br>Wk1 EPISODE: SA1 Hurricane - real job story from this week<br>Wk2 EPIPHANY: SA3 Cheap Window - the moment they realized<br>Wk3 EDUCATIONAL: SA2 Code Compliance - 3 questions to ask<br>Wk4 EPISODE: SA5 Home Value - appraisal surprise story<br>Wk5 EPIPHANY: SA4 Insurance - the claim that changed everything<br>Wk6 EDUCATIONAL: SA1 Hurricane - prep checklist for season<br>Wk7 EPISODE: SA3 Cheap Window - the callback we got<br>Wk8 EPIPHANY: SA2 Code - the inspector who shook his head<br>Wk9 EDUCATIONAL: SA5 Home Value - ROI calculator breakdown<br>Wk10 EPISODE: SA4 Insurance - the adjuster visit<br>Wk11 EPIPHANY: SA1 Hurricane - the night of the storm<br>Wk12 EDUCATIONAL: SA3 Cheap - what to look for in any quote<br>AC: Heavy attractive character content - personality, parables, polarity<br>TRUST PURPOSE: Deepens Level 2-3 trust for leads not yet at Level 4<br>LEAD SCORE MONITORED: if score spikes - re-enter booking workflow<br>AFTER 90 DAYS: no engagement - route to S1.0 Unresponsive<br>PIPELINE: remains in 4. Active Nurture"]
+        D_ANB{"Seinfeld Broadcast Response?"}
+        FS2["S5.1 FS2: Post-Appt Decision Compression<br>AUTOMATED | BUILD NEW<br>For: attended appointment but stalled<br>came from post-appointment follow-up<br>Msg 1: Reframe value from THEIR appointment<br>Msg 2: Time-limited incentive or financing<br>Msg 3: Social proof from similar homeowner<br>Msg 4: Final urgency - cost of waiting<br>Msg 5: Downsell - smaller scope or phase 1"]
+        D_FS2{"FS2 Response?"}
+        D_FS2_NEXT{"FS2 Accepted - Which Next Step?<br>CONTEXT-DEPENDENT"}
+        FS3["S5.2 FS3: No-Show / Appointment Rescue<br>AUTOMATED | BUILD NEW<br>For: missed appointment OR cancelled appointment (CXL from LP Day 15)<br>TIME-LAPSE MESSAGING:<br>  Under 90d: We still have your info - want to pick a new time?<br>  91-365d: Homeowners in [city] are booking assessments before hurricane season<br>  365+d: South Florida homeowners are discovering something about their windows<br>ALSO USED FOR: LP Day 15 handoff with CXL / NS / No Demo / FDNS dispositions<br>Msg 1: Soft reset - no guilt, easy rebook (acknowledge appointment fell through)<br>Msg 2: What they missed + neighbor story (SA1 or SA5)<br>Msg 3: Limited rebook window with specific date<br>Msg 4: Final notice before file closes<br>NOTE FOR CXL LEADS: acknowledge the cancellation warmly<br>Do not start from scratch with indoctrination - they already booked once<br>They have enough trust to rebook - remove friction and offer flexibility"]
+        D_FS3{"FS3 Response?"}
+        D_FS3_NEXT{"Rebooked - Which Missed Appointment?<br>CONTEXT-DEPENDENT"}
+        DS1["W5.3 Downsell Path<br>AUTOMATED | BUILD NEW<br>Offer lower-commitment next step<br>Info call instead of full review<br>Digital resource + delayed booking<br>Keeps lead warm without full commitment"]
+        D_DS{"Downsell Accepted?"}
+        D_DS_NEXT{"Downsell Accepted - Which Path?<br>CONTEXT-DEPENDENT"}
+  end
+ subgraph QUAL_BOOKED[" "]
+    direction TB
+        QUAL_BOOKED_H["Phone Qualification Booked Stack (Review Session only)"]
+        BR1["S4.6 Review Session Confirmation + Prep<br>AUTOMATED | CONFIRMED - published as W5.0 (22 steps)<br>15-MIN PHONE CALL PREP - not in-home prep<br>add stage:booked-qualification<br>PIPELINE: move to 6. Conversion Sequence<br>immediate confirmation SMS + email<br>what to have ready for the call<br>24h reminder | 1h reminder<br>Tags: HPRC-Booked / HPRC-Completed / HPRC-No Show<br>GHL: W5.0 + S5.1 Exit + S4.6 No-Show + W6.1 Exit (all published)"]
+        D_QUAL_OUT{"Review Session Outcome?"}
+        NS_QUAL["Review Session No-Show<br>S4.7 (published as S4.6, 13 steps)"]
+  end
+ subgraph CONF_CALL[" "]
+    direction TB
+        CONF_CALL_H["Confirmation Call - MANDATORY for ALL In-Home Appointments"]
+        CC1["CONFIRMATION CALL (5-min phone)<br>AUTOMATED + REP-OWNED | PUBLISHED<br>GHL Calendar: gFWoSQrlKIdfRbAPV842<br>MANDATORY: Fires automatically for EVERY in-home appointment (WE, MV, HPA)<br>This is NOT optional and NOT skippable<br>Direct booking only for: customer service / support / general outreach<br>Tags: booked-conf-call / canceled-conf-call<br>GHL WORKFLOWS (all published):<br>APPT Handler - Confirmation Call (29 steps)<br>A.CC-1 Confirmation Call Reminders<br>A.CC-1-E Exit Conditions<br>A.CC-1-N No-Show | A.CC-1-NE No-Show Exit<br>FLOW: In-home booked - Confirmation Call auto-scheduled<br>Call confirmed - proceed to in-home<br>Call no-show - A.CC-1-N - rebook attempt<br>Call cancelled - route to reschedule"]
+        D_CC{"Confirmation Call Outcome?"}
+  end
+ subgraph MAIN_BOOKED[" "]
+    direction TB
+        MAIN_BOOKED_H["THE IN-HOME APPOINTMENT - WE / MV / HPA Booked Stack"]
+        WE_CONF["Confirmation Page + Video<br>AUTOMATED | BUILD NEW<br>THIS is where Environment Change framing belongs - DS Rec #9:<br>This is a consultation with a home protection specialist - not a quote factory.<br>You will leave with clarity whether you buy or not.<br>Most homeowners pay hundreds for this level of assessment.<br>What happens during the in-home visit<br>What to have ready (access to windows, recent utility bills)<br>Who will be visiting (named expert, credentials)<br>Objection prevention content<br>Client journey preview<br>FUNNEL STACK - DS Rec #5: Preview financing options + full installation looks like<br>STORY ARCS: SA5 Home Value + SA2 Professional Authority"]
+        BM1["W6.2 MV Confirmation + Prep<br>AUTOMATED | PUBLISHED - APPT Handler MV + A.MV-1 stack<br>1.5-HR IN-HOME MEASUREMENT VERIFICATION PREP<br>MV IS the in-home appointment for Est Calc leads<br>add stage:booked-main-appointment<br>PIPELINE: move to 6. Conversion Sequence<br>confirmation + what to have accessible for measurement<br>reminder cadence (same as WE)<br>Confirmation Call fires automatically<br>GHL: APPT Handler MV + A.MV-1 + A.MV-1-E Exit + A.MV-1-N No-Show (all published)"]
+        WE1["W6.4 Window Estimate / HPA Confirmation + Prep<br>AUTOMATED | CONSOLIDATE from WE stack + L.2 draft<br>GHL: APPT Handler WE (published) + A.WE-1 Reminders (published)<br>Also: L.2 HPA workflow (draft 30 steps) - merge content into this stack<br>add stage:booked-main-appointment<br>PIPELINE: move to 6. Conversion Sequence<br>immediate confirmation SMS + email<br>prep instructions + documentation request<br>24h reminder + social proof story<br>4h reminder + objection handling<br>1h final reminder<br>Confirmation Call fires automatically<br>Exit: A.WE-1-E (published) | No-Show: A.WE-1-N (published)"]
+        D_WE_OUT{"In-Home Appointment Outcome?<br>(WE, MV, or HPA)"}
+        NS_WE["In-Home No-Show<br>WE/HPA: A.WE-1-N + A.WE-1-NE (published)<br>MV: A.MV-1-N + A.MV-1-NE (published)<br>soft reset + rebook prompt<br>what they missed + neighbor story<br>limited rebook window<br>final close-file notice<br>Routes to: FS3 No-Show Rescue or S1.0"]
+  end
+ subgraph COL7[" "]
+    direction TB
+        COL7_H["7. Booked / Confirmation - L4 COMMITMENT TRUST - VENDOR DIFFERENTIATION to DECISION"]
+        STAGE4_LABEL["STAGE #4: NEGOTIATING<br>Prospect decided to engage<br>Goal: Overcome last-minute objections, ensure they show<br>TRUST LEVEL 4 to 5: Commitment Trust to Experience Trust<br>ENVIRONMENT CHANGE: The in-home appointment (WE, MV, HPA) is a qualitatively different,<br>higher-value experience that cannot be replicated online - DS Rec #9<br>NOTE: Environment Change applies to ALL in-home appointments - NOT phone qualification<br>CONFIRMATION CALL: Mandatory for every in-home appointment - fires automatically"]
+        QUAL_BOOKED
+        CONF_CALL
+        MAIN_BOOKED
+  end
+ subgraph QUAL_OUT[" "]
+    direction TB
+        QUAL_OUT_H["Qualification Outcomes (if qualification was used)"]
+        AO_QUAL{"Did Phone Qualification Happen?<br>(Review Session only)"}
+        D_QUAL_ROUTE{"Qualification Result?<br>REP + AUTOMATED"}
+  end
+ subgraph MAIN_OUT[" "]
+    direction TB
+        MAIN_OUT_H["THE APPOINTMENT Outcomes"]
+        AO_MAIN{"Did In-Home Appointment Happen?<br>(Window Estimate, MV, or HPA)"}
+        D_MAIN_ROUTE{"Appointment Result?<br>REP + AUTOMATED"}
+  end
+ subgraph COL8[" "]
+    direction TB
+        COL8_H["8. Appointment Outcomes - L5 EXPERIENCE TRUST"]
+        QUAL_OUT
+        MAIN_OUT
+  end
+ subgraph COL8B[" "]
+    direction TB
+        COL8B_H["8B. Post-Appointment - L5 EXPERIENCE TRUST - DECISION"]
+        PA1["F.0 Post-Appointment Follow-Up<br>AUTOMATED + REP TASK | BUILD NEW<br>SINGLE WORKFLOW - handles all in-home appointment outcomes<br>NOTE: For LP Day 15+ leads routed to O.0 then back through post-appt:<br>  Time-lapse messaging applies - check days_since_last_contact<br>Summarize findings specific to THEIR home<br>Explain gap / exposure discovered (SA2 expertise)<br>Social proof: similar homeowner stories (SA5 value)<br>Risk reversal: guarantee reminder<br>CTA = next best step based on outcome<br>If objection detected - route to O.0<br>If stalled - route to FS2<br>STORY ARCS: SA5 (investment proof) + SA2 (demonstrated expertise)<br>TRUST: Level 5 - the experience should speak for itself<br>PHASE 2 - LP WRITE-BACK (not Phase 1 scope):<br>At appointment completed, sync engine pushes pre-sale intelligence to LP contact note:<br>entry source tag, pain point bucket, lead score at appointment, engagement history summary"]
+  end
+ subgraph COL8C[" "]
+    direction TB
+        COL8C_H["8C. Objection Handling - L5 EXPERIENCE TRUST - DECISION"]
+        OBJ1["O.0 Objection Handler<br>AUTOMATED + AI-ASSISTED | REBUILD - reconnect existing S4.10 (142 steps)<br>Trigger: objection tag applied from post-appt or booking stall<br>TIME-LAPSE MESSAGING: all branches check days_since_last_contact<br>  Under 90d: Have your concerns about [objection] changed?<br>  Over 365d: Fresh relevance hook, no assumption they remember the appointment<br>ALSO TRIGGERED BY: LP Day 15 handoff - OPPFDN disposition (full demo, no sale)<br>ALSO TRIGGERED BY: LP Day 15 handoff - 1Leg disposition (one spouse present)<br>ALSO TRIGGERED BY: LP Day 15 handoff - BO disposition (be back / follow up)<br>Route by objection type - each branch uses specific story arcs:<br>Price - SA3 Cheap Window Regret (value reframe + financing + ROI)<br>Timing - SA4 Insurance Claim + SA1 Hurricane (urgency + cost of waiting)<br>Spouse - SA5 Home Value (investment framing for BOTH decision-makers)<br>  NOTE: 1Leg leads average 1,100 days inactive - message MUST acknowledge time gap<br>  Example: We met a while back - life gets busy. Are both of you ready to revisit this together?<br>Trust - SA2 Code Compliance (authority + social proof + guarantee)<br>Competitor - SA3 Cheap Window (positioning + USP + risk reversal)<br>DIY - SA3 + SA4 (mistakes exposed + long-term cost analysis)<br>OPPFDN ROUTING: if no objection tag known - default to Price/Timing branch<br>  Average job value was $48,066 - these are serious buyers who stalled<br>AC: Polarity - strong positions that polarize and attract true fans<br>TRUST DIAGNOSIS: Price = Level 3 gap | Timing = Level 4 gap<br>Trust = Level 2 gap | Spouse = Level 4 needs 2 people | Competitor = Level 3<br>Each path ends with CTA or downsell<br>GHL RECONNECT NEEDED: S4.10 Objection Workflows (draft, 142 steps) - triggers disconnected"]
+        D_OBJ{"Objection Resolved -<br>Which Next Step?<br>MANUAL DECISION + AUTOMATED"}
+  end
+ subgraph COL8D[" "]
+    direction TB
+        COL8D_H["8D. Sales / Close - L5 EXPERIENCE TRUST - DECISION to POST-DECISION - Value Ladder Tier 2"]
+        SALES1["S4.10 Sales / Proposal / Close Process<br>REP-OWNED + AUTOMATED SUPPORT<br>PIPELINE: move to 8. Proposal / Estimate Delivered<br>VALUE LADDER TIER 2 - CORE OFFER<br>DS OFFER STACK FORMULA:<br>1. Introduction - make offer + promise 100% clear<br>2. Value Stacking - elevate perceived value of each deliverable<br>3. Price Reveal - diminish perceived cost<br>4. Guarantee - diminish intangible cost (time, energy, disappointment)<br>5. Urgency - push to act now<br>Financing discussion | Final objection handling<br>PROFIT MAXIMIZER UPSELL (Tier 3): shutters, doors, expanded scope, premium glass<br>PIPELINE: Won - 2. Client Lifecycle - 1. Closed Won (Contract Signed)<br>PIPELINE: Lost - 3. Recycle, Lost, Deferred - 2. Closed Lost"]
+  end
+ subgraph LP_DISP_GATE[" "]
+    direction TB
+        LP_DISP_GATE_H["LP DISPOSITION PRE-ROUTING GATE<br>Fires before S1.0 enrollment for all LP Day 15+ handoff leads<br>Purpose: match recovery sequence to what actually happened in LP<br>Not all Day 15+ prospects are cold - routing them identically destroys conversion<br>ALL COUNTS BELOW: unique prospects (first-touch, 2021+, deduplicated)<br>Total Day 15+ recoverable prospects: 37,720 | Est revenue: $20.5-35.4M"]
+        LP_D{"LP Disposition?"}
+        DEAD_SUPP["SUPPRESS - Dead Lead<br>DNC / NoHome / NG / NoRehash / NOP NOP / VNI / BD / CTR<br>2,156 prospects - No GHL action - add suppress tag<br>Remove from all active workflows immediately"]
+        STALE_APPT["STALE APPOINTMENT CHECK<br>LP Disposition: Set / Cnf<br>2,900 prospects | Appointment was booked (378 days ago avg) and never ran<br>Action: single SMS re-engagement only<br>Example: We have your appointment on file from some time ago<br>Are you still in the market? One reply gets you back on the calendar.<br>Do NOT route to booking sequences (appt already set in LP)<br>If replies - rep task to confirm intent and re-set appointment<br>If no reply after 7 days - route to S1.1"]
+        GRP1["GROUP 1: Never Reached Demo Stage<br>LP Dispositions: Data / NOC / Verif / CCC<br>21,823 unique prospects<br>Action: S1.0 standard enrollment<br>Route to S1.1 standard reactivation track<br>These are truly cold leads - full reactivation sequence applies"]
+        GRP2["GROUP 2: Appointment Cancelled Before Demo<br>LP Dispositions: CXL / NS / No Demo / FDNS<br>7,484 unique prospects<br>Action: Route to S5.2 FS3 Appointment Rescue sequence<br>CXL = appointment was booked then CANCELLED before demo ran<br>These leads had enough intent to book - treat as warm rebook not cold lead<br>Do NOT run full indoctrination - they already committed once<br>Message acknowledges the cancellation without guilt<br>Shorter rebook path: 4 messages max then S1.1 if no response<br>CCC (259 leads): SMS-only pattern interrupt before S1.1"]
+        GRP3["GROUP 3: Demo Happened - No Sale<br>LP Dispositions: OPPFDN / 1Leg / BO / NIS<br>5,513 unique prospects<br>Action: Route directly to O.0 Objection Handler<br>OPPFDN (Full Demo No Sale): avg job value $48,066 - serious buyers<br>  If objection tag exists in GHL - route to specific O.0 branch<br>  If no objection tag - default to Price/Timing branch first<br>1Leg (One Spouse Present): demo held but not run - avg 1,100 days inactive<br>  Apply objection:spouse tag - route to O.0 Spouse branch<br>  Message MUST acknowledge time gap explicitly<br>BO (Be Back / Follow Up): soft CTA - they said they would return<br>NIS (Not Interested - Shown): strong pattern interrupt before O.0<br>  These said no after seeing - needs SA1/SA4 re-frame before objection sequence"]
+        GRP4["GROUP 4: Deferred / Not Ready<br>LP Dispositions: OPP NOI / NOP ITM / ND / Reset / Issue<br>17 unique prospects<br>Action: S1.1 long cadence with seasonal triggers<br>OPP NOI: Opportunity not interested now - seasonal trigger approach<br>NOP MPR (Must Price Right): rep task first - human touch required<br>Issue / Problem: rep task first before any automated sequence<br>These leads need timing-based re-engagement not objection handling"]
+  end
+ subgraph COL9[" "]
+    direction TB
+        COL9_H["9A. Prospect Reactivation - Pre-Sale Revival"]
+        LP_DISP_GATE
+        UR1["S1.0 Unresponsive Lead Management<br>AUTOMATED | PUBLISHED (ID: 750f1b7f) | 5 steps (v10)<br>ENTRY: GHL-originated leads (timed out of nurture sequences)<br>ENTRY: LP Day 15 Group 1 leads (never reached demo stage)<br>add stage:unresponsive<br>PIPELINE: move to 9. Unresponsive<br>add unresponsive tag<br>remove booked / reply tags<br>source-neutral rep task (Phase 0 fix verified)<br>Handoff: S1.1 (2094441c) - draft OK for now<br>NOTE: OPPFDN leads bypass S1.0 entirely - they go to O.0<br>NOTE: CXL leads bypass S1.0 entirely - they go to S5.2 FS3"]
+        RE1["S1.1 90-Day Reactivation<br>AUTOMATED | REBUILD - draft exists (ID: 2094441c)<br>stopOnResponse: true<br>CRITICAL DESIGN CHANGE v5.10: OFFER-DRIVEN, NOT STORY-DRIVEN<br>If they did not book the first time, they do not need more story<br>They need a reason to act NOW<br>CONTENT SHIFT: from internal tension (stories) to EXTERNAL CONSTRAINT (timing + scarcity + consequence)<br>CADENCE: CAMPAIGN SPRINTS not slow drips (v5.11)<br>Stale leads do not respond to consistency. They respond to DISRUPTION.<br>SPRINT 1 (Days 1-5): CODE COMPLIANCE ANGLE<br>  Day 1 Email: [City] updated wind mitigation requirements. Your classification may have changed.<br>  Day 2 SMS: Did you see this? Your home may be affected. Quick call? [calendar link]<br>  Day 3 Email: What the new requirements mean for homeowners in [zip code]<br>  Day 5 Email: DEADLINE - current assessment pricing locks at end of month<br>  Then: SILENCE for 21 days<br>SPRINT 2 (Days 26-30): SOCIAL PROOF ANGLE<br>  Day 26 Email: [Number] homeowners in [zip] completed their assessment this month<br>  Day 27 SMS: Your neighbors are upgrading. Want to see what they found? [calendar link]<br>  Day 30 Email: Case study from a homeowner 2 streets away<br>  Then: SILENCE for 25 days<br>SPRINT 3 (Days 55-59): SCARCITY ANGLE<br>  Day 55 Email: We are running a limited assessment program. [X] slots this month for [zip]<br>  Day 56 SMS: [X] slots left for [month]. Want one? Reply YES [calendar link]<br>  Day 59 Email: Last slots going. The homeowners who scheduled last month are already in production.<br>  Then: SILENCE for 21 days<br>SPRINT 4 (Day 80-84): FINAL PUSH<br>  Day 80 Email: Value summary + everything on the table<br>  Day 82 SMS: Final check-in. Still thinking about your home? [calendar link]<br>  Day 84 Email: FILE CLOSE with door open - we are here when you are ready<br>WHY SPRINTS: 3-5 day bursts with strong angle + strong offer + hard deadline<br>  Then silence. Then NEW angle. Disruption beats drip.<br>URGENCY FORMULA: Internal tension (story arcs inform emotional framing) + External constraint (timing, scarcity, consequence)<br>Story arcs still SELECT the emotional angle. External constraints DRIVE the CTA.<br>TIME-LAPSE MESSAGING: all content branches by days_since_last_contact<br>  Tier 1 (0-90d): warm continuity framing<br>  Tier 2 (91-365d): cool re-relevance framing (no relationship claim)<br>  Tier 3 (365+d): cold pattern interrupt (treat as new lead with data advantage)<br>BOOKING ESCAPE HATCH: Every message includes direct booking link (Momentum Layer)<br>TWO ENTRY SOURCES:<br>SOURCE A: GHL-originated (timed out after S4.5 Seinfeld broadcast)<br>SOURCE B: LP Day 15 Gate - Group 1 (Data/NOC/Verif) after S1.0<br>LP DISPOSITION SEGMENTATION drives message variant:<br>Price Objection (OPPFDN with price tag) - SA3 Cheap Regret reframe + financing CTA<br>Timing / Not Ready (OPP NOI / NOP ITM) - SA4 Insurance urgency + seasonal trigger hook<br>No Answer / Lost Contact (Data / CCC) - SA1 Hurricane pattern interrupt SMS<br>Competitor Lost - SA3 + SA2 authority + risk reversal messaging<br>No-Show history (NS in LP) - SA5 investment frame + soft rebook CTA<br>CADENCE: Day 1 pattern interrupt | Day 14 re-relevance | Day 30 social proof<br>Day 45 new offer | Day 60 urgency | Day 75 value summary | Day 90 file close<br>Exit: responded - route to correct appointment path | no response - Archive<br>PIPELINE: move to 11. Reactivation<br>ENHANCEMENT NEEDED: add WE + MV booked tag exit conditions<br>ENHANCEMENT NEEDED: LP disposition-based variant branching"]
+        D17{"Reactivated?"}
+        D18{"Re-engaged Lead -<br>Which Appointment?<br>REP DECISION or AI-ASSISTED"}
+        ARCHIVE["Archive / Long-Term Dormant Nurture<br>AUTOMATED<br>PIPELINE: move to 10. Long Term Nurture<br>annual seasonal campaigns<br>holiday / event-based reactivation<br>new product / service announcements<br>referral requests"]
+  end
+ subgraph COL10[" "]
+    direction TB
+        COL10_H["9B. Customer Winback - Post-Sale Revival"]
+        CJ7["C.6 Winback Sequence<br>AUTOMATED | BUILD NEW<br>POST-SALE REACTIVATION<br>Trigger: customer disengaged / no repeat / no referral<br>pattern interrupt: we miss you<br>new service announcement<br>social proof from recent customers<br>incentive to re-engage<br>referral ask even if not buying again<br>final outreach before long-term dormant"]
+        D_WIN{"Winback Response?"}
+        D_WIN_NEXT{"Which New Service /<br>Appointment Type?<br>REP DECISION or AI-ASSISTED"}
+  end
+ subgraph CJ_ONBOARD[" "]
+    direction TB
+        CJ_ONBOARD_H["Onboarding - New Buyer<br>AUTOMATED + REP-OWNED"]
+        CJ1["C.0 Customer Onboarding<br>BUILD NEW<br>CONVENIENCE + CHARACTER MESSAGING<br>PIPELINE: 2. Client Lifecycle - 1. Closed Won (Contract Signed)<br>welcome + congratulations<br>set expectations for install timeline<br>introduce project coordinator / rep<br>what to expect at each milestone<br>how to reach us anytime<br>financing next steps if applicable<br>document checklist"]
+        CJ2["C.1 Install Progress Updates<br>BUILD NEW<br>PIPELINE: track through 2-7 of Client Lifecycle<br>HOA / permit status updates<br>production / manufacturing timeline<br>install date confirmation<br>pre-install prep instructions<br>day-of expectations<br>TRIGGERED BY: LP milestone tags (H=HOA approved, P=permit, S=install start)"]
+  end
+ subgraph CJ_LOYALTY[" "]
+    direction TB
+        CJ_LOYALTY_H["Loyalty - Repeat Buyer + Profit Maximizer (Tier 3)<br>AUTOMATED"]
+        CJ3["C.2 Post-Install Check-In<br>BUILD NEW<br>COMPETENCE + CHARACTER MESSAGING<br>24hr post-install satisfaction check<br>7-day follow-up: any issues?<br>30-day check-in: how is everything?<br>introduce warranty details<br>energy savings / comfort validation<br>TRIGGERED BY: LP milestone tag F (install end) or C (completion)"]
+        CJ4["C.3 Expansion + Profit Maximizer Sequence - VALUE LADDER TIER 3 - DS Rec #1<br>BUILD NEW<br>UPSELL + CROSS-SELL<br>identify additional product opportunities (shutters, doors, expanded scope, premium glass)<br>cross-sell complementary services<br>seasonal maintenance offers<br>loyalty pricing / VIP treatment<br>financing for add-on projects<br>AC: Parables from customers who expanded<br>Funnel Stack: Post-install check-in leads to expansion offer (natural ascension)<br>TRIGGERED BY: LP milestone tag C (completion) or B (inspection passed)"]
+  end
+ subgraph CJ_PROMOTE[" "]
+    direction TB
+        CJ_PROMOTE_H["Promoter - Reviews<br>AUTOMATED"]
+        CJ5["C.4 Review Solicitation<br>BUILD NEW<br>CHARISMA + CHARACTER MESSAGING<br>14-day post-install: request Google review<br>direct review link - make it easy<br>thank you message<br>30-day follow-up if no review<br>case study request<br>TRIGGERED BY: LP milestone tag C (completion)"]
+  end
+ subgraph CJ_REFER[" "]
+    direction TB
+        CJ_REFER_H["Referrer - Referral Program + Continuity (Tier 4)<br>AUTOMATED + REP-OWNED"]
+        CJ6["C.5 Referral OVERLAY + Continuity Program - VALUE LADDER TIER 4 - DS Rec #1<br>BUILD NEW - PRIORITY ELEVATED (was #7, now #3-4)<br>CRITICAL DESIGN CHANGE v5.10: Referrals are NOT a step. They are a SYSTEM OVERLAY.<br>Referral asks fire at MULTIPLE lifecycle moments, not just post-inspection.<br>THE RULE (v5.11): Every positive emotional moment = referral trigger<br>Emotion is highest IMMEDIATELY after value is experienced<br>Wait too long and you lose the window<br>REFERRAL TRIGGER POINTS (7 moments - expanded from 5):<br>1. POST-APPOINTMENT (even if no close) - they experienced the Environment Change<br>   Message: Your neighbor might benefit from what you just experienced<br>   TIMING: Within 2 hours of appointment completion<br>2. DEAL SIGNED - excitement peaks at commitment moment<br>   Message: You just made a great decision. Who else should know about this?<br>   TIMING: Immediately after contract signed<br>3. DURING ONBOARDING - anticipation is building<br>   Message: Who else in your life is thinking about their home protection?<br>   TIMING: Day 3 of onboarding sequence<br>4. AT EACH MILESTONE (permit approved, install scheduled, install complete)<br>   Message: Your project just hit [milestone] - know anyone else planning?<br>   TIMING: Within 24 hours of milestone notification<br>5. AFTER POSITIVE CHECK-IN RESPONSE (satisfaction confirmed)<br>   Message: You said you love it - would you share that with someone?<br>   TIMING: Immediately after positive sentiment detected in reply<br>6. AFTER REVIEW SUBMITTED (public endorsement)<br>   Message: Thank you for the review - here is your personal referral link<br>   TIMING: Within 1 hour of review detection<br>REFERRAL SPECIFICITY RULE (v5.12):<br>  Do NOT use generic asks like Do you know anyone who needs windows?<br>  USE contextual specificity that triggers memory:<br>  Example: Most of our clients come from people like you who know someone<br>  dealing with [their specific pain point]. Who comes to mind?<br>  Example: Your neighbor at [street] mentioned they were thinking about it too.<br>  Specificity drives action. Generic asks get ignored.<br>  The referral message must reference THEIR situation and THEIR network.<br>7. PARTIAL WIN - prospect did not buy but had a positive experience<br>   Message: Even if the timing is not right for you, is there someone you know?<br>   TIMING: 48 hours after appointment if no sale and no negative objection tag<br>IMPLEMENTATION: Tag-triggered utility workflow<br>Signal tags: appointment-completed, milestone-achieved, review-submitted,<br>  positive-checkin, expansion-purchased<br>Each trigger fires context-appropriate referral ask (not same generic message)<br>Customer Referral first-touch close rate: 64.6% at $26,910 avg<br>Every closed customer without a referral ask within 30 days is compounding revenue leak<br>PIPELINE: 2. Client Lifecycle - 8. Referral and Expansion Opportunity<br>CONTINUITY: Annual inspection + maintenance plan + warranty extension + referral rewards"]
+  end
+ subgraph COL11[" "]
+    direction TB
+        COL11_H["10. Customer Journey - L6 OWNERSHIP TRUST - POST-DECISION - BOFU"]
+        CJ_HEADER["STAGE #5: COMMITTED<br>Buyer Journey to Customer Journey Transition<br>Goal: Buyers to Loyalists to Promoters to Referrers<br>TRUST LEVEL 6: Ownership Trust - All 4 types active<br>The customer becomes the story - they ARE now SA5 (Home Value Increase)<br>VALUE LADDER Tiers 3-4 activated here<br>ALL WORKFLOWS TRIGGERED by LP milestone tags via Railway sync engine<br>3,100 milestone triggers unfired as of March 2026 - build C.x urgently"]
+        CJ_ONBOARD
+        CJ_LOYALTY
+        CJ_PROMOTE
+        CJ_REFER
+  end
+ subgraph COL12[" "]
+    direction TB
+        COL12_H["11. System Rules / Tag Architecture / KPIs"]
+        SR1["Tag Architecture Rules<br>Keep entry source tags permanently<br>Only one stage tag active at a time<br>Only one active booking-intent tag at a time<br>Remove stale booked tags on appointment change<br>Remove prior stage tags before applying new"]
+        SR2["Entry Source Tags (7 sources)<br>entry:risk-report | entry:estimate-calculator<br>entry:chatbot | entry:canvassing<br>entry:referral | entry:other<br>entry:high-intent-digital (Google PPC/Organic/Service Ads/Direct)<br>NOTE: Window Estimate is an APPOINTMENT TYPE (appt:window-estimate), not an entry source<br>NOTE: Old Sub Source (LP) reclassified to referral bucket (71.7% FT prospect close 2021+)<br>ATTRIBUTION MODEL: First-touch source, prospect-level, 2021+ only<br>Each prospect counted once under source of EARLIEST lead record<br>49,974 unique prospects | 18.4% system close rate | $24,409 avg job<br>SOURCE TIERS (first-touch prospect close rate 2021+):<br>TIER A (40%+): Self Generated 89.2% | Customer Referral 64.6% | TheHomeMag 49.5%<br>  Previous Customer 44.6% | Canvass Sticky 45.3% | Old Sub Source 71.7%<br>TIER B (15-40%): Canvass 29.3% | Google PPC 27.5% | Google Organic 32.3%<br>  MySafeFloridaHome 33.3% | Prolific 28.8% | Reecewindows.com 23.2%<br>TIER C (8-15%): Lead Gurus 12.8% | MyHomePros 12.3% | Clever 11.4% | Modernize 9.5%<br>TIER D (under 8%): Contractor Appt RS 6.1% | Porch101 3.6% | Chat 4.8%<br>REMOVED: Employee Referral (0 prospects 2021+) | Home Show (3 prospects 2021+)"]
+        SR3["Buyer Journey Stage Tags<br>bj:stage-1-indifferent | bj:stage-2-curious<br>bj:stage-3-comparing | bj:stage-4-negotiating<br>bj:stage-5-committed"]
+        SR4["Funnel Stage Tags<br>stage:new-lead | stage:pre-frame-bridge<br>stage:indoctrination | stage:education<br>stage:solution-pitch<br>stage:booking-review | stage:booked-review<br>stage:booking-measurement | stage:booked-measurement<br>stage:booking-window-estimate | stage:booked-window-estimate<br>stage:active-nurture-broadcast<br>stage:no-show | stage:post-appointment<br>stage:objection-handling | stage:flash-sale<br>stage:unresponsive | stage:reactivation<br>stage:customer-onboarding | stage:customer-active<br>stage:customer-promoter | stage:customer-referrer"]
+        SR4B["Buyer Stage Tags (Trust Escalation Tracking)<br>Only ONE active at a time - remove prior before applying new<br>buyer:awareness - on bridge entry (E.1-E.7 first step)<br>buyer:education - on indoctrination link click or email open #2+<br>buyer:vendor-comparison - on VSL 50%+ or solution pitch engaged<br>buyer:decision - on booking page visit or micro-qualifier started<br>buyer:post-decision - on deal won (SALES1 to SOLD)<br>USE FOR: reporting / retargeting / messaging gates / sales scripting"]
+        SR5["Appointment Tags - 5 GHL Calendar Types in 2 Functional Categories<br>QUALIFICATION (optional, skippable):<br>appt:review-session - 15-min phone (Cal: DQYMaJ22N6zL4SXjHukw)<br>  GHL tags: HPRC-Booked / HPRC-Completed / HPRC-No Show<br>appt:measurement-verification - 1.5hr verify (Cal: zEdPmkNccR2ovo3rQAd3)<br>  GHL tags: via APPT Handler MV<br>THE APPOINTMENT (the real deal):<br>appt:window-estimate - 1.5hr in-home (Cal: aJj14ONxh1oFyDcQ706O)<br>  GHL tags: via APPT Handler WE<br>appt:home-assessment - 1.5hr in-home (Cal: zS1wg0JqQ1zsszJyJqKX)<br>  GHL tags: HPA-Booked / HPA-Cancelled / HPA-No Show<br>  NOTE: functionally identical to Window Estimate - different name by lead source<br>UTILITY:<br>appt:confirmation-call - 5-min phone (Cal: gFWoSQrlKIdfRbAPV842)<br>  GHL tags: booked-conf-call / canceled-conf-call<br>STATUS TAGS: appt-confirmed | appt-unconfirmed | appt-reschedule-requested | appt-cancelled"]
+        SR6["Objection Tags<br>objection:price | objection:timing | objection:spouse<br>objection:trust | objection:competitor<br>objection:diy | objection:not-interested<br>NOTE: 1Leg LP leads receive objection:spouse tag on Day 15 gate entry<br>NOTE: OPPFDN LP leads receive objection tag if rep entered one; default price/timing if not"]
+        SR7["Pipeline Stage Updates - When They Happen<br>PIPELINE 1: Antifragile Buyer Activation<br>1. Lead Captured - on system entry (E.0)<br>2. High-Intent Qualified - after bridge or high lead score / hyperactive buyer alert<br>3. Indoctrination / Short Nurture - during S2.0-3.x indoctrination<br>4. Active Nurture - during S4.x booking push + S4.5 broadcast<br>5. Re-Engagement - S5.x flash sale stage<br>6. Conversion Sequence - when appointment booked<br>7. Appointment Completed - after appointment showed<br>8. Proposal / Estimate Delivered - during S4.10 sales/close<br>9. Unresponsive - on S1.0 entry<br>10. Long Term Nurture - after S1.1 reactivation fails<br>11. Reactivation - during S1.1<br>PIPELINE 2: Client Lifecycle (8 stages)<br>1. Closed Won - deal won | 2-7. Financing to Install - tracked by C.1<br>8. Referral and Expansion Opportunity - after C.4/C.5<br>PIPELINE 3: Recycle, Lost, Deferred (7 stages)<br>2. Closed Lost - deal lost | 7. Reactivation Queue - from Pipeline 3 dispositions"]
+        LP_DISP_MAP["LP DISPOSITION to GHL ROUTING REFERENCE MAP v6.16 (DATA-VERIFIED)<br>USE: Railway sync engine applies lp-day15-handoff tag<br>GHL reads LP disposition field and applies correct routing tag<br>43 agent_rules seeded in Supabase — verified against 198K LP leads<br>ACTIVE IN LP - do not enroll: Sale / SW / PM<br>NOREHASH - 7-day hold, P1 Stage 8, NOT a loss<br>DEAD - suppress: DNC / NG / NOP NOP / VNI / BD / CTR / Renter<br>STALE APPT - single SMS only: Set / UnCon / Soft Confirm / Conf Backup<br>Cnf - APPOINTMENT CONFIRMED (real confirmed appt, route to Conversion Sequence)<br>GROUP 1 - Cold (S1.0 then S1.1): Data / Verif / NoHome<br>  NoHome = Not Home (rep went, nobody there) — recoverable no-show, not dead<br>GROUP 2 - Cancelled or Incomplete (S5.2 FS3 or Re-Engage): CXL / NS / No Demo / CCC / BO<br>  CCC = Customer Called to Cancel (proactive cancellation, had intent)<br>  BO = Be Back/Follow Up (0% demo — lead said theyll reach back out)<br>GROUP 3 - Demo happened (O.0): OPPFDN / FDNS / NOC / 1Leg / NIS<br>  FDNS: despite name, 100% demo_completed — same as OPPFDN<br>  NOC: despite name, 99.9% demo_completed — post-demo leads gone cold<br>  OPPFDN: default to price/timing objection branch if no specific tag<br>  1Leg: apply objection:spouse tag, time-lapsed message variant<br>GROUP 4 - Deferred (S1.1 long cadence): OPP NOI / NOP ITM / ND / Reset / OPP REP NOI<br>  Issue / NOP MPR: rep task first (needs human touch)<br>EDGE CASES: Spanish (language flag, rep task) / null (flag for review) / NIS2 / OPPPRD"]
+
+        DS_AUDIT["DOTCOM SECRETS COMPLIANCE AUDIT (v5.13)<br>DS Rec #1 VALUE LADDER: 5 tiers (Bait-TripWire-Core-ProfitMax-Continuity) = COL1C<br>DS Rec #2 ATTRACTIVE CHARACTER: AC Spec (Backstory-Parables-Flaws-Polarity) = COL1B<br>  Sprint reactivation and event-driven content must use AC persona<br>DS Rec #3 SEINFELD BROADCAST: S4.5 12-week rotation = COL6B<br>DS Rec #4 HSO MANDATE: Hook-Story-Offer every touchpoint = HSO1<br>  Momentum escape hatch = additional Offer at every touchpoint<br>DS Rec #5 FUNNEL STACK: Confirmation pages intro next tier = WE_CONF<br>DS Rec #6 HYPERACTIVE BUYER: HOT1 score more than 50 in 48h = COL2<br>  Extended by Momentum Layer: mid-tier acceleration at score 25-50<br>DS Rec #7 SURVEY FUNNEL: E.3 Chatbot bucket questions = COL4<br>DS Rec #8 PRE-FRAME BRIDGES: E.1-E.7 HSO structure = COL4<br>  Time-lapse messaging: bridge content adapts to recency<br>DS Rec #9 ENVIRONMENT CHANGE: In-home appointment framing = COL7<br>  Funnel Collapse: when trust spikes, skip directly to environment change<br>DS Rec #10 APPLICATION MICRO-QUALIFIER: 2-3 questions before booking = COL6<br>Speed-to-Lead Protocol = DS Phase 1 (Traffic Temperature) + Phase 5 (Hyperactive Buyers)<br>  The fastest response goes to the hottest traffic - tier-matched speed<br>NEW FEATURES + DS ALIGNMENT:<br>Momentum Layer = DS Phase 5 (Hyperactive Buyers) extended to all signals<br>Sprint Reactivation = DS Seinfeld (Rec #3) evolved for stale leads<br>State-Based Routing = DS Traffic Temperature (Phase 1) deepened to real-time<br>Referral Overlay = DS Value Ladder Tier 4 (Continuity) activated as lead gen channel<br>Funnel Collapse = DS Phase 7 (Environment Change) - skip to it when trust spikes"]
+        HSO1["DOTCOM SECRETS INTEGRATION - MESSAGING STANDARDS<br>HSO MANDATE (DS Rec #4): Every touchpoint follows Hook + Story + Offer<br>Hook = subject line / first line | Story = belief-shift formula | Offer = next micro-commitment<br>DIAGNOSIS: low opens = weak hook | low engagement = weak story | low conversions = weak offer<br>ATTRACTIVE CHARACTER (DS Rec #2): AC persona woven into all messaging<br>VALUE LADDER (DS Rec #1): every workflow decision accounts for ascension<br>PRE-FRAME (DS Rec #8): every bridge sets the emotional frame for what follows<br>SURVEY FUNNEL (DS Rec #7): chatbot uses bucket questions for segmentation<br>APPLICATION (DS Rec #10): micro-qualification before booking positions appointment as exclusive<br>ENVIRONMENT CHANGE (DS Rec #9): WE/MV/HPA appointment framed as high-value professional assessment<br>FUNNEL STACK (DS Rec #5): confirmation pages introduce next value ladder tier<br>SEINFELD LAYER (DS Rec #3): weekly broadcast for engaged non-bookers (S4.5) - PUBLISHED<br>HYPERACTIVE BUYER (DS Rec #6): score-triggered fast-track to rep + selling environment"]
+        C1["CONFLICT: More Than One Stage Tag Active? - remove older / keep newest / alert"]
+        C2["CONFLICT: More Than One Booked Tag? - remove stale / confirm true appt / notify rep"]
+        C3["CONFLICT: Booked But Still In Prior Nurture? - remove from prior / keep booked only"]
+        C4["CONFLICT: Wrong Appointment Type? - remove wrong tag / apply correct / reroute"]
+        C5["CONFLICT: Replied To Active Workflow? - stop workflow / create rep task / reroute if needed"]
+        C6["CONFLICT: No Lead Source? - set entry:other / create rep task"]
+        CONTROL1["LIVE CONTROL CENTER (NEW v5.12)<br>Antifragile systems require CONTINUOUS adjustment, not periodic review<br>The System Health Dashboard (weekly Monday review) remains for trend analysis<br>The Control Center adds REAL-TIME visibility into live funnel behavior<br>LIVE PANELS:<br>PANEL 1 - WHERE PEOPLE ARE STALLING (updated hourly):<br>  Prospects per funnel stage with avg time in stage<br>  Highlight: any stage with 2x avg dwell time = bottleneck alert<br>  Drill-down: which sources, which behavioral states, which content<br>PANEL 2 - WHERE MOMENTUM IS SPIKING (updated every 15 min):<br>  Active momentum signals detected in last 24h<br>  Capture rate: % of momentum signals that converted to booking<br>  Miss rate: % of signals where prospect left without booking<br>  ALERT: if capture rate drops below 30% = system is too slow<br>PANEL 3 - WHERE DROP-OFFS CLUSTER (updated daily):<br>  Heat map of negative signals by workflow step<br>  Which specific emails/SMS have highest drop-off<br>  Which story arcs are underperforming by source tier<br>  This panel DIRECTLY INFORMS content rewrites<br>PANEL 4 - SOURCE TIER PERFORMANCE (updated daily):<br>  First-touch prospect close rate by tier (A/B/C/D)<br>  Demo rate and demo-to-close by tier<br>  Revenue per prospect by tier<br>  ALERT: any tier dropping below threshold = investigate<br>PANEL 5 - REACTIVATION SPRINT PERFORMANCE (updated per sprint):<br>  Which sprint angle is converting (code compliance vs social proof vs scarcity)<br>  Response rate by sprint number (Sprint 1 vs 2 vs 3 vs 4)<br>  Recovery rate by Disposition Gate group<br>PANEL 6 - REFERRAL ENGINE METRICS (updated daily):<br>  Referral asks sent by trigger point (7 moments)<br>  Referral conversion rate by trigger point<br>  Referral pipeline value<br>  Highest-performing referral trigger for optimization<br>IMPLEMENTATION: Supabase materialized views + GHL webhooks<br>  Display: Notion dashboard OR custom React dashboard<br>  Alerts: GroupMe team notifications when thresholds breached<br>  This is the feedback loop that rewrites messaging upstream automatically"]
+        KPI1["TOFU KPIs: impressions to engagement rate by source | engagement to CTR<br>avg cost per click/lead by source | lead capture rate by source<br>lead score distribution | hyperactive buyer alert rate"]
+        KPI2["SOFU KPIs: email open rate by sequence (hook quality)<br>click-through rate by sequence (story quality)<br>indoctrination completion rate | solution pitch engagement rate<br>lead conversion rate / cycle / value | Seinfeld broadcast re-engagement rate"]
+        KPI3["MOFU KPIs: lead-to-booking rate by source + appt type<br>time to book by source | booking page conversion rate<br>application micro-qualifier completion rate<br>FS1/FS2/FS3 conversion rates | downsell acceptance rate"]
+        KPI4["BOFU KPIs: show rate by appt type | close rate by appt type<br>avg deal value | Tier 3 upsell rate | Tier 4 continuity enrollment<br>repeat purchase rate | review rate | referral rate | customer LTV<br>winback rate | LP Day 15 reactivation rate by disposition group"]
+        MAP1["Current to New Workflow Mapping<br>E.0 Master Router - REBUILD (fix canvassing/referral routing)<br>Nurturing Sequence - E.1 + S2.0 (REBUILD)<br>S2.4 Pain-Based - S2.0 Indoctrination Layer (REBUILD)<br>S3.0 VSL Push - S2.4 Education Layer (REBUILD)<br>S4.0 Review Nurture - S4.0 Review Booking (REBUILD)<br>W5.0 = S4.6 Review Confirmation (CONFIRMED)<br>S4.6 = S4.7 Review No-Show (CONFIRMED)<br>S4.7 = S4.1 MV Booking (ENHANCE + RENAME)<br>F.0 = S1.0 Unresponsive (REBUILD with LP Disp Gate)<br>O.0 = S1.1 Reactivation (REBUILD with disposition branching)<br>Stage 2 Trust = S2.0-3.x + S3.x (REBUILD)<br>Stage 3 Authority = S3.x Positioning Layer (REBUILD)<br>Stage 4 Measurement = S4.1 MV Booking (REBUILD)<br>APPT Handlers = S4.x Confirmation Stacks (CONFIRMED)<br>A.CC-1/M1/E1 stacks = S4.x Booked Stacks (CONFIRMED)<br>S4.10 Objection = O.0 Reconnect (RECONNECT TRIGGERS)<br>S4.5 Active Nurture Broadcast - PUBLISHED (ID: 40d77229) - audit content + trigger<br>S4.2 WE/HPA Booking - DRAFT SHELL EXISTS (ID: 27eb4d09) - BUILD"]
+        MAP2["Net-New Workflows To Build<br>E.7 High-Intent Digital Pre-Frame Bridge (NEW - 7th source bucket)<br>S2.3 Abbreviated Indoctrination for High-Intent Digital (NEW)<br>Hyperactive Buyer Alert utility workflow - DS Rec #6<br>Application micro-qualifier forms per booking lane - DS Rec #10<br>Confirmation Page + Video per appt type (Environment Change frame)<br>W5.0/S5.1/S5.2/W5.3 Flash Sale / Downsell stack<br>F.0 Post-Appointment Follow-Up (single workflow)<br>O.0 Objection Handler reconnect (triggers disconnected on S4.10)<br>C.0-C.5 Customer Journey (6 workflows - URGENT: 3,100 triggers unfired)<br>C.6 Winback Sequence<br>LP Disposition Pre-Routing Gate (logic in S1.0 entry or standalone utility)<br>Attractive Character Spec Document - DS Rec #2"]
+        MAP3["Sequential Workflow Naming Convention<br>E.x = Entry (Router + Pre-Frame Bridges - 7 bridges with E.7 high-intent digital)<br>S2.0-3.x = Indoctrination (Stage #1 to #2) - Soap Opera Sequence 1<br>S2.4-6.x = Education / VSL (Stage #2 deepening)<br>S3.x = Solution Pitch (Stage #2 to #3) - Soap Opera Sequence 2<br>S4.x = Booking (Stage #3 to #4) + S4.5 Seinfeld Broadcast<br>S5.x = Flash Sale / Urgency<br>S4.x = Confirmation / Booked (Stage #4)<br>S4.x = No-Show / Appointment Outcomes<br>F.x = Post-Appointment Follow-Up<br>O.x = Objection Handling (Stage #4 retargeting)<br>S4.10 = Sales / Close (Stage #4 to #5) + Offer Stack + Tier 3 Upsell<br>S1.x = Recovery (Unresponsive + Reactivation)<br>C.x = Customer Journey (Stage #5) + Tier 3 Profit Maximizer + Tier 4 Continuity"]
+  end
+ subgraph SPINE[" "]
+    direction LR
+        SPINE_H["TRUST ESCALATION SPINE - Messaging Must Always Match Buyer Psychology"]
+        MAS1["STAGE 1 - AWARENESS<br>Governs: COL2 Entry to COL4 Pre-Frame to COL5 Indoctrination<br>BUYER STATE: Unaware or dismissive of the problem<br>TRUST LEVEL: 1 Attention to 2 Credibility<br>MESSAGING THAT WORKS HERE:<br>Make the problem RELEVANT, CRITICAL, URGENT<br>Myth-busting, secrets revealed, mistakes exposed<br>Story arcs: SA1 Hurricane, SA2 Compliance, SA4 Insurance<br>MOMENTUM LAYER: booking escape hatch present even here<br>Some prospects spike from Indifferent to Ready in one message<br>If they click the booking link from a Stage 1 email - capture them immediately<br>MESSAGING THAT FAILS HERE:<br>Positioning (not comparing yet) | Pricing (don't care yet)<br>Urgency to buy (haven't decided on solution) | Brand differentiation (irrelevant before education)"]
+        MAS2["STAGE 2 - EDUCATION<br>Governs: COL5B Education / VSL to COL5C Solution Pitch<br>BUYER STATE: Problem-aware, exploring solutions<br>TRUST LEVEL: 2 Credibility to 3 Solution<br>MESSAGING THAT WORKS HERE:<br>Prove the SOLUTION TYPE works (not your brand specifically)<br>VSL / case studies / social proof of outcomes<br>Story arcs: SA5 Home Value, SA2 Compliance, SA3 Cheap Regret<br>MESSAGING THAT FAILS HERE:<br>Hard sell or urgency to buy (still learning)<br>Competitive positioning (not comparing vendors yet)<br>Price reveals (premature - perceived value not built yet)<br>CRITICAL: This stage must be COMPLETE before positioning begins"]
+        MAS3["STAGE 3 - VENDOR COMPARISON<br>Governs: COL6 Booking to COL6B Flash Sale to COL7 Confirmation<br>BUYER STATE: Believes in the solution, evaluating WHO to hire<br>TRUST LEVEL: 3 Solution to 4 Commitment<br>MESSAGING THAT WORKS HERE:<br>Relevance, Superiority, Uniqueness of YOUR brand<br>Why Reece specifically - not why impact windows generally<br>Application qualifier positions appointment as exclusive<br>Story arcs: SA3 Cheap Regret (why others fail), SA5 Value (ROI)<br>MESSAGING THAT FAILS HERE:<br>Problem education (they get it - move forward)<br>Generic solution selling (need brand-specific proof)<br>KEY INSIGHT: Positioning ONLY works here - at Stage 1-2 it is noise, at Stage 4 it is too late"]
+        MAS4["STAGE 4 - DECISION<br>Governs: COL8 Outcomes to COL8B Post-Appt to COL8D Sales/Close<br>BUYER STATE: Chose you, working through final objections<br>TRUST LEVEL: 4 Commitment to 5 Experience<br>MESSAGING THAT WORKS HERE:<br>Offer stack (value stacking + price reveal + guarantee)<br>Risk reversal + urgency to commit NOW<br>Objection resolution matched to specific trust gaps<br>Story arcs: SA5 ROI (justify investment), SA3 (avoid regret)<br>MESSAGING THAT FAILS HERE:<br>Re-education (backtracking erodes confidence)<br>Generic social proof (needs SPECIFIC proof for THEIR situation)<br>Soft CTAs (need clear, confident asks)"]
+        MAS5["STAGE 5 - POST-DECISION<br>Governs: COL11 Customer Journey to COL10 Winback<br>BUYER STATE: Customer - building loyalty and advocacy<br>TRUST LEVEL: 5 Experience to 6 Ownership<br>MESSAGING THAT WORKS HERE:<br>Validation (you made the right choice)<br>Expansion offers (natural ascension to Tier 3-4)<br>Referral asks (social proof generation)<br>Story arcs: SA5 (they ARE the success story now)<br>MESSAGING THAT FAILS HERE:<br>Anything that questions their decision<br>Hard sell before satisfaction is confirmed<br>Generic messaging that ignores their purchase history"]
+  end
+    TITLE["Reece Full Funnel System Map v5.15<br>Antifragile Sales System + Dotcom Secrets Integration<br>+ Story Arc Library + Trust Escalation Spine + Buyer Stage Tags<br>+ LP/GHL System Boundary + LP Disposition Pre-Routing Gate<br>7 GHL Entry Sources | 5 GHL Appointment Types | EC Lane LIVE End-to-End<br>See Board C for Operator View"] --- RULE1["Core Funnel Logic v5.15 - Key Updates<br>EC LANE LIVE (Phase 2 COMPLETE March 23 2026): Part 1 to E.2 to S2.1 to S2.5 to S3.1 to S4.1 to S1.0 ALL PUBLISHED<br>7 entry sources: Risk Report, Estimate Calculator, Chatbot, Canvassing, Referral, Other/Unknown, High-Intent Digital<br>High-Intent Digital: Google PPC/Organic/Service Ads/Direct site - 23-39% FT prospect close rate - abbreviated indoc path<br>Old Sub Source (LP): 71.7% FT prospect close rate (2021+) - reclassify from other to referral in lp_source_mapping<br>LP Disposition Pre-Routing Gate: mandatory before S1.0 enrollment for all LP Day 15+ handoff leads<br>CXL = appointment CANCELLED before demo ran (NOT a deal cancellation) - route to S5.2 FS3 rebook sequence<br>1Leg = appointment held, one spouse present, demo NOT run - objection:spouse tag - O.0 Spouse branch<br>  1Leg avg 1,100 days inactive - message must acknowledge time gap explicitly<br>OPPFDN = full demo ran, no sale ($48,066 avg job value) - route to O.0 Objection Handler directly (NOT S1.0)<br>Set/Cnf = stale appointment in LP - single SMS re-engagement only (do NOT enroll in booking sequences)<br>S4.5 Seinfeld Broadcast: PUBLISHED in GHL (ID: 40d77229) - needs trigger audit and content review<br>S4.2 WE/HPA Booking: DRAFT SHELL EXISTS (ID: 27eb4d09) - empty - needs to be built<br>Exit condition workflows: S2.5-E + S3.1-E + S4.1-E PUBLISHED | S2.4-E + S2.6-E + S3.0-E remain drafts<br>S2.2 Fixes: COMPLETE (Phase 0) - 48hr wait removed + handoffs rewired to 673b0fa7<br>Railway/Node.js = sync engine (not n8n) per LP MCP Server Spec v5<br>37,720 Day 15+ prospects never triggered into GHL as of March 2026 - backfill trigger is highest-leverage action<br>3,100 LP milestone triggers unfired - C.x Customer Journey workflows need to be built urgently"]
+
+    COL1_H ~~~ TH
+    COL1B_H ~~~ AC1
+    COL1C_H ~~~ VL0
+    COL1D_H ~~~ SAL_HEADER
+    COL1E_H ~~~ TEL_HEADER
+    COL2_H ~~~ E1
+    COL3_H ~~~ R1
+    COL4_H ~~~ PF_HEADER
+    COL5_H ~~~ IND_HEADER
+    IND_RISK_H ~~~ I1_MYTH
+    IND_EST_H ~~~ I2_MYTH
+    IND_CANV_H ~~~ I3_MYTH
+    IND_HIDIG_H ~~~ I4_AUTHORITY
+    COL5B_H ~~~ V1
+    SP_REVIEW_H ~~~ SPR1
+    SP_MV_H ~~~ SPM1
+    SP_WE_H ~~~ SPW1
+    COL6_H ~~~ POS_HEADER
+    QUAL_TIER_H ~~~ D_SKIP
+    MAIN_TIER_H ~~~ AQ_MAIN
+    COL6B_H ~~~ FS1
+    COL7_H ~~~ STAGE4_LABEL
+    QUAL_BOOKED_H ~~~ BR1
+    CONF_CALL_H ~~~ CC1
+    MAIN_BOOKED_H ~~~ WE_CONF
+    QUAL_OUT_H ~~~ AO_QUAL
+    MAIN_OUT_H ~~~ AO_MAIN
+    COL8B_H ~~~ PA1
+    COL8C_H ~~~ OBJ1
+    COL8D_H ~~~ SALES1
+    LP_DISP_GATE_H ~~~ LP_D
+    COL9_H ~~~ LP_DISP_GATE
+    COL10_H ~~~ CJ7
+    COL11_H ~~~ CJ_HEADER
+    CJ_ONBOARD_H ~~~ CJ1
+    CJ_LOYALTY_H ~~~ CJ3
+    CJ_PROMOTE_H ~~~ CJ5
+    CJ_REFER_H ~~~ CJ6
+    COL12_H ~~~ SR1
+    SPINE_H ~~~ MAS1
+
+    T1 --> E1
+    T2 --> E1
+    T4 --> E1
+    T5 --> E1
+    T6 --> E1
+    T7 --> E1
+    T8 --> E1
+    E1 --> LS1
+    LS1 --> SPEED_TO_LEAD
+    SPEED_TO_LEAD --> R1
+    LS1 -. score more than 50 in 48h HYPERACTIVE BUYER .-> HOT1
+    HOT1 -. rep connects then book directly .-> TASK1
+    R1 --> D1
+    D1 -- Risk Report --> B1
+    D1 -- Estimate Calculator --> B2
+    D1 -- Chatbot --> B3
+    D1 -- Canvassing --> B4
+    D1 -- Other / Unknown --> B5
+    D1 -- Referral --> B6
+    D1 -- High-Intent Digital --> B7
+    B1 --> I1_MYTH
+    I1_MYTH --> I1_SECRET
+    I1_SECRET --> I1_MISTAKE
+    I1_MISTAKE --> I1_ALT
+    I1_ALT --> V1
+    B2 --> I2_MYTH
+    I2_MYTH --> I2_SECRET
+    I2_SECRET --> I2_MISTAKE
+    I2_MISTAKE --> V2
+    B2 -. high lead score fast-track .-> BK_WE
+    B3 --> D2
+    B4 --> D3
+    B5 --> D4
+    B7 --> I4_AUTHORITY
+    I4_AUTHORITY --> I4_ROI
+    I4_ROI --> SPW1
+    D2 -- Bucket: storm protection --> I3_MYTH
+    D2 -- Bucket: wants estimate / pricing --> AQ_MAIN
+    D2 -- Bucket: pricing confirmation --> AQ_MAIN
+    D2 -- Bucket: education / energy / insurance --> I3_MYTH
+    I3_MYTH --> I3_SECRET
+    I3_SECRET --> V1
+    D3 -- Yes, engaged --> I3_MYTH
+    D3 -- Yes, wants estimate --> AQ_MAIN
+    D3 -- No engagement --> UR1
+    D4 -- Review Session fit --> D_SKIP
+    D4 -- Measurement fit --> D_SKIP
+    D4 -- Window Estimate fit --> AQ_MAIN
+    D4 -- Needs rep qualification --> TASK1
+    B6 --> D6B
+    D6B -- Referrer context = review --> SPR1
+    D6B -- Referrer context = estimate --> SPW1
+    D6B -- Referrer context = measurement --> SPM1
+    D6B -- High intent ready to book --> TASK1
+    D6B -- Unclear needs qualification --> TASK1
+    TASK1 --> D_TASK{"Rep Selected - Which Path?<br>REP-OWNED DECISION"}
+    D_TASK -- Needs qualification first --> D_SKIP
+    D_TASK -- Ready for in-home book directly --> AQ_MAIN
+    D_TASK -- Window Estimate --> AQ_MAIN
+    V1 --> D5
+    D5 -- Watched 50%+ or CTA click --> SPR1
+    D5 -- No meaningful engagement --> FS1
+    V2 --> D6
+    D6 -- Clicked / replied --> SPM1
+    D6 -- No engagement --> FS1
+    V3 --> D7
+    D7 -- Clicked / replied --> SPW1
+    D7 -- No engagement --> FS1
+    SPR1 --> SPR2
+    SPR2 --> SPR3
+    SPR3 --> D_SKIP
+    SPM1 --> SPM2
+    SPM2 --> SPM3
+    SPM3 --> D_SKIP
+    SPW1 --> SPW2
+    SPW2 --> SPW3
+    SPW3 --> AQ_MAIN
+    D_SKIP -- High intent referral rep-qualified skip to main --> AQ_MAIN
+    D_SKIP -- Risk Report path phone qualify first --> AQ_QUAL
+    D_SKIP -- Estimate Calculator verify measurements first --> AQ_QUAL
+    AQ_QUAL --> BK_RS & BK_MV
+    BK_RS --> D_QUAL
+    BK_MV --> D_QUAL
+    D_QUAL -- Qualification booked --> BR1
+    D_QUAL -- Qualification booked MV --> BM1
+    D_QUAL -- Timeout --> FS1
+    AQ_MAIN --> BK_WE
+    BK_WE --> D_MAIN
+    D_MAIN -- Window Estimate booked --> CC1
+    D_MAIN -- Still engaging --> BK_WE
+    D_MAIN -- Timeout --> FS1
+    FS1 --> D_FS1
+    D_FS1 -- Booked main appointment --> CC1
+    D_FS1 -- Booked qualification --> BR1
+    D_FS1 -- No response --> DS1
+    DS1 --> D_DS
+    D_DS -- Accepted --> D_DS_NEXT
+    D_DS -- No response --> ANB1
+    D_DS_NEXT -- Books main appointment --> CC1
+    D_DS_NEXT -- Books qualification --> BR1
+    ANB1 --> D_ANB
+    D_ANB -- Score spike re-enter booking --> AQ_MAIN
+    D_ANB -- Replied rep task --> TASK1
+    D_ANB -- 90 days no engagement --> UR1
+    BR1 --> D_QUAL_OUT
+    BM1 --> D_QUAL_OUT
+    D_QUAL_OUT -- Showed + qualified book main appointment --> AQ_MAIN
+    D_QUAL_OUT -- Showed + not ready nurture --> FS1
+    D_QUAL_OUT -- No-show --> NS_QUAL
+    NS_QUAL -- Rebooked qualification --> BR1
+    NS_QUAL -- No rebook --> FS3
+    CC1 --> D_CC
+    D_CC -- Confirmed proceed to appointment --> WE_CONF
+    D_CC -- Cancelled --> OBJ1
+    D_CC -- No-show on conf call --> CC1
+    WE_CONF --> WE1
+    WE1 --> D_WE_OUT
+    D_WE_OUT -- Showed --> AO_MAIN
+    D_WE_OUT -- No-show --> NS_WE
+    NS_WE -- Rebooked --> CC1
+    NS_WE -- No rebook --> FS3
+    AO_MAIN --> D_MAIN_ROUTE
+    D_MAIN_ROUTE -- Ready for close --> SALES1
+    D_MAIN_ROUTE -- Needs follow-up --> PA1
+    D_MAIN_ROUTE -- Objection detected --> OBJ1
+    D_MAIN_ROUTE -- Stalled --> FS2
+    PA1 -- Objection detected --> OBJ1
+    PA1 -- No engagement --> FS2
+    PA1 -- Ready to close --> SALES1
+    FS3 --> D_FS3
+    D_FS3 -- Rebooked main appointment --> CC1
+    D_FS3 -- Rebooked qualification --> BR1
+    D_FS3 -- No response --> UR1
+    FS2 --> D_FS2
+    D_FS2 -- Accepted next step --> SALES1
+    D_FS2 -- No response --> ANB1
+    D_FS2 -- Needs different path --> TASK1
+    OBJ1 --> D_OBJ
+    D_OBJ -- Resolved book main appointment --> AQ_MAIN
+    D_OBJ -- Resolved close --> SALES1
+    D_OBJ -- No response --> FS2
+    SALES1 -- SOLD Deal Won --> CJ1
+    SALES1 -- LOST --> UR1
+    CJ1 --> CJ2
+    CJ2 --> CJ3
+    CJ3 --> CJ5 & CJ4
+    CJ5 --> CJ6
+    CJ4 --> CJ6
+    CJ6 -. Referral lead enters system .-> E1
+    CJ3 -. Disengaged customer .-> CJ7
+    CJ7 --> D_WIN
+    D_WIN -- Re-engaged wants more of same --> CJ4
+    D_WIN -- Wants new service --> D_WIN_NEXT
+    D_WIN -- No response --> ARCHIVE
+    D_WIN_NEXT -- Main appointment --> AQ_MAIN
+    D_WIN_NEXT -- Needs qualification --> D_SKIP
+    D_WIN_NEXT -- Needs rep qualification --> TASK1
+    LP_D -- DEAD suppress --> DEAD_SUPP
+    LP_D -- Set or Cnf stale appointment --> STALE_APPT
+    LP_D -- Group 1 cold never demoed --> GRP1
+    LP_D -- Group 2 appt cancelled before demo --> GRP2
+    LP_D -- Group 3 demo happened no sale --> GRP3
+    LP_D -- Group 4 deferred not ready --> GRP4
+    STALE_APPT -. replied re-engage .-> TASK1
+    STALE_APPT -. no reply 7 days .-> RE1
+    GRP1 --> UR1
+    GRP2 --> FS3
+    GRP3 --> OBJ1
+    GRP4 --> RE1
+    UR1 --> RE1
+    RE1 --> D17
+    D17 -- Yes --> D18
+    D17 -- No --> ARCHIVE
+    D18 -- Main appointment --> AQ_MAIN
+    D18 -- Needs qualification --> D_SKIP
+    D18 -- Rep qualification --> TASK1
+    VL0 --> VL1
+    VL1 --> VL2
+    VL2 --> VL3
+    VL3 --> VL4
+    TE1 --> TE2
+    TE2 --> TE3
+    TE3 --> TE4
+    TE4 --> TE5
+    TE5 --> TE6
+    TEL_RULE ~~~ FUNNEL_COLLAPSE
+    FUNNEL_COLLAPSE ~~~ BEHAVIOR_STATES
+    BEHAVIOR_STATES ~~~ NEG_SIGNALS
+    MAS1 ==> MAS2
+    MAS2 ==> MAS3
+    MAS3 ==> MAS4
+    MAS4 ==> MAS5
+    SA1 --> SA2
+    SA2 --> SA3
+    SA3 --> SA4
+    SA4 --> SA5
+
+    COL1_H:::sgHeader
+    TH:::trafficLabel
+    T1:::traffic
+    T2:::traffic
+    TE:::trafficLabel
+    T4:::traffic
+    T8:::trafficNew
+    TO:::trafficLabel
+    T5:::traffic
+    T6:::traffic
+    T7:::traffic
+    COL1B_H:::sgHeader
+    AC1:::attractiveChar
+    COL1C_H:::sgHeader
+    VL0:::valueLadder
+    VL1:::valueLadder
+    VL2:::valueLadder
+    VL3:::valueLadder
+    VL4:::valueLadder
+    COL1D_H:::sgHeader
+    SAL_HEADER:::storyArc
+    SA1:::storyArc
+    SA2:::storyArc
+    SA3:::storyArc
+    SA4:::storyArc
+    SA5:::storyArc
+    SAL_MAP:::storyArc
+    COL1E_H:::sgHeader
+    TEL_HEADER:::trustEscalation
+    TE1:::trustEscalation
+    TE2:::trustEscalation
+    TE3:::trustEscalation
+    TE4:::trustEscalation
+    TE5:::trustEscalation
+    TE6:::trustEscalation
+    TEL_RULE:::trustEscalation
+    FUNNEL_COLLAPSE:::momentum
+    BEHAVIOR_STATES:::trustEscalation
+    NEG_SIGNALS:::safeguard
+    COL2_H:::sgHeader
+    E1:::system
+    LS1:::system
+    SPEED_TO_LEAD:::hotLead
+    HOT1:::hotLead
+    LP_BOUNDARY:::system
+    COL3_H:::sgHeader
+    R1:::system
+    D1:::system
+    COL4_H:::sgHeader
+    PF_HEADER:::bridge
+    B1:::bridge
+    B2:::bridge
+    B3:::bridgeAI
+    D2:::bridge
+    B4:::bridge
+    D3:::bridge
+    B5:::bridgeRep
+    D4:::bridge
+    B6:::bridge
+    D6B:::bridge
+    B7:::bridgeNew
+    TASK1:::rep
+    COL5_H:::sgHeader
+    IND_HEADER:::indoctrination
+    IND_RISK_H:::sgSubHeader
+    I1_MYTH:::indoctrination
+    I1_SECRET:::indoctrination
+    I1_MISTAKE:::indoctrination
+    I1_ALT:::indoctrination
+    IND_EST_H:::sgSubHeader
+    I2_MYTH:::indoctrination
+    I2_SECRET:::indoctrination
+    I2_MISTAKE:::indoctrination
+    IND_CANV_H:::sgSubHeader
+    I3_MYTH:::indoctrination
+    I3_SECRET:::indoctrination
+    IND_HIDIG_H:::sgSubHeader
+    I4_AUTHORITY:::indoctrination
+    I4_ROI:::indoctrination
+    COL5B_H:::sgHeader
+    V1:::content
+    D5:::content
+    V2:::content
+    D6:::content
+    V3:::content
+    D7:::content
+    COL5C_H:::sgHeader
+    SP_REVIEW_H:::sgSubHeader
+    SPR1:::solutionPitch
+    SPR2:::solutionPitch
+    SPR3:::solutionPitch
+    SP_MV_H:::sgSubHeader
+    SPM1:::solutionPitch
+    SPM2:::solutionPitch
+    SPM3:::solutionPitch
+    SP_WE_H:::sgSubHeader
+    SPW1:::solutionPitch
+    SPW2:::solutionPitch
+    SPW3:::solutionPitch
+    COL6_H:::sgHeader
+    POS_HEADER:::booking
+    QUAL_TIER_H:::sgSubHeader
+    AQ_QUAL:::appQualifier
+    BK_RS:::booking
+    BK_MV:::booking
+    MAIN_TIER_H:::sgSubHeader
+    AQ_MAIN:::appQualifier
+    BK_WE:::bookingNew
+    COL6B_H:::sgHeader
+    FS1:::flashSale
+    D_FS1:::flashSale
+    ANB1:::seinfeldBroadcast
+    D_ANB:::seinfeldBroadcast
+    FS2:::flashSalePost
+    D_FS2:::flashSalePost
+    D_FS2_NEXT:::flashSalePost
+    FS3:::flashSaleNoShow
+    D_FS3:::flashSaleNoShow
+    D_FS3_NEXT:::flashSaleNoShow
+    DS1:::downsell
+    D_DS:::downsell
+    D_DS_NEXT:::downsell
+    COL7_H:::sgHeader
+    STAGE4_LABEL:::funnelLabel
+    QUAL_BOOKED_H:::sgSubHeader
+    BR1:::booked
+    BM1:::booked
+    CONF_CALL_H:::sgSubHeader
+    CC1:::confirmCall
+    MAIN_BOOKED_H:::sgSubHeader
+    COL8_H:::sgHeader
+    QUAL_OUT_H:::sgSubHeader
+    MAIN_OUT_H:::sgSubHeader
+    COL8B_H:::sgHeader
+    COL8C_H:::sgHeader
+    OBJ1:::objection
+    D_OBJ:::objection
+    COL8D_H:::sgHeader
+    SALES1:::sales
+    LP_DISP_GATE_H:::lpDispGate
+    LP_D:::lpDispGate
+    DEAD_SUPP:::recovery
+    STALE_APPT:::lpDispGate
+    GRP1:::recovery
+    GRP2:::flashSaleNoShow
+    GRP3:::objection
+    GRP4:::recovery
+    COL9_H:::sgHeader
+    UR1:::recovery
+    RE1:::recovery
+    D17:::recovery
+    D18:::recoveryRep
+    ARCHIVE:::recovery
+    COL10_H:::sgHeader
+    CJ7:::customerWinback
+    D_WIN:::customerWinback
+    D_WIN_NEXT:::customerWinback
+    COL11_H:::sgHeader
+    CJ_HEADER:::customer
+    CJ_ONBOARD_H:::sgSubHeader
+    CJ1:::customer
+    CJ2:::customer
+    CJ_LOYALTY_H:::sgSubHeader
+    CJ3:::customer
+    CJ4:::customer
+    CJ_PROMOTE_H:::sgSubHeader
+    CJ5:::customer
+    CJ_REFER_H:::sgSubHeader
+    CJ6:::customerRef
+    COL12_H:::sgHeader
+    SR1:::safeguard
+    SR2:::safeguard
+    SR3:::safeguard
+    SR4:::safeguard
+    SR4B:::buyerStageTag
+    SR5:::safeguard
+    SR6:::safeguard
+    SR7:::safeguard
+    LP_DISP_MAP:::lpDispGate
+    DS_AUDIT:::dotcomSecrets
+    HSO1:::dotcomSecrets
+    C1:::safeguard
+    C2:::safeguard
+    C3:::safeguard
+    C4:::safeguard
+    C5:::safeguard
+    C6:::safeguard
+    KPI1:::safeguard
+    KPI2:::safeguard
+    KPI3:::safeguard
+    KPI4:::safeguard
+    MAP1:::safeguard
+    MAP2:::safeguard
+    MAP3:::safeguard
+    TITLE:::system
+    RULE1:::system
+    D_TASK:::rep
+    SPINE_H:::sgHeader
+    MOMENTUM1:::momentum
+    MAS1:::spineAwareness
+    MAS2:::spineEducation
+    MAS3:::spineComparison
+    MAS4:::spineDecision
+    MAS5:::spinePostDecision
+    classDef sgHeader fill:#1e293b,stroke:#1e293b,color:#ffffff,stroke-width:0px
+    classDef sgSubHeader fill:#374151,stroke:#374151,color:#f3f4f6,stroke-width:0px
+    classDef traffic fill:#dbeafe,stroke:#1d4ed8,color:#111827,stroke-width:1.5px
+    classDef trafficLabel fill:#bfdbfe,stroke:#1d4ed8,color:#1d4ed8,stroke-width:1px,font-style:italic
+    classDef trafficNew fill:#d1fae5,stroke:#059669,color:#111827,stroke-width:2.5px
+    classDef system fill:#e5e7eb,stroke:#4b5563,color:#111827,stroke-width:1.5px
+    classDef funnelLabel fill:#f0fdf4,stroke:#16a34a,color:#16a34a,stroke-width:1px,font-style:italic
+    classDef attractiveChar fill:#fef9c3,stroke:#ca8a04,color:#111827,stroke-width:2.5px
+    classDef valueLadder fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:2px
+    classDef storyArc fill:#fce4ec,stroke:#c2185b,color:#111827,stroke-width:2px
+    classDef trustEscalation fill:#e8eaf6,stroke:#3f51b5,color:#111827,stroke-width:2px
+    classDef hotLead fill:#fecaca,stroke:#dc2626,color:#111827,stroke-width:2.5px,stroke-dasharray:6 3
+    classDef bridge fill:#ede9fe,stroke:#7c3aed,color:#111827,stroke-width:1.5px
+    classDef bridgeAI fill:#ede9fe,stroke:#7c3aed,color:#111827,stroke-width:2px,stroke-dasharray:5 5
+    classDef bridgeRep fill:#ede9fe,stroke:#ea580c,color:#111827,stroke-width:2px
+    classDef bridgeNew fill:#d1fae5,stroke:#059669,color:#111827,stroke-width:2.5px
+    classDef rep fill:#fff7ed,stroke:#ea580c,color:#111827,stroke-width:2px
+    classDef indoctrination fill:#fce7f3,stroke:#db2777,color:#111827,stroke-width:1.5px
+    classDef content fill:#f3e8ff,stroke:#9333ea,color:#111827,stroke-width:1.5px
+    classDef solutionPitch fill:#e0e7ff,stroke:#4f46e5,color:#111827,stroke-width:1.5px
+    classDef appQualifier fill:#d1fae5,stroke:#059669,color:#111827,stroke-width:2px,stroke-dasharray:4 4
+    classDef confirmCall fill:#f0fdf4,stroke:#15803d,color:#14532d,stroke-width:2.5px
+    classDef booking fill:#dcfce7,stroke:#16a34a,color:#111827,stroke-width:1.5px
+    classDef bookingNew fill:#a7f3d0,stroke:#059669,color:#111827,stroke-width:2.5px
+    classDef seinfeldBroadcast fill:#dbeafe,stroke:#2563eb,color:#111827,stroke-width:2.5px,stroke-dasharray:8 4
+    classDef flashSale fill:#fff7ed,stroke:#ea580c,color:#111827,stroke-width:1.5px
+    classDef flashSalePost fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:1.5px
+    classDef flashSaleNoShow fill:#fed7aa,stroke:#c2410c,color:#111827,stroke-width:1.5px
+    classDef downsell fill:#fae8ff,stroke:#a855f7,color:#111827,stroke-width:1.5px
+    classDef confContent fill:#ccfbf1,stroke:#0d9488,color:#111827,stroke-width:1.5px
+    classDef booked fill:#bbf7d0,stroke:#15803d,color:#111827,stroke-width:1.5px
+    classDef bookedRep fill:#bbf7d0,stroke:#ea580c,color:#111827,stroke-width:2px
+    classDef outcome fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:1.5px
+    classDef outcomeRep fill:#fef3c7,stroke:#ea580c,color:#111827,stroke-width:2px
+    classDef objection fill:#fecdd3,stroke:#e11d48,color:#111827,stroke-width:1.5px
+    classDef lpDispGate fill:#fef08a,stroke:#ca8a04,color:#111827,stroke-width:2.5px
+    classDef recovery fill:#fed7aa,stroke:#ea580c,color:#111827,stroke-width:1.5px
+    classDef recoveryRep fill:#fed7aa,stroke:#ea580c,color:#111827,stroke-width:2px,stroke-dasharray:5 5
+    classDef sales fill:#fde68a,stroke:#ca8a04,color:#111827,stroke-width:1.5px
+    classDef customer fill:#a7f3d0,stroke:#059669,color:#111827,stroke-width:1.5px
+    classDef customerRef fill:#a7f3d0,stroke:#059669,color:#111827,stroke-width:2px
+    classDef customerWinback fill:#fecaca,stroke:#dc2626,color:#111827,stroke-width:1.5px
+    classDef dotcomSecrets fill:#eff6ff,stroke:#1d4ed8,color:#1d4ed8,stroke-width:2px
+    classDef buyerStageTag fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e,stroke-width:2.5px
+    classDef safeguard fill:#fecaca,stroke:#dc2626,color:#111827,stroke-width:1.5px
+    classDef spineAwareness fill:#dbeafe,stroke:#1d4ed8,color:#1e3a5f,stroke-width:3px
+    classDef spineEducation fill:#ede9fe,stroke:#7c3aed,color:#3b0764,stroke-width:3px
+    classDef spineComparison fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:3px
+    classDef spineDecision fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:3px
+    classDef spinePostDecision fill:#a7f3d0,stroke:#059669,color:#064e3b,stroke-width:3px
+    classDef momentum fill:#fef08a,stroke:#eab308,color:#713f12,stroke-width:3px,stroke-dasharray:8 4
