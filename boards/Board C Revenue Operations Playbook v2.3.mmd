@@ -1,0 +1,242 @@
+---
+config:
+  layout: dagre
+  themeVariables:
+    fontSize: 24px
+  flowchart:
+    wrappingWidth: 900
+    padding: 24
+    nodeSpacing: 30
+    rankSpacing: 40
+---
+flowchart TD
+
+ subgraph HEADER[" "]
+    direction TB
+        LEGEND["REECE FUNNEL - OPERATOR VIEW (Board C v2.3)<br>The simplified control map for sales + marketing teams.<br>For full architecture see Board A v5.17 (Strategy) + Board B v6.17 (GHL Implementation).<br>Every box shows: WHAT happens, WHICH story to tell, and WHAT trust we are building.<br>EC LANE LIVE: Estimate Calculator leads now flow through complete Antifragile funnel (entry to MV booking). Published March 23 2026.<br>KEY CONTEXT: Lead Perfection owns Days 1-14 with call center. GHL runs parallel and takes over Day 15+.<br>THE BIGGEST OPPORTUNITY IN THE SYSTEM: 37,720 prospects past Day 15 never received structured follow-up.<br>Zero additional ad spend required. Conservative estimate: $20.5-35.4M recoverable."]
+  end
+
+ subgraph PSYCH[" "]
+    direction LR
+        PSYCH_H["BUYER PSYCHOLOGY - Messaging Must Match Mental State"]:::sgHeader
+        BP1["1. AWARENESS<br>They just discovered<br>the problem exists<br>TELL: why it matters<br>DO NOT: position or price<br>BUT WATCH FOR: if they show<br>ready-hesitant behavior<br>(clicking everything, visiting<br>booking page) - CAPTURE NOW<br>regardless of stage"]
+        BP2["2. EDUCATION<br>They believe the problem<br>now learning solutions<br>TELL: proof it works<br>DO NOT: hard sell or compare"]
+        BP3["3. VENDOR<br>COMPARISON<br>They want a solution<br>now choosing WHO<br>TELL: why Reece specifically<br>DO NOT: re-educate<br>WATCH FOR: comparing behavior<br>push SA3 positioning hard<br>ALSO WATCH: if they click but<br>never book = TRUST GAP<br>System injects authority proof<br>and guarantee automatically"]
+        BP4["4. DECISION<br>They chose Reece<br>working through final<br>objections<br>TELL: offer + guarantee<br>DO NOT: backtrack"]
+        BP5["5. POST-DECISION<br>They bought<br>building loyalty<br>TELL: you chose right<br>DO NOT: question them"]
+  end
+
+ subgraph SOURCES[" "]
+    direction TB
+        SOURCES_H["LEAD SOURCE QUALITY TIERS - How to Prioritize Rep Callbacks"]:::sgHeader
+        TIER_A["TIER A - HIGHEST INTENT (first-touch prospect close rate 40%+ 2021+)<br>Self Generated: 89.2% close | $27,128 avg (343 prospects)<br>Old Sub Source: 71.7% close (46 prospects - reclassify to referral)<br>Customer Referral: 64.6% close | $26,910 avg (426 prospects)<br>TheHomeMag: 49.5% close | $26,277 avg (204 prospects)<br>Previous Customer: 44.6% close | $14,212 avg (325 prospects)<br>Canvass Sticky: 45.3% close | $26,046 avg (772 prospects)<br>REMOVED: Employee Referral (0 prospects since 2021) | Home Show (3 since 2021)<br>CALLBACK PRIORITY: same-day | TRUST LEVEL: already at L3-L4<br>MESSAGING: skip indoctrination - go directly to solution pitch or booking"]
+        TIER_B["TIER B - HIGH INTENT (first-touch prospect close rate 15-40% 2021+)<br>Google Service Ads: 39.2% | MySafeFloridaHome: 33.3%<br>Google Organic: 32.3% | Canvass: 29.3% (12,508 prospects - the origination engine)<br>Prolific Marketing: 28.8% | Google PPC Windows: 27.5%<br>Priceless: 24.2% | Reecewindows.com: 23.2% | HercuLeads: 18.9%<br>CALLBACK PRIORITY: same-day | TRUST LEVEL: L2-L3<br>MESSAGING: abbreviated 2-3 msg indoc + fast-track to booking"]
+        TIER_C["TIER C - MODERATE INTENT (first-touch prospect close rate 8-15% 2021+)<br>Lead Gurus: 12.8% (12,015 prospects - second largest source)<br>MyHomePros: 12.3% | Facebook: 11.7% | Clever: 11.4%<br>Modernize: 9.5% | Simpletext/Iheart: 9.3%<br>NOTE: Lead Gurus demo-to-close is 48.3% - funnel works once they get to demo<br>The bottleneck is lead-to-demo rate at 26.6% - fix upstream activation<br>CALLBACK PRIORITY: within 24 hours | TRUST LEVEL: L1-L2<br>MESSAGING: standard 3-4 msg indoc + education + solution pitch before booking"]
+        TIER_D["TIER D - LOW INTENT (first-touch prospect close rate under 8% 2021+)<br>Contractor Appt Rev Share: 6.1% (7,347 prospects)<br>Home4Quotes: 5.6% | Contractor Appt-West: 5.4%<br>Chat (REECE WEBSITE): 4.8% | Porch101: 3.6% | LeadPilotData: 0%<br>NOTE: Even Tier D has 40-48% demo-to-close rates<br>The appointment works - the funnel is failing to get them there<br>CALLBACK PRIORITY: within 48-72 hours | TRUST LEVEL: L1<br>MESSAGING: full 4-msg indoc + VSL + solution pitch required before booking"]
+  end
+
+ subgraph FUNNEL[" "]
+    direction TB
+        FUNNEL_H["THE REECE FUNNEL - WHAT OPERATORS NEED TO KNOW<br>DATA MODEL: All numbers are first-touch, prospect-level, 2021+ only<br>ROUTING MODEL: State-based (what mental state they are in NOW) not just sequence-based<br>LIVE CONTROL CENTER (v1.9): Real-time visibility into where people are stalling,<br>where momentum is spiking, and which content is working. Alerts team when things break.<br>49,974 unique prospects | 18.4% close rate | $24,409 avg job | $223.6M total revenue"]:::sgHeader
+
+    subgraph S1[" "]
+        direction TB
+            S1_H["STEP 1 - TRAFFIC + LEAD CAPTURE"]:::stepHeader
+            OP1["LEAD COMES IN from one of 7 sources:<br>Risk Report | Estimate Calculator | Chatbot | Canvassing<br>Referral | High-Intent Digital (Google/Direct Site) | Other<br>DAYS 1-14 - CALL CENTER + LEAD PERFECTION OWN THE LEAD:<br>Lead Perfection is the primary CRM and system of record.<br>The call center works the lead through LP with daily call attempts.<br>GHL automated sequences (emails + SMS) run IN PARALLEL alongside those calls.<br>GHL is not replacing the call center - it is warming leads between calls.<br>A lead who just read an email about hurricane damage responds differently on the next call.<br>SPEED-TO-LEAD RULE (v2.1 FINAL - THE SINGLE MOST IMPORTANT OPERATIONAL RULE):<br>The moment of highest intent is IMMEDIATELY after they reach out.<br>Wait too long and no email sequence in the world will recover it.<br>TIER A + B leads (Self Generated, Customer Referral, Canvass, Google, etc):<br>  CALL WITHIN 5 MINUTES. Not 30. Not 2 hours. FIVE MINUTES.<br>  If you miss them: SMS fires automatically within 60 seconds.<br>  These leads close at 15-89%. Speed is the multiplier.<br>TIER C leads (Lead Gurus, MyHomePros, Clever, Modernize):<br>  Call within 30 minutes. Education sequence starts in parallel.<br>TIER D leads (Contractor Appt, Porch101, Chat):<br>  Automated SMS welcome in 5 minutes. Call within 2 hours.<br>  Full education sequence fires immediately.<br>MEASUREMENT: Track how fast you make first contact by source tier.<br>If Tier A/B average exceeds 10 minutes, that is the problem to fix FIRST.<br>IF LEAD IS ON FIRE (score spikes fast): Rep gets IMMEDIATE alert - call them NOW<br>DAY 15+ - GHL TAKES OVER:<br>If no appointment set after 14 days, LP hands off to GHL automatically.<br>The Day 15+ database holds 37,720 unique prospects with zero structured follow-up.<br>At $24,409 avg job value, even 2% reactivation = approximately $18-28M.<br>Zero additional ad spend. These prospects already expressed interest."]
+    end
+
+    subgraph S2[" "]
+        direction TB
+            S2_H["STEP 2 - WELCOME + PRE-FRAME (The First Impression)"]:::stepHeader
+            OP2["PERSONALIZED WELCOME MESSAGE - sent automatically based on HOW they found us<br>Risk Report lead? We confirm their report + hint at what it reveals<br>Estimate lead? LIVE - We confirm their numbers + tease why they might be off (E.2 published)<br>Chatbot lead? We ask what matters most to them (survey funnel)<br>Canvassing lead? We share a local neighbor story<br>Referral lead? We thank the referrer by name + fast-track to booking<br>High-Intent Digital lead? We acknowledge they searched for us specifically + short path to appointment<br>TRUST BUILDING: Make it easy. Show we noticed them.<br>STORY TO TELL: SA1 Hurricane hook or SA4 Insurance hook<br>REFERRAL FAST-TRACK: Previous Customer / Employee Referral / Customer Referral<br>  These leads go straight to Solution Pitch or Booking - no indoctrination needed<br>  They already trust us because someone they trust trusts us"]
+    end
+
+    subgraph S3[" "]
+        direction TB
+            S3_H["STEP 3 - EDUCATION SEQUENCE (Why This Problem Matters)"]:::stepHeader
+            OP3["3-5 EMAILS OVER 7-14 DAYS - RUNS ALONGSIDE CALL CENTER (not instead of it)<br>IMPORTANT: Every email includes a booking link at the bottom (Momentum Layer v1.7)<br>Some prospects are ready after one email. If they click the booking link, we capture them immediately.<br>Do NOT wait for the sequence to finish if the prospect signals they are ready NOW.<br>Rep calling after Email 2 (Code Compliance) lands on warmer ground than a cold dial.<br>Email 1: Myth-Busting - Your home is NOT as safe as you think<br>  STORY: SA1 Hurricane Damage (family who thought they were safe)<br>Email 2: Secret Revealed - The real reason homes fail inspections<br>  STORY: SA2 Code Compliance (homeowner who got surprised)<br>Email 3: Mistake Exposed - What homeowners get wrong about protection<br>  STORY: SA3 Cheap Window Regret (saved money, paid 3x to fix)<br>Email 4: Alternative Debunked - Why DIY and ignoring it cost more<br>  STORY: SA4 Insurance Claim (claim denied, not rated)<br>HIGH-INTENT DIGITAL TRACK (Google/Direct leads): 2-email abbreviated version only<br>  Email 1: SA2 Authority (our expertise) | Email 2: SA5 ROI (home value increase)<br>  Then go straight to Solution Pitch - they already know the category<br>TRUST BUILDING: They now believe we know what we are talking about<br>REP BENEFIT: Each call after these emails is a warmer conversation"]
+    end
+
+    subgraph S4[" "]
+        direction TB
+            S4_H["STEP 4 - VSL / CASE STUDY (Why This SOLUTION Works)"]:::stepHeader
+            OP4["VIDEO OR CASE STUDY CONTENT<br>Goal: Prove that impact windows and doors are THE solution<br>Opens with SA1 Hurricane story (high drama)<br>Shows SA2 Code Compliance data (credible sources)<br>Exposes SA4 Insurance risk (the flaw nobody talks about)<br>Transitions to SA5 Home Value hope (investment, not expense)<br>CTA: Learn what this means for YOUR home<br>TRUST BUILDING: They now believe this type of solution works<br>We track: Did they watch 25%? 50%? 75%? Click CTA?"]
+    end
+
+    subgraph S5[" "]
+        direction TB
+            S5_H["STEP 5 - SOLUTION PITCH (Why REECE Is Different)"]:::stepHeader
+            OP5["3 MESSAGES - Split by appointment type<br>Message 1 - Introduction: Why our approach works<br>  STORY: SA2 Code Compliance (our expertise)<br>Message 2 - Social Proof: Real homeowner case studies<br>  STORY: SA5 Home Value + SA1 Hurricane protection<br>Message 3 - The Flaw: What happens if you choose wrong<br>  STORY: SA3 Cheap Window Regret<br>TRUST BUILDING: They believe Reece is the best option"]
+    end
+
+    subgraph S6[" "]
+        direction TB
+            S6_H["STEP 6 - BOOKING (Getting Them to Say Yes)"]:::stepHeader
+            OP6["MOMENTUM RULE: Booking links appear in EVERY message from Step 3 forward (not just here)<br>If a prospect clicks a booking link at any point in the funnel, they skip ahead to this step immediately.<br>The system detects the skip and routes them here. No waiting required.<br>TWO PATHS TO THE APPOINTMENT<br>PATH A - DIRECT (high intent, referral, High-Intent Digital, rep-qualified):<br>  Skip qualification - Book Window Estimate directly<br>  Use this path for: Employee Referral, Customer Referral, Previous Customer, Self Generated,<br>  Google PPC, Google Organic, Google Service Ads - these close at 25-98%<br>PATH B - QUALIFICATION FIRST (early stage):<br>  Book Review Session (15-min phone) OR Measurement Verification<br>  Qualification happens - then Book Window Estimate<br>Before booking: 2-3 qualifying questions (DS Rec #10)<br>Then: Relevance + Superiority + Uniqueness messaging<br>  STORY: SA5 Investment reframe + SA3 positioning<br>IF THEY DO NOT BOOK:<br>Flash Sale (5-msg urgency) - Downsell - Seinfeld weekly stories (90 days)<br>TRUST BUILDING: They trust us enough to let us in their home"]
+    end
+
+    subgraph S7[" "]
+        direction TB
+            S7_H["STEP 7 - CONFIRMATION + SHOW-UP"]:::stepHeader
+            OP7["CONFIRMATION CALL + PREP SEQUENCE<br>Once Window Estimate is booked:<br>1. Confirmation Call (5-min phone) confirms the in-home visit<br>2. Confirmation page + video: what to expect, who will visit<br>KEY FRAME: This is a consultation with a specialist - not a quote factory.<br>Reminders: 24hr + 4hr + 1hr before<br>Also: Preview what happens AFTER (funnel stack)<br>  STORY: SA5 Homeowner who went from estimate to full upgrade<br>IF NO-SHOW: Soft reset + rebook sequence<br>TRUST BUILDING: Anticipation + perceived value of the visit"]
+    end
+
+    subgraph S8[" "]
+        direction TB
+            S8_H["STEP 8 - THE IN-HOME EXPERIENCE + CLOSE"]:::stepHeader
+            OP8["THE WINDOW ESTIMATE / HOME PROTECTION ASSESSMENT<br>(Same 1.5-hour in-home appointment - different name by lead source)<br>Rep delivers personalized findings for THEIR home<br>Uses SA2 expertise + SA5 ROI specific to their property<br>Proposal with Offer Stack:<br>1. Introduction 2. Value Stack 3. Price Reveal 4. Guarantee 5. Urgency<br>UPSELL OPPORTUNITY (Tier 3): shutters, doors, premium glass<br>IF OBJECTION (diagnosis by trust level gap):<br>Price (L3 gap) - SA3 Cheap Regret | Timing (L4 gap) - SA4 Insurance<br>Spouse (L4 x2) - SA5 Investment | Trust (L2 gap) - SA2 Authority<br>Competitor (L3 gap) - SA3 | DIY (L2 gap) - SA3+SA4<br>TRUST BUILDING: The experience exceeds expectations"]
+    end
+
+    subgraph S9[" "]
+        direction TB
+            S9_H["STEP 9 - INSTALLATION + CUSTOMER JOURNEY"]:::stepHeader
+            OP9["POST-SALE - From buyer to promoter<br>Onboarding: Welcome + timeline + coordinator intro<br>Progress: HOA/permit updates + install scheduling<br>  TRIGGERED BY: Lead Perfection milestone updates (HOA approved, permit issued, etc.)<br>Post-Install: 24hr + 7-day + 30-day check-ins<br>Expansion (Tier 3): Additional products + upgrades<br>  STORY: SA5 Customers who expanded their project<br>Review: 14-day Google review request<br>REFERRAL OVERLAY (v1.8) - THE RULE: Every positive emotional moment = referral ask<br>  Emotion is highest IMMEDIATELY after value is experienced. Wait too long and you lose the window.<br>  Referrals are NOT just a post-sale step:<br>  Referral asks fire automatically at 5 moments:<br>  1. After the in-home appointment (even if they do not buy)<br>  2. During onboarding (excitement is highest right after signing)<br>  3. At each milestone (permit approved, install scheduled, install complete)<br>  4. After positive 30-day check-in<br>  5. After they submit a Google review<br>  Each ask is context-specific (not the same generic message)<br>  Customer Referrals close at 64.6% at $26,910 avg - the referral program IS a lead gen channel<br>Continuity: Annual inspection + maintenance plan<br>THE CUSTOMER BECOMES THE STORY<br>They are now SA5 - the Home Value Increase success story<br>TRUST BUILDING: All 4 types active - they are a promoter"]
+    end
+
+  end
+
+ subgraph RECOVERY[" "]
+    direction TB
+        RECOVERY_H["IF THEY STALL OR GO DARK AT ANY POINT"]:::sgHeader
+        REC1["STALLED (still engaging but not advancing)<br>THE SYSTEM NOW DIAGNOSES WHY (v1.9):<br>- Opens emails but never clicks = wrong story angle (system switches to different story)<br>- Clicks emails but never books = trust gap (system injects authority proof + guarantee)<br>- Watches video but no action = urgency gap (system fires sprint burst with deadline)<br>- Books then cancels = commitment anxiety (system sends what-to-expect reassurance)<br>- Was engaged then went silent = distraction (system switches channel, fires pattern interrupt)<br>Each of these triggers a DIFFERENT automated response. Not more of the same.<br>Flash Sale urgency sequence (5 messages)<br>If no response: Downsell (lower commitment option)<br>If no response: Seinfeld weekly broadcast (90 days of stories)<br>  Rotating: SA1 to SA3 to SA2 to SA5 to SA4 across 12 weeks<br>If score spikes: re-enter booking automatically<br>MOMENTUM LAYER: If prospect clicks booking link at ANY point during stall recovery, skip ahead"]
+        REC2["GONE DARK - 5 RECOVERY PATHS BASED ON WHAT HAPPENED IN LP<br>ALL COUNTS: unique prospects (first-touch 2021+, deduplicated)<br>CRITICAL: TIME-LAPSE MESSAGING applies to ALL recovery paths<br>Under 90 days since last contact: warm continuity - reference prior interaction naturally<br>91-365 days: cool re-relevance - DO NOT claim active relationship, lead with problem relevance<br>Over 365 days: cold pattern interrupt - treat as new lead with data, no prior contact reference<br>  Example: DO NOT say when we stopped by your home 2 years later<br>  Instead: Homeowners in [their city] are discovering something about their windows<br>GHL reads the Lead Perfection disposition code to route correctly:<br>PATH 1 - DEAD LEADS: DNC / NoHome / Bad Lead (2,156 prospects)<br>  No outreach. Suppress from all GHL sequences.<br>PATH 2 - STALE APPOINTMENT (Set/Confirmed in LP, 2,900 prospects, 378 days avg):<br>  Single SMS check-in only: Are you still in the market?<br>  If yes - rep task. If no reply after 7 days - long-term nurture.<br>  Do NOT send booking links (appointment already exists in LP)<br>PATH 3 - APPOINTMENT CANCELLED BEFORE DEMO (CXL + NS + No Demo, 7,484 prospects):<br>  CXL = the appointment was CANCELLED before the demo ran<br>  These leads BOOKED ONCE. They had enough trust. Remove friction and rebook.<br>  Rebook rescue sequence (4 messages) - soft, no guilt, easy re-schedule<br>  Do NOT restart indoctrination from scratch<br>PATH 4 - DEMO HAPPENED, NO SALE (5,513 prospects):<br>  OPPFDN: objection handling sequence (default price/timing branch if no tag)<br>    Default branch: Price/Timing (most common at $48K job size)<br>  1Leg (One Spouse Present, 231 leads, avg 3 years old): objection:spouse sequence<br>    Message MUST acknowledge time has passed: We met a while back - are both of you ready now?<br>PATH 5 - NEVER REACHED DEMO (21,823 prospects):<br>  SPRINT REACTIVATION (v1.8 - campaign bursts, NOT slow drips)<br>  Stale leads do not respond to consistency. They respond to DISRUPTION.<br>  4 SPRINT BURSTS over 84 days with SILENCE between each:<br>  Sprint 1 (Days 1-5): Code compliance angle - 3 emails + 1 SMS then go silent 21 days<br>  Sprint 2 (Days 26-30): Social proof angle - 2 emails + 1 SMS then go silent 25 days<br>  Sprint 3 (Days 55-59): Scarcity angle - limited slots + deadline then go silent 21 days<br>  Sprint 4 (Days 80-84): Final push + file close<br>  Each sprint has a STRONG ANGLE + STRONG OFFER + HARD DEADLINE<br>  Between sprints: SILENCE (no drip, no nurture, nothing)<br>  If the system detects a momentum spike during silence: capture immediately<br>  Every message includes a direct booking link"]
+  end
+
+ subgraph MOMENTUM[" "]
+    direction TB
+        MOMENTUM_H["THE MOMENTUM RULE (NEW v1.7)"]:::sgHeader
+        MOM1["WHAT THE SYSTEM WATCHES FOR:<br>Booking page visits | Video watched 75%+ | SMS replies<br>3+ email clicks in 48 hours | Return visits after going dark<br>Lead score spikes | Buying-intent replies (ready, schedule, book)<br>HOW FAST: Within 60 SECONDS. Not hours. Not days.<br>WHAT HAPPENS WHEN A SIGNAL IS DETECTED:<br>1. SMS fires immediately: Want to skip ahead? [calendar link]<br>2. Rep gets MOMENTUM SPIKE alert: call this person NOW<br>3. Education sequence pauses (do not compete with the moment)<br>4. Urgency injected: limited slots or time-bound offer<br>If they book: routes to confirmation | If not within 4h: sequence resumes"]
+        MOM2["TRUST SPIKE = FUNNEL COLLAPSE (including Speed-to-Lead):<br>Speed-to-Lead is the first momentum capture: call within 5 minutes of entry.<br><br>Sometimes a prospect is ready IMMEDIATELY:<br>Referrals | Buying-intent reply | Neighbor just installed | Hurricane warning<br>System pulls them out of ALL sequences and sends booking link instantly<br>Do NOT educate someone who is already sold. Convert them.<br>BOOKING ESCAPE HATCH: Every email has a booking link at the bottom<br>Click it at ANY stage = skip ahead to booking immediately<br>FOR REPS: When you get a MOMENTUM SPIKE alert, drop everything and call<br>THE GOAL: CAPTURE THEM THE MOMENT THEY ARE READY"]
+  end
+
+ subgraph STORIES[" "]
+    direction TB
+        STORIES_H["THE 5 STORIES EVERY TEAM MEMBER SHOULD KNOW"]:::sgHeader
+        ST1["SA1 - THE HURRICANE STORY<br>The family who thought they were safe until the storm hit<br>USE FOR: Creating urgency, motivation to act, show-rate boosting<br>EMOTION: Fear to Relief to Gratitude"]
+        ST2["SA2 - THE COMPLIANCE STORY<br>The homeowner who discovered their house failed inspection<br>USE FOR: Establishing authority, building credibility, trust objections<br>EMOTION: Surprise to Anxiety to Determination"]
+        ST3["SA3 - THE CHEAP WINDOW STORY<br>The homeowner who saved money upfront and paid 3x later<br>USE FOR: Price objections, competitor comparisons, mistake prevention<br>EMOTION: Frustration to Regret to Resolve"]
+        ST4["SA4 - THE INSURANCE STORY<br>The family whose claim was denied - windows were not rated<br>USE FOR: Timing objections, urgency creation, DIY prevention<br>EMOTION: Shock to Anger to Urgency"]
+        ST5["SA5 - THE HOME VALUE STORY<br>The homeowner whose property value jumped after install<br>USE FOR: Investment reframe, closing, referral motivation, expansion upsell<br>EMOTION: Hope to Excitement to Pride"]
+  end
+
+ subgraph LP_GLOSSARY[" "]
+    direction TB
+        LP_H["LEAD PERFECTION DISPOSITION CODES - QUICK REFERENCE FOR OPERATORS"]:::sgHeader
+        DISP1["ACTIVE LEADS (call center still owns):<br>Data = No contact yet / raw lead (13,842 in Day 15+ database)<br>Set = Appointment has been set in LP<br>Cnf = Appointment confirmed in LP<br>Verif = Lead needs phone/address verification<br>UnCon = Appointment unconfirmed<br>Soft Confirm = Soft confirmation pending"]
+        DISP2["APPOINTMENT OUTCOMES:<br>OPPFDN = Full demo was run but no sale made ($48K avg job value - prime reactivation target)<br>CXL = Appointment was CANCELLED before the demo ran (had intent - rebook sequence)<br>1Leg = Appointment held but only one decision-maker present - demo not run (apply spouse objection sequence)<br>NS = No-Show (appointment set, lead did not appear)<br>No Demo = Demo was not completed<br>FDNS = Final demo no-show (last attempt)"]
+        DISP3["DISPOSITION OUTCOMES:<br>Sale / SW = Contract signed (hand off to Client Lifecycle pipeline)<br>NIS = Not Interested after being shown (attended demo, declined after seeing)<br>NI = Not Interested (general decline)<br>BO = Be Back / Follow Up (said they would return - soft reactivation candidate)<br>OPP NOI = Not interested now but may be later (deferred - seasonal follow-up)<br>NoRehash = Do Not Rehash (explicit - no further contact on this lead)<br>DNC = Do Not Contact (legal - suppress from all GHL workflows immediately)<br>NOP NOP = No Opportunity (bad fit / not a homeowner / not in market)"]
+        DISP4["PROCESS STATES:<br>PM = Pending Measure (in-progress job - check LP before any GHL action)<br>NOC = No Contact (rep could not reach after appointment)<br>CCC = Cannot Contact (phone bad or unreachable - SMS-only outreach)<br>NoHome = Wrong address / no home at this location (dead lead)<br>Reset = Lead was reset for another attempt<br>CTR = Contractor (commercial lead - different process)<br>Issue = Problem or complaint (rep task required before any automated sequence)"]
+  end
+
+ subgraph METRICS[" "]
+    direction TB
+        METRICS_H["KEY METRICS FOR WEEKLY REVIEW (Monday)"]:::sgHeader
+        MET1["FUNNEL HEALTH:<br>Lead capture rate by source (alert if below 10% for any source)<br>Bridge completion rate (alert if below 50%)<br>VSL watch rate at 50% mark (alert if below 25%)<br>Booking rate (alert if below 15%)<br>Show rate (alert if below 60%)<br>Close rate (alert if below 20%)"]
+        MET2["LP SYNC HEALTH:<br>Day 15 handoff volume this week (how many new leads LP passed to GHL)<br>Unmapped LP sources this week (classify within 48h if 10+ leads/week)<br>Milestone trigger success rate (C.x sequences firing correctly)<br>Reactivation rate by disposition group (FS3 / O.0 / S1.1)"]
+        MET3["REVENUE PIPELINE:<br>Seinfeld broadcast re-engagement rate (alert if below 5%)<br>Objection distribution (which objections are most common - Price/Timing/Spouse)<br>Referral rate (what % of closed deals generate a referral)<br>LTV by entry source (which source produces best long-term value)"]
+  end
+
+    HEADER ~~~ PSYCH
+    PSYCH ~~~ SOURCES
+    SOURCES ~~~ FUNNEL
+    FUNNEL ~~~ RECOVERY
+    RECOVERY ~~~ STORIES
+    STORIES ~~~ LP_GLOSSARY
+    LP_GLOSSARY ~~~ METRICS
+
+    BP1 --> BP2 --> BP3 --> BP4 --> BP5
+
+    SOURCES_H ~~~ TIER_A
+    TIER_A --> TIER_B
+    TIER_B --> TIER_C
+    TIER_C --> TIER_D
+
+    FUNNEL_H ~~~ OP1
+    S1_H ~~~ OP1
+    OP1 --> OP2
+    S2_H ~~~ OP2
+    OP2 --> OP3
+    S3_H ~~~ OP3
+    OP3 --> OP4
+    S4_H ~~~ OP4
+    OP4 --> OP5
+    S5_H ~~~ OP5
+    OP5 --> OP6
+    S6_H ~~~ OP6
+    OP6 --> OP7
+    S7_H ~~~ OP7
+    OP7 --> OP8
+    S8_H ~~~ OP8
+    OP8 --> OP9
+    S9_H ~~~ OP9
+
+    RECOVERY_H ~~~ REC1
+    REC1 ~~~ REC2
+
+    STORIES_H ~~~ ST1
+    ST1 ~~~ ST2
+    ST2 ~~~ ST3
+    ST3 ~~~ ST4
+    ST4 ~~~ ST5
+
+    LP_H ~~~ DISP1
+    DISP1 ~~~ DISP2
+    DISP2 ~~~ DISP3
+    DISP3 ~~~ DISP4
+
+    METRICS_H ~~~ MET1
+    MET1 ~~~ MET2
+    MET2 ~~~ MET3
+
+    classDef sgHeader fill:#1e293b,stroke:#1e293b,color:#ffffff,stroke-width:0px
+    classDef stepHeader fill:#1e3a5f,stroke:#1e3a5f,color:#ffffff,stroke-width:0px
+    classDef operatorBox fill:#f8fafc,stroke:#64748b,color:#111827,stroke-width:1px
+    classDef recoveryBox fill:#fff7ed,stroke:#ea580c,color:#111827,stroke-width:1.5px
+    classDef storyBox fill:#fce4ec,stroke:#c2185b,color:#111827,stroke-width:1.5px
+    classDef metricsBox fill:#eff6ff,stroke:#1d4ed8,color:#111827,stroke-width:1.5px
+    classDef tierA fill:#d1fae5,stroke:#059669,color:#111827,stroke-width:2px
+    classDef tierB fill:#dbeafe,stroke:#1d4ed8,color:#111827,stroke-width:1.5px
+    classDef tierC fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:1.5px
+    classDef tierD fill:#fecdd3,stroke:#e11d48,color:#111827,stroke-width:1.5px
+    classDef glossaryBox fill:#f0fdf4,stroke:#16a34a,color:#111827,stroke-width:1.5px
+
+    LEGEND:::operatorBox
+    PSYCH_H:::sgHeader
+    BP1:::operatorBox
+    BP2:::operatorBox
+    BP3:::operatorBox
+    BP4:::operatorBox
+    BP5:::operatorBox
+    SOURCES_H:::sgHeader
+    TIER_A:::tierA
+    TIER_B:::tierB
+    TIER_C:::tierC
+    TIER_D:::tierD
+    FUNNEL_H:::sgHeader
+    OP1:::operatorBox
+    OP2:::operatorBox
+    OP3:::operatorBox
+    OP4:::operatorBox
+    OP5:::operatorBox
+    OP6:::operatorBox
+    OP7:::operatorBox
+    OP8:::operatorBox
+    OP9:::operatorBox
+    RECOVERY_H:::sgHeader
+    REC1:::recoveryBox
+    REC2:::recoveryBox
+    STORIES_H:::sgHeader
+    ST1:::storyBox
+    ST2:::storyBox
+    ST3:::storyBox
+    ST4:::storyBox
+    ST5:::storyBox
+    LP_H:::sgHeader
+    DISP1:::glossaryBox
+    DISP2:::glossaryBox
+    DISP3:::glossaryBox
+    DISP4:::glossaryBox
+    METRICS_H:::sgHeader
+    MET1:::metricsBox
+    MET2:::metricsBox
+    MET3:::metricsBox
