@@ -6,8 +6,9 @@
  * the GITHUB_PAT has access to. Defaults to GITHUB_REPO env var.
  * 
  * Cross-repo access:
- * - LP MCP: getLpRepo() → LP_GITHUB_REPO env var
- * - n8n:    getN8nRepo() → N8N_GITHUB_REPO env var
+ * - LP MCP:    getLpRepo() → LP_GITHUB_REPO env var
+ * - n8n:       getN8nRepo() → N8N_GITHUB_REPO env var
+ * - Dashboard: getDashboardRepo() → DASHBOARD_GITHUB_REPO env var
  */
 
 const GITHUB_API = 'https://api.github.com';
@@ -40,6 +41,13 @@ export function getLpRepo(): string {
  */
 export function getN8nRepo(): string {
   return process.env.N8N_GITHUB_REPO || 'mrichard33/n8n';
+}
+
+/**
+ * Get the Reece Dashboard repo name from env.
+ */
+export function getDashboardRepo(): string {
+  return process.env.DASHBOARD_GITHUB_REPO || 'mrichard33/Reece-Dashboard';
 }
 
 async function api(path: string, options: RequestInit = {}): Promise<unknown> {
