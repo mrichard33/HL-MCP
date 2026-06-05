@@ -9,6 +9,7 @@ import {
   searchCode,
   getLpRepo,
   getN8nRepo,
+  getDashboardRepo,
   listBranches,
 } from '../../admin/github-client.js';
 
@@ -238,6 +239,57 @@ export const githubTools = {
       const branch = args.branch || 'dev';
       if (!args.confirm) return { preview: true, repo: getN8nRepo(), path: args.path, branch, message: args.message };
       return await createOrUpdateFile(args.path, args.content, args.message, branch, args.sha, getN8nRepo());
+    },
+  },
+
+  // ─── Reece Dashboard Cross-Repo Tools (read-only) ─────────────
+
+  dashboard_github_list_files: {
+    description: 'CROSS-REPO: List files in the Reece Dashboard GitHub repository.',
+    inputSchema: z.object({
+      path: z.string().optional().describe('Directory path. Empty for root.'),
+      branch: z.string().optional().describe('Branch name (default: main)'),
+    }),
+    handler: async (args: { path?: string; branch?: string }) => {
+      return await listFiles(args.path || '', args.branch || 'main', getDashboardRepo());
+    },
+  },
+
+  dashboard_github_get_file: {
+    description: 'CROSS-REPO: Get a file from the Reece Dashboard GitHub repository.',
+    inputSchema: z.object({
+      path: z.string().describe('File path'),
+      branch: z.string().optional().describe('Branch name (default: main)'),
+    }),
+    handler: async (args: { path: string; branch?: string }) => {
+      return await getFile(args.path, args.branch || 'main', getDashboardRepo());
+    },
+  },
+
+  dashboard_github_get_recent_commits: {
+    description: 'CROSS-REPO: Get recent commits from the Reece Dashboard GitHub repository.',
+    inputSchema: z.object({
+      branch: z.string().optional().describe('Branch name (default: main)'),
+      limit: z.number().optional().describe('Number of commits (max 30)'),
+    }),
+    handler: async (args: { branch?: string; limit?: number }) => {
+      return await getRecentCommits(args.branch || 'main', args.limit, getDashboardRepo());
+    },
+  },
+
+  dashboard_github_search_code: {
+    description: 'CROSS-REPO: Search code in the Reece Dashboard GitHub repository.',
+    inputSchema: z.object({ query: z.string().describe('Search query') }),
+    handler: async (args: { query: string }) => {
+      return await searchCode(args.query, getDashboardRepo());
+    },
+  },
+
+  dashboard_github_list_branches: {
+    description: 'CROSS-REPO: List all branches in the Reece Dashboard GitHub repository.',
+    inputSchema: z.object({}),
+    handler: async () => {
+      return await listBranches(getDashboardRepo());
     },
   },
 };
