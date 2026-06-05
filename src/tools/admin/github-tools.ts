@@ -242,7 +242,7 @@ export const githubTools = {
     },
   },
 
-  // ─── Reece Dashboard Cross-Repo Tools (read-only) ─────────────
+  // ─── Reece Dashboard Cross-Repo Tools (read + write) ──────────
 
   dashboard_github_list_files: {
     description: 'CROSS-REPO: List files in the Reece Dashboard GitHub repository.',
@@ -290,6 +290,51 @@ export const githubTools = {
     inputSchema: z.object({}),
     handler: async () => {
       return await listBranches(getDashboardRepo());
+    },
+  },
+
+  dashboard_github_create_or_update_file: {
+    description: 'CROSS-REPO: Create or update a file in the Reece Dashboard GitHub repository. Requires confirm: true. WARNING: committing to main may trigger an auto-deploy of the dashboard.',
+    inputSchema: z.object({
+      path: z.string().describe('File path to create/update'),
+      content: z.string().describe('File content'),
+      message: z.string().describe('Commit message'),
+      branch: z.string().optional().describe('Target branch. Defaults to main.'),
+      sha: z.string().optional().describe('Current file SHA (required for updates — get from dashboard_github_get_file)'),
+      confirm: z.boolean().optional().describe('Must be true to execute.'),
+    }),
+    handler: async (args: { path: string; content: string; message: string; branch?: string; sha?: string; confirm?: boolean }) => {
+      if (!args.confirm) {
+        const isMain = !args.branch || args.branch === 'main' || args.branch === 'master';
+        return { preview: true, repo: getDashboardRepo(), path: args.path, branch: args.branch || 'main', message: args.message, content_length: args.content.length, warning: isMain ? 'WARNING: main may trigger an auto-deploy of the dashboard. Pass confirm: true to proceed.' : 'Pass confirm: true.' };
+      }
+      return await createOrUpdateFile(args.path, args.content, args.message, args.branch, args.sha, getDashboardRepo());
+    },
+  },
+
+  dashboard_github_create_branch: {
+    description: 'CROSS-REPO: Create a new branch in the Reece Dashboard GitHub repository.',
+    inputSchema: z.object({
+      branch_name: z.string().describe('Name for the new branch'),
+      from_branch: z.string().optional().describe('Source branch (default: main)'),
+    }),
+    handler: async (args: { branch_name: string; from_branch?: string }) => {
+      return await createBranch(args.branch_name, args.from_branch || 'main', getDashboardRepo());
+    },
+  },
+
+  dashboard_github_create_pull_request: {
+    description: 'CROSS-REPO: Open a pull request in the Reece Dashboard GitHub repository. Requires confirm: true.',
+    inputSchema: z.object({
+      title: z.string().describe('PR title'),
+      head: z.string().describe('Source branch'),
+      base: z.string().optional().describe('Target branch (default: main)'),
+      body: z.string().optional().describe('PR description'),
+      confirm: z.boolean().optional().describe('Must be true to execute.'),
+    }),
+    handler: async (args: { title: string; head: string; base?: string; body?: string; confirm?: boolean }) => {
+      if (!args.confirm) return { preview: true, repo: getDashboardRepo(), title: args.title, head: args.head, base: args.base || 'main' };
+      return await createPullRequest(args.title, args.head, args.base || 'main', args.body, getDashboardRepo());
     },
   },
 };
