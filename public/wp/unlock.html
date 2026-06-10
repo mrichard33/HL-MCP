@@ -150,7 +150,7 @@
 <script>
 /* ---- telemetry ---- */
 (function () {
-  var TELEMETRY_URL = "/api/telemetry";
+  var TELEMETRY_URL = "https://hl-workflow-intelligence-mcp-production.up.railway.app/api/telemetry";
   var p = new URLSearchParams(location.search);
   var token = p.get("t") || p.get("cid") || "";
   var sid = (function () { try { var k="wp_sid", v=sessionStorage.getItem(k);
