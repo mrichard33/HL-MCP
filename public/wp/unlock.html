@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Two Details Decide Most of It — Reece Windows &amp; Doors</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,500;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --navy:#0C2340; --navy-deep:#0A1B30; --navy-darkest:#081627;
+    --red:#ED1F24; --red-deep:#C8181D;
+    --gold:#E0B23C; --white:#FFFFFF; --cream:#F6F1E7;
+    --on-navy:#B9C2CC; --line-grey:#8A97A4;
+    --serif:"Playfair Display", Georgia, "Times New Roman", serif;
+    --sans:"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --col:620px; --pad:24px;
+  }
+  *,*::before,*::after{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:var(--sans); color:var(--white); min-height:100vh; display:flex; flex-direction:column;
+    background:radial-gradient(120% 90% at 50% 0%, #11304F 0%, var(--navy-deep) 55%, var(--navy-darkest) 100%);
+  }
+  .wrap{width:100%; max-width:var(--col); margin:0 auto; padding:48px var(--pad); flex:1;}
+  .eyebrow{font-size:12px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; color:var(--gold); text-align:center; margin:0 0 18px;}
+  h1{font-family:var(--serif); font-weight:700; font-size:clamp(30px,6vw,42px); line-height:1.15; text-align:center; margin:0 0 14px; color:var(--white);}
+  .sub{color:var(--on-navy); font-size:16.5px; line-height:1.65; text-align:center; max-width:520px; margin:0 auto 28px;}
+  .sub b{color:var(--cream); font-weight:600;}
+
+  .pill-wrap{width:100%; text-align:center;}
+  .pill{
+    display:none; align-items:center; gap:12px; background:var(--cream); color:var(--navy);
+    font-size:14px; border-radius:999px; padding:8px 16px; margin:0 0 26px; max-width:92%; text-align:left;
+  }
+  .pill-text{font-weight:600;}
+  .pill a{color:var(--navy); text-decoration:underline; white-space:nowrap; font-weight:400;}
+
+  .card{
+    background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12);
+    border-radius:14px; padding:26px; max-width:520px; margin:0 auto;
+  }
+  .field{margin-bottom:16px;}
+  label{display:block; font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--on-navy); margin-bottom:7px;}
+  input, select{
+    width:100%; padding:14px 16px; font-size:16px; font-family:var(--sans);
+    border-radius:10px; border:1px solid rgba(255,255,255,.22);
+    background:rgba(255,255,255,.06); color:var(--white); outline:none;
+    transition:border-color .2s;
+  }
+  select{appearance:none; -webkit-appearance:none;
+    background-image:url("data:image/svg+xml;charset=US-ASCII,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23B9C2CC' d='M6 8L0 0h12z'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 16px center; padding-right:40px;}
+  select option{color:var(--navy); background:var(--white);}
+  input::placeholder{color:var(--line-grey);}
+  input:focus, select:focus{border-color:var(--gold);}
+  .row{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media (max-width:520px){ .row{grid-template-columns:1fr;} }
+  .err{
+    display:none; text-align:center; color:#FFD8D9; background:rgba(237,31,36,.14);
+    border:1px solid rgba(237,31,36,.45); border-radius:8px; padding:10px 14px; font-size:14px; margin-bottom:14px;
+  }
+  .err.show{display:block;}
+  #unlock-button{
+    width:100%; padding:18px 28px; font-size:16px; font-weight:800; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--white); background:var(--red); border:none; border-radius:10px; cursor:pointer;
+    transition:background .2s, transform .15s; margin-top:4px;
+  }
+  #unlock-button:hover{background:var(--red-deep); transform:translateY(-1px);}
+  #unlock-button:focus-visible{outline:3px solid var(--gold); outline-offset:2px;}
+  .consent{color:var(--line-grey); font-size:12px; line-height:1.6; margin:14px 0 0; text-align:center;}
+
+  .reveals{max-width:520px; margin:34px auto 0; padding:22px 24px; background:rgba(255,255,255,.04); border-radius:14px; border:1px solid rgba(255,255,255,.08);}
+  .reveals h2{font-family:var(--serif); font-size:18px; font-weight:600; color:var(--cream); margin:0 0 14px; text-align:center;}
+  .reveals ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:12px;}
+  .reveals li{display:flex; gap:12px; align-items:flex-start; font-size:15px; line-height:1.6; color:var(--on-navy);}
+  .reveals li b{color:var(--white); font-weight:600;}
+  .tick{color:var(--gold); font-weight:800; line-height:1.6;}
+  .steps{display:flex; justify-content:center; gap:10px; margin:38px 0 0;}
+  .step-dot{width:34px; height:3px; border-radius:2px; background:rgba(255,255,255,.16);}
+  .step-dot.on{background:var(--gold);}
+  footer{text-align:center; color:var(--line-grey); font-size:12px; padding:20px var(--pad) 28px;}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <p class="eyebrow">Step 2 of 3 · Almost There</p>
+    <h1>Two details decide most of it.</h1>
+    <p class="sub">In every home we examine, <b>the roof and the glass</b> carry the most weight &mdash; in a storm, to an intruder, and on your premium. Tell us those two things and where to send your report.</p>
+
+    <div class="pill-wrap">
+      <div id="address-pill" class="pill">
+        <span id="address-pill-text" class="pill-text"></span>
+        <a id="address-pill-change" href="/find">Not your address?</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="err" id="form-error" role="alert"></div>
+      <div class="row">
+        <div class="field">
+          <label for="roof-age">Age of your roof</label>
+          <select id="roof-age">
+            <option value="" selected disabled>Select&hellip;</option>
+            <option value="0-5">0&ndash;5 years</option>
+            <option value="6-10">6&ndash;10 years</option>
+            <option value="11-15">11&ndash;15 years</option>
+            <option value="16-20">16&ndash;20 years</option>
+            <option value="20+">More than 20 years</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="impact-windows">Impact windows installed?</label>
+          <select id="impact-windows">
+            <option value="" selected disabled>Select&hellip;</option>
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="email">Email for your report</label>
+        <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label for="phone">Mobile number</label>
+        <input type="tel" id="phone" placeholder="(954) 555-0100" autocomplete="tel" />
+      </div>
+      <button id="unlock-button" type="button">Unlock My Report &rarr;</button>
+      <p class="consent">Your report is emailed to you and a copy is texted so you don&rsquo;t lose it. By continuing, you agree Reece Windows &amp; Doors may contact you about your report by email and phone/text. Opt out anytime.</p>
+    </div>
+
+    <section class="reveals" aria-label="What your report shows">
+      <h2>Your report shows you</h2>
+      <ul>
+        <li><span class="tick">&#10003;</span><span>The single point where your home is most exposed &mdash; <b>named.</b></span></li>
+        <li><span class="tick">&#10003;</span><span>Why some homes on the same street hold while others don&rsquo;t.</span></li>
+        <li><span class="tick">&#10003;</span><span>The premium credits <b>Florida law already entitles you to.</b></span></li>
+        <li><span class="tick">&#10003;</span><span>The hurricane-deductible math most homeowners see here for the first time.</span></li>
+      </ul>
+    </section>
+
+    <div class="steps" aria-hidden="true">
+      <span class="step-dot on"></span><span class="step-dot on"></span><span class="step-dot"></span>
+    </div>
+  </main>
+  <footer>&copy; 2026 Reece Windows &amp; Doors. All Rights Reserved.</footer>
+
+<script>
+/* ---- telemetry ---- */
+(function () {
+  var TELEMETRY_URL = "/api/telemetry";
+  var p = new URLSearchParams(location.search);
+  var token = p.get("t") || p.get("cid") || "";
+  var sid = (function () { try { var k="wp_sid", v=sessionStorage.getItem(k);
+    if(!v){ v=(window.crypto&&crypto.randomUUID?crypto.randomUUID():Date.now()+"."+Math.random()); sessionStorage.setItem(k,v);} return v;
+  } catch(e){ return String(Date.now()); } })();
+  window.WP_EMIT = function (event, data) {
+    var body = JSON.stringify({ event:event, token:token, session_id:sid, ts:new Date().toISOString(), path:location.pathname, data:data||{} });
+    try {
+      if (navigator.sendBeacon) navigator.sendBeacon(TELEMETRY_URL, new Blob([body], {type:"application/json"}));
+      else fetch(TELEMETRY_URL, {method:"POST", headers:{"Content-Type":"application/json"}, body:body, keepalive:true});
+    } catch (e) {}
+  };
+  window.WP_EMIT("page_view");
+})();
+
+/* ---- address pill + form ---- */
+(function () {
+  var REPORT_URL = "/report";
+  var FIND_URL = "/find";
+  var params = new URLSearchParams(window.location.search);
+
+  // If they landed here without an address, send them to step 1.
+  if (!params.get("address") || !params.get("lat")) { window.location.replace(FIND_URL + window.location.search); return; }
+
+  var address = params.get("address");
+  var pill = document.getElementById("address-pill");
+  var pillText = document.getElementById("address-pill-text");
+  if (address && pill && pillText) {
+    pillText.textContent = "\uD83D\uDCCD " + address;
+    pill.style.display = "inline-flex";
+  }
+
+  var errBox = document.getElementById("form-error");
+
+  // S1.1 re-engagement links carry contact details as URL params — prefill
+  // so a known contact only has to answer the two home questions.
+  var prefillEmail = params.get("email");
+  var prefillPhone = params.get("phone");
+  if (prefillEmail) document.getElementById("email").value = prefillEmail;
+  if (prefillPhone) document.getElementById("phone").value = prefillPhone;
+  function showErr(msg){ errBox.textContent = msg; errBox.classList.add("show"); errBox.scrollIntoView({block:"nearest"}); }
+  function clearErr(){ errBox.classList.remove("show"); }
+
+  document.getElementById("unlock-button").addEventListener("click", function () {
+    clearErr();
+    var roofAge = document.getElementById("roof-age").value;
+    var impact = document.getElementById("impact-windows").value;
+    var email = document.getElementById("email").value.trim();
+    var phone = document.getElementById("phone").value.trim();
+
+    if (!roofAge) { showErr("Select your roof's age \u2014 it carries the most weight in your score."); return; }
+    if (!impact) { showErr("Tell us whether impact windows are installed."); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showErr("Enter a valid email so we can send your report."); return; }
+    if (phone.replace(/\D/g, "").length < 10) { showErr("Enter a valid mobile number."); return; }
+
+    var nextUrl = new URL(REPORT_URL, window.location.origin);
+    // Carry everything forward: address, attribution, identity token.
+    params.forEach(function (value, key) { nextUrl.searchParams.append(key, value); });
+    nextUrl.searchParams.set("roof_age", roofAge);
+    nextUrl.searchParams.set("impact_windows_installed", impact);
+    nextUrl.searchParams.set("email", email);
+    nextUrl.searchParams.set("phone", phone);
+
+    if (window.WP_EMIT) window.WP_EMIT("cta_click", { target: nextUrl.pathname, roof_age: roofAge, impact_windows: impact });
+    window.location.href = nextUrl.toString();
+  });
+})();
+</script>
+</body>
+</html>

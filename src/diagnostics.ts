@@ -53,6 +53,8 @@ const ENV_VARS = [
   'ENABLE_SCHEDULED_SYNC',
   'MCP_AUTH_TOKEN',
   'OAUTH_AUTHORIZE_SECRET',
+  'WP_TOKEN_SECRET',
+  'PAGE_ALLOWED_ORIGIN',
 ] as const;
 
 export async function runDiagnostics(): Promise<DiagnosticsReport> {
