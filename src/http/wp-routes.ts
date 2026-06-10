@@ -1,26 +1,25 @@
 /**
  * WP Routes — src/http/wp-routes.ts
  *
- * HTTP surface for the Weakest Point journey (report.getreecewindows.com):
+ * HTTP surface for Weakest Point journey TELEMETRY only:
  *
- *   GET  /  /find  /unlock  /report   -> static pages (src/wp/static-pages.ts)
- *   POST /api/telemetry               -> event ingestion (src/wp/telemetry.ts)
+ *   POST /api/telemetry  -> event ingestion (src/wp/telemetry.ts)
+ *
+ * The four journey pages (/  /find  /unlock  /report) are NO LONGER served
+ * by this service — they live on the dedicated "the weakest point" Railway
+ * static service (Dockerfile.wp + Caddyfile.wp in this same repo) behind
+ * report.getreecewindows.com. This service keeps ingestion + GHL write-back
+ * only, so CORS is now load-bearing: the pages post CROSS-ORIGIN from
+ * PAGE_ALLOWED_ORIGIN, and sendBeacon's application/json Blob is not
+ * CORS-safelisted, so the browser preflights — OPTIONS is handled.
  *
  * /api/telemetry always answers 204 immediately; Supabase persistence and
  * GHL write-back run fire-and-forget so navigator.sendBeacon never blocks
  * page navigation. Unknown event names get the same 204 with nothing
  * stored (the allowlist is not leaked to clients).
- *
- * CORS: only PAGE_ALLOWED_ORIGIN is allowed. The pages post same-origin in
- * practice, but sendBeacon with an application/json Blob is not
- * CORS-safelisted, so cross-origin callers preflight — OPTIONS is handled.
- *
- * Mounted in src/index.ts BEFORE the health check (GET / serves the film
- * page now; /health keeps the JSON health check).
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { serveWpPage } from '../wp/static-pages.js';
 import { recordTelemetryEvent } from '../wp/telemetry.js';
 
 const TELEMETRY_PATH = '/api/telemetry';
@@ -108,7 +107,9 @@ export async function tryHandleWpRoute(
   pathname: string,
 ): Promise<boolean> {
   if (pathname !== TELEMETRY_PATH) {
-    return serveWpPage(req, res, pathname);
+    // Pages are served by the dedicated static service now — let other
+    // routes (health check, OAuth, /mcp, 404) handle everything else.
+    return false;
   }
 
   applyCors(req, res);
