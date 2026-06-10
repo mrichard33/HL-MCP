@@ -1655,7 +1655,7 @@
 /* ---- Weakest Point telemetry (same-origin /api/telemetry) ----
    Fails silently if the endpoint isn't deployed yet. */
 (function () {
-  var TELEMETRY_URL = "/api/telemetry";
+  var TELEMETRY_URL = "https://hl-workflow-intelligence-mcp-production.up.railway.app/api/telemetry";
   var params = new URLSearchParams(location.search);
   var token = params.get("t") || params.get("cid") || "";
   var sessionId = (function () {
