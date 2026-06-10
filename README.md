@@ -100,3 +100,46 @@ supabase/
 └── migrations/
     └── 001_initial_schema.sql  # Database schema
 ```
+
+## WP Journey Pages (report.getreecewindows.com)
+
+This service also serves the four-page "Weakest Point" founder-film journey
+and captures its engagement telemetry.
+
+### Routes
+
+| Route | File | Purpose |
+|-------|------|---------|
+| `GET /` | `public/wp/index.html` | Film landing page |
+| `GET /find` | `public/wp/find.html` | Step 1 — address |
+| `GET /unlock` | `public/wp/unlock.html` | Step 2 — details + contact |
+| `GET /report` | `public/wp/report.html` | Step 3 — Home Risk Report |
+| `POST /api/telemetry` | — | Event ingestion (sendBeacon) |
+
+The JSON health check moved to `GET /health` (it previously also answered on `/`).
+The HTML files are finished artifacts — vendored verbatim, no build step.
+They are served from an in-memory cache with gzip/brotli variants and ETags.
+
+### Telemetry
+
+`POST /api/telemetry` accepts `{ event, token, session_id, ts, path, data }`
+and always returns 204 immediately. Allowlisted events: `page_view`,
+`gate_start`, `gate_complete`, `cta_click`, `video_progress`, `report_ready`.
+Every event is inserted into the `wp_page_events` Supabase table
+(migration: `supabase/migrations/010_wp_page_events.sql` — run manually in
+the Supabase dashboard).
+
+Identity tokens arrive as `?t=<contactId>.<sig>` where
+`sig = base64url(HMAC_SHA256(contactId, WP_TOKEN_SECRET))`. Verified tokens
+trigger an async GHL write-back (tags `wp:gate-complete`/`wp:cta-click`,
+custom fields `wp_gate_status`, `wp_last_engaged`, `wp_risk_grade`,
+`wp_weakest_point`, `wp_watch_pct`, optional workflow enrollment), guarded
+by a once-per-(contact, event) idempotency check on `ghl_synced`. Invalid or
+missing tokens record the event anonymously and skip GHL entirely.
+
+### Environment variables
+
+- `WP_TOKEN_SECRET` — HMAC secret for identity tokens (32+ random bytes)
+- `PAGE_ALLOWED_ORIGIN` — CORS origin for `/api/telemetry` (e.g. `https://report.getreecewindows.com`)
+- `WP_FOLLOWUP_WORKFLOW_ID` — optional; GHL workflow enrolled on `gate_complete`
+- `TRUST_RAW_CID` — dev only; accept bare contact IDs as tokens. Must be `false` in prod.
