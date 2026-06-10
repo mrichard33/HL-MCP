@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Find Your Home's Weakest Point — Reece Windows &amp; Doors</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,500;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --navy:#0C2340; --navy-deep:#0A1B30; --navy-darkest:#081627;
+    --red:#ED1F24; --red-deep:#C8181D;
+    --gold:#E0B23C; --white:#FFFFFF; --cream:#F6F1E7;
+    --on-navy:#B9C2CC; --line-grey:#8A97A4;
+    --serif:"Playfair Display", Georgia, "Times New Roman", serif;
+    --sans:"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --col:560px; --pad:24px;
+  }
+  *,*::before,*::after{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:var(--sans); background:var(--navy-deep); color:var(--white);
+    min-height:100vh; display:flex; flex-direction:column;
+    background:radial-gradient(120% 90% at 50% 0%, #11304F 0%, var(--navy-deep) 55%, var(--navy-darkest) 100%);
+  }
+  .wrap{
+    width:100%; max-width:var(--col); margin:0 auto; padding:0 var(--pad);
+    flex:1; display:flex; flex-direction:column; justify-content:center;
+    padding-top:48px; padding-bottom:48px;
+  }
+  .eyebrow{
+    font-size:12px; font-weight:700; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--gold); text-align:center; margin:0 0 18px;
+  }
+  h1{
+    font-family:var(--serif); font-weight:700; font-size:clamp(34px,7vw,48px);
+    line-height:1.12; text-align:center; margin:0 0 16px; color:var(--white);
+  }
+  .sub{
+    color:var(--on-navy); font-size:17px; line-height:1.65; text-align:center;
+    max-width:480px; margin:0 auto 36px;
+  }
+  .sub b{color:var(--cream); font-weight:600;}
+  .form{
+    display:flex; flex-direction:column; gap:14px; width:100%; max-width:480px; margin:0 auto;
+  }
+  #address-input{
+    width:100%; padding:16px 18px; font-size:16px; font-family:var(--sans);
+    border-radius:10px; border:1px solid rgba(255,255,255,.22);
+    background:rgba(255,255,255,.06); color:var(--white);
+    outline:none; transition:border-color .2s, background .2s;
+  }
+  #address-input::placeholder{color:var(--line-grey);}
+  #address-input:focus{border-color:var(--gold); background:rgba(255,255,255,.09);}
+  #find-button{
+    padding:18px 28px; font-family:var(--sans); font-size:16px; font-weight:800;
+    letter-spacing:.04em; text-transform:uppercase; color:var(--white);
+    background:var(--red); border:none; border-radius:10px; cursor:pointer;
+    transition:background .2s, transform .15s;
+  }
+  #find-button:hover{background:var(--red-deep); transform:translateY(-1px);}
+  #find-button:focus-visible{outline:3px solid var(--gold); outline-offset:2px;}
+  .note{
+    text-align:center; color:var(--line-grey); font-size:13.5px; margin:18px auto 0; max-width:420px; line-height:1.6;
+  }
+  .err{
+    display:none; text-align:center; color:#FFD8D9; background:rgba(237,31,36,.14);
+    border:1px solid rgba(237,31,36,.45); border-radius:8px; padding:10px 14px;
+    font-size:14px; max-width:480px; margin:0 auto;
+  }
+  .err.show{display:block;}
+  .steps{
+    display:flex; justify-content:center; gap:10px; margin:42px 0 0;
+  }
+  .step-dot{width:34px; height:3px; border-radius:2px; background:rgba(255,255,255,.16);}
+  .step-dot.on{background:var(--gold);}
+  footer{
+    text-align:center; color:var(--line-grey); font-size:12px; padding:20px var(--pad) 28px;
+  }
+  footer a{color:var(--line-grey);}
+  /* Google Places dropdown on dark page */
+  .pac-container{font-family:var(--sans); border-radius:10px; margin-top:6px;}
+  @media (prefers-reduced-motion: reduce){ #find-button{transition:none;} }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <p class="eyebrow">Step 1 of 3 · About 3 Minutes</p>
+    <h1>Let&rsquo;s find yours.</h1>
+    <p class="sub">You&rsquo;ve seen why every Florida home has one. Enter your address and we&rsquo;ll examine your home the way Randy would &mdash; <b>the coast, the construction, the openings.</b></p>
+
+    <div class="form">
+      <div class="err" id="form-error" role="alert"></div>
+      <input type="text" id="address-input" placeholder="Your Florida address&hellip;" autocomplete="off" aria-label="Your Florida address" />
+      <button id="find-button" type="button">Find My Home&rsquo;s Weakest Point &rarr;</button>
+    </div>
+
+    <p class="note">Takes about 3 minutes. No phone call. No home visit. Yours to keep.</p>
+
+    <div class="steps" aria-hidden="true">
+      <span class="step-dot on"></span><span class="step-dot"></span><span class="step-dot"></span>
+    </div>
+  </main>
+  <footer>&copy; 2026 Reece Windows &amp; Doors. All Rights Reserved.</footer>
+
+<script>
+/* ---- telemetry (same-origin /api/telemetry; fails silently pre-deploy) ---- */
+(function () {
+  var TELEMETRY_URL = "/api/telemetry";
+  var p = new URLSearchParams(location.search);
+  var token = p.get("t") || p.get("cid") || "";
+  var sid = (function () { try { var k="wp_sid", v=sessionStorage.getItem(k);
+    if(!v){ v=(window.crypto&&crypto.randomUUID?crypto.randomUUID():Date.now()+"."+Math.random()); sessionStorage.setItem(k,v);} return v;
+  } catch(e){ return String(Date.now()); } })();
+  window.WP_EMIT = function (event, data) {
+    var body = JSON.stringify({ event:event, token:token, session_id:sid, ts:new Date().toISOString(), path:location.pathname, data:data||{} });
+    try {
+      if (navigator.sendBeacon) navigator.sendBeacon(TELEMETRY_URL, new Blob([body], {type:"application/json"}));
+      else fetch(TELEMETRY_URL, {method:"POST", headers:{"Content-Type":"application/json"}, body:body, keepalive:true});
+    } catch (e) {}
+  };
+  window.WP_EMIT("page_view");
+})();
+
+/* ---- address capture: attribution + Places autocomplete + forward ---- */
+function initializeAddressForm() {
+  var NEXT_URL = "/unlock"; // same-origin step 2
+  var selectedPlace = null;
+
+  var addressInput = document.getElementById("address-input");
+  var nextButton = document.getElementById("find-button");
+  var errBox = document.getElementById("form-error");
+  if (!addressInput || !nextButton) return;
+
+  function showErr(msg){ errBox.textContent = msg; errBox.classList.add("show"); }
+  function clearErr(){ errBox.classList.remove("show"); }
+
+  var captureFullAttribution = function () {
+    // Clean the URL before saving any data (prevents "data poisoning" from
+    // malformed double-'?' URLs).
+    var getCleanedParams = function () {
+      var queryString = window.location.search.substring(1);
+      var cleaned = queryString.replace(/(?!^)\?/g, "&");
+      return new URLSearchParams(cleaned);
+    };
+    var params = getCleanedParams();
+
+    var UTM_KEYS = ["utm_source","utm_medium","utm_campaign","utm_content","utm_term"];
+    var CLICK_KEYS = ["gclid","fbclid","msclkid","ttclid"];
+    var lsSet = function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} };
+    var lsGet = function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } };
+
+    UTM_KEYS.forEach(function (key) { localStorage.removeItem(key); localStorage.removeItem("first_" + key); });
+    CLICK_KEYS.forEach(function (key) { localStorage.removeItem(key); localStorage.removeItem("first_" + key); });
+
+    var setIfEmpty = function (key, value) { if (!lsGet(key) && value != null && value !== "") lsSet(key, value); };
+    var nowISO = new Date().toISOString();
+    var cleanUrl = window.location.origin + window.location.pathname;
+    setIfEmpty("first_landing_page", cleanUrl);
+    setIfEmpty("first_referrer", document.referrer || "(direct)");
+    setIfEmpty("first_click_time", nowISO);
+    lsSet("last_landing_page", cleanUrl);
+    lsSet("last_referrer", document.referrer || "(direct)");
+    lsSet("last_click_time", nowISO);
+
+    UTM_KEYS.forEach(function (key) { var v = params.get(key); if (v) { lsSet(key, v); setIfEmpty("first_" + key, v); } });
+    CLICK_KEYS.forEach(function (key) { var v = params.get(key); if (v) { lsSet(key, v); setIfEmpty("first_" + key, v); } });
+
+    // Persist the identity token from the film page so it survives the funnel
+    // even if a step is reloaded without query params.
+    var t = params.get("t"); if (t) lsSet("wp_token", t);
+    var cid = params.get("cid"); if (cid) lsSet("wp_cid", cid);
+
+    var SESSION_TTL_MS = 30 * 60 * 1000;
+    var now = Date.now();
+    var sessionExpiry = parseInt(lsGet("session_expiry") || "0", 10);
+    var sessionCount = parseInt(lsGet("session_count") || "0", 10);
+    if (!sessionExpiry || now > sessionExpiry) { sessionCount += 1; lsSet("session_count", String(sessionCount)); }
+    lsSet("session_expiry", String(now + SESSION_TTL_MS));
+  };
+
+  var initAutocomplete = function () {
+    var autocomplete = new google.maps.places.Autocomplete(addressInput, { types: ["address"], componentRestrictions: { country: "US" } });
+    autocomplete.setFields(["formatted_address", "geometry", "address_components"]);
+    autocomplete.addListener("place_changed", function () {
+      clearErr();
+      var place = autocomplete.getPlace();
+      if (place.geometry && place.address_components) {
+        var getComponent = function (type, useShortName) {
+          var c = place.address_components.find(function (x) { return x.types.includes(type); });
+          return c ? (useShortName ? c.short_name : c.long_name) : "";
+        };
+        if (getComponent("administrative_area_level_1", true) !== "FL") {
+          showErr("This examination is for Florida homes only.");
+          selectedPlace = null; addressInput.value = ""; return;
+        }
+        selectedPlace = {
+          address: place.formatted_address,
+          lat: place.geometry.location.lat(), lng: place.geometry.location.lng(),
+          address1: (getComponent("street_number") + " " + getComponent("route")).trim(),
+          city: getComponent("locality"), state: getComponent("administrative_area_level_1", true),
+          postal_code: getComponent("postal_code"),
+          county: getComponent("administrative_area_level_2").replace(" County", ""),
+          country: getComponent("country", true)
+        };
+      } else { selectedPlace = null; }
+    });
+  };
+
+  nextButton.addEventListener("click", function () {
+    if (!selectedPlace) {
+      showErr("Choose your address from the dropdown so we examine the right home.");
+      return;
+    }
+    var nextUrl = new URL(NEXT_URL, window.location.origin);
+    Object.keys(selectedPlace).forEach(function (key) { nextUrl.searchParams.append(key, selectedPlace[key]); });
+
+    var ATTRIBUTION_KEYS = ["utm_source","utm_medium","utm_campaign","utm_content","utm_term",
+      "first_utm_source","first_utm_medium","first_utm_campaign","first_utm_content","first_utm_term",
+      "gclid","fbclid","msclkid","ttclid","first_gclid","first_fbclid","first_msclkid","first_ttclid",
+      "first_landing_page","last_landing_page","first_referrer","last_referrer",
+      "first_click_time","last_click_time","session_count"];
+    ATTRIBUTION_KEYS.forEach(function (key) {
+      var v = localStorage.getItem(key);
+      if (v) nextUrl.searchParams.append(key, v);
+    });
+
+    // Identity token carry-through (from URL first, localStorage fallback)
+    var p = new URLSearchParams(window.location.search);
+    var t = p.get("t") || localStorage.getItem("wp_token");
+    var cid = p.get("cid") || localStorage.getItem("wp_cid");
+    if (t) nextUrl.searchParams.set("t", t);
+    if (cid && !t) nextUrl.searchParams.set("cid", cid);
+
+    if (window.WP_EMIT) window.WP_EMIT("cta_click", { target: nextUrl.pathname, address_selected: true });
+    window.location.href = nextUrl.toString();
+  });
+
+  captureFullAttribution();
+  initAutocomplete();
+}
+window.initializeAddressForm = initializeAddressForm;
+</script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDHEXJFX600__uKskBl1RVs2wensuUW4c4&libraries=places&callback=initializeAddressForm"></script>
+</body>
+</html>

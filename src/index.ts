@@ -42,6 +42,11 @@ import { contaminationCheckTools } from './tools/contamination-check.js';
 // MVI v2.5.1 — REST shim that wraps the integrity tools for service-to-service
 // HTTP callers (LP MCP drift detector, audit cron, contamination cron).
 import { tryHandleAgenticRoute } from './http/agentic-routes.js';
+// WP journey — static "Weakest Point" pages + /api/telemetry ingestion
+// (report.getreecewindows.com). GET / now serves the film page; the JSON
+// health check lives at /health only.
+import { tryHandleWpRoute } from './http/wp-routes.js';
+import { warmWpPages } from './wp/static-pages.js';
 import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
 import {
@@ -155,8 +160,15 @@ async function startHttpServer(port: number) {
       return;
     }
 
+    // WP journey pages + telemetry — must precede the health check so
+    // GET / serves index.html. /health, /mcp, OAuth, /webhooks and
+    // /internal/* are untouched (no path overlap).
+    if (await tryHandleWpRoute(req, res, url.pathname)) {
+      return;
+    }
+
     // Health check endpoint
-    if (url.pathname === '/' || url.pathname === '/health') {
+    if (url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         status: 'ok',
@@ -376,7 +388,8 @@ async function startHttpServer(port: number) {
   httpServer.listen(port, () => {
     console.log(`HL Workflow Intelligence MCP server running on http://0.0.0.0:${port}`);
     console.log(`  Instance:      ${instanceId}`);
-    console.log(`  Health check:  http://0.0.0.0:${port}/`);
+    console.log(`  Health check:  http://0.0.0.0:${port}/health`);
+    console.log(`  WP pages:      http://0.0.0.0:${port}/ (/find /unlock /report, telemetry at /api/telemetry)`);
     console.log(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
     console.log(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
     console.log(`  Static token:  ${staticToken ? 'configured' : 'not set (OAuth-only auth)'}`);
@@ -396,6 +409,9 @@ async function main() {
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
 
   if (port) {
+    // Pre-compress the WP pages (index.html is ~2 MB) so first visitors
+    // don't pay the gzip/brotli cost
+    warmWpPages();
     await startHttpServer(port);
   } else {
     await startStdioServer();
