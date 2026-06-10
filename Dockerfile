@@ -18,9 +18,6 @@ RUN npm install --omit=dev
 
 COPY --from=build /app/dist ./dist
 
-# WP journey static pages (served at / /find /unlock /report)
-COPY public ./public
-
 EXPOSE 3000
 
 CMD ["node", "dist/index.js"]
