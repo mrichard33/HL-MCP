@@ -4,5 +4,6 @@ encode zstd gzip
 rewrite /find /find.html
 rewrite /unlock /unlock.html
 rewrite /report /report.html
+rewrite /favicon.ico /favicon.png
 file_server
 header Cache-Control "public, max-age=60"
