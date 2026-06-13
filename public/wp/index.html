@@ -227,6 +227,14 @@
   }
   @media (max-width:560px){
     .attribution-row{flex-direction:column;gap:10px;}
+
+    /* Eyebrow: keep to two lines on mobile (was wrapping to three) */
+    .header-eyebrow{
+      font-size:clamp(10.5px,3vw,12px); /* was clamp(12.5px,3.4vw,15px) */
+      letter-spacing:.05em;    /* was .11em — biggest width recovery */
+      line-height:1.3;
+      text-wrap:balance;       /* evens the two lines */
+    }
   }
   .sound-btn{
     display:inline-flex;align-items:center;gap:8px;
