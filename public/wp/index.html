@@ -1091,8 +1091,8 @@
       els.core.style.opacity = 0; els.hl.style.opacity = 0;
       els.crack.style.opacity = 0; els.redNode.style.opacity = 0;
       els.goldNode.style.opacity = 1;
-      if (els.labelRed) els.labelRed.style.opacity = 0;
-      if (els.labelGold) els.labelGold.style.opacity = 1;
+      if (els.labelRed)  { els.labelRed.getAnimations().forEach(function (a) { a.cancel(); }); els.labelRed.style.opacity = 0; }
+      if (els.labelGold) { els.labelGold.getAnimations().forEach(function (a) { a.cancel(); }); els.labelGold.style.opacity = 1; }
       els.sheen.setAttribute("d", WHOLE_D);
     }
 
@@ -1177,8 +1177,8 @@
       els.crack.style.opacity = 1; els.crack.style.transform = "";
       els.redNode.style.opacity = 1; els.redNode.style.transform = "";
       els.goldNode.style.opacity = 0; els.goldRing.style.opacity = 0;
-      if (els.labelRed) els.labelRed.style.opacity = 1;
-      if (els.labelGold) els.labelGold.style.opacity = 0;
+      if (els.labelRed)  { els.labelRed.getAnimations().forEach(function (a) { a.cancel(); }); els.labelRed.style.opacity = 1; }
+      if (els.labelGold) { els.labelGold.getAnimations().forEach(function (a) { a.cancel(); }); els.labelGold.style.opacity = 0; }
       els.layers.forEach(function (L) { L.style.opacity = 0; });
       els.sheen.setAttribute("d", BROKEN_D);
       positionLabels();
