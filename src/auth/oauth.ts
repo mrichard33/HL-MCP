@@ -1,32 +1,34 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { getSupabaseClient } from '../clients/supabase.js';
 
-// ---- In-memory stores ----
+// ─────────────────────────────────────────────────────────────────────────────
+// Inbound connector OAuth (Claude.ai → this MCP server).
+//
+// v2: tokens are PERSISTED TO SUPABASE so they survive Railway redeploys and
+// container restarts, and a refresh_token grant is supported so Claude.ai renews
+// access silently. Mirrors the durable pattern in src/clients/ghl-oauth.ts.
+//
+// Why the old in-memory version forced repeated re-auth:
+//   • clients / authCodes / accessTokens lived in process-local Maps that reset
+//     on every deploy (HL auto-deploys from main) and every restart → the token
+//     Claude.ai held failed validation → 401 → "reconnect" prompt.
+//   • access tokens expired in 24h with no refresh grant → daily prompt.
+//
+// Tables: see migrations/006_create_mcp_oauth_tables.sql
+// ─────────────────────────────────────────────────────────────────────────────
 
-interface RegisteredClient {
-  clientId: string;
-  clientSecret: string;
-  redirectUris: string[];
-}
+// Long-lived access token (belt-and-suspenders alongside refresh): even a client
+// that never refreshes is not prompted for 90 days, and the token survives
+// restarts via Supabase.
+const ACCESS_TOKEN_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
+const AUTH_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-interface StoredAuthCode {
-  code: string;
-  clientId: string;
-  redirectUri: string;
-  codeChallenge: string;
-  codeChallengeMethod: string;
-  expiresAt: number;
-}
-
-interface StoredToken {
-  token: string;
-  clientId: string;
-  expiresAt: number;
-}
-
-const clients = new Map<string, RegisteredClient>();
-const authCodes = new Map<string, StoredAuthCode>();
-const accessTokens = new Map<string, StoredToken>();
+// In-memory positive cache for hot-path /mcp validation (token → expiry ms).
+// On a cache miss (e.g. right after a redeploy) we fall back to Supabase, which
+// is the source of truth, then repopulate. Low per-request latency without
+// reintroducing the "lost on restart" failure mode.
+const validationCache = new Map<string, number>();
 
 // ---- Helpers ----
 
@@ -62,7 +64,7 @@ export function getOAuthMetadata(issuerUrl: string): Record<string, unknown> {
     token_endpoint: `${issuerUrl}/token`,
     registration_endpoint: `${issuerUrl}/register`,
     response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['client_secret_post'],
     scopes_supported: ['claudeai'],
@@ -80,10 +82,19 @@ export async function handleRegister(req: IncomingMessage, res: ServerResponse):
     const clientId = generateId();
     const clientSecret = generateId();
 
-    const client: RegisteredClient = { clientId, clientSecret, redirectUris };
-    clients.set(clientId, client);
+    const supabase = getSupabaseClient();
+    const { error } = await supabase.from('mcp_oauth_clients').insert({
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uris: redirectUris,
+    });
+    if (error) {
+      console.error('[OAuth] register: supabase insert failed —', error.message);
+      jsonResponse(res, 500, { error: 'server_error' });
+      return;
+    }
 
-    console.log(`[OAuth] register: client registered (id: ${clientId.slice(0, 8)}…, redirectUris: ${redirectUris.length}, total clients: ${clients.size})`);
+    console.log(`[OAuth] register: client registered (id: ${clientId.slice(0, 8)}…, redirectUris: ${redirectUris.length})`);
 
     jsonResponse(res, 201, {
       client_id: clientId,
@@ -111,7 +122,7 @@ export async function handleAuthorize(req: IncomingMessage, res: ServerResponse,
   res.end();
 }
 
-function handleAuthorizeGet(res: ServerResponse, url: URL): void {
+async function handleAuthorizeGet(res: ServerResponse, url: URL): Promise<void> {
   const clientId = url.searchParams.get('client_id') || '';
   const redirectUri = url.searchParams.get('redirect_uri') || '';
   const codeChallenge = url.searchParams.get('code_challenge') || '';
@@ -125,10 +136,10 @@ function handleAuthorizeGet(res: ServerResponse, url: URL): void {
       return;
     }
 
-    console.log(`[OAuth] authorize GET: client=${clientId.slice(0, 8)}…, redirect=${redirectUri}, hasChallenge=${!!codeChallenge}, registered clients: ${clients.size}`);
+    console.log(`[OAuth] authorize GET: client=${clientId.slice(0, 8)}…, redirect=${redirectUri}, hasChallenge=${!!codeChallenge}`);
 
     // Auto-approve — issue authorization code and redirect immediately
-    const code = createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
+    const code = await createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
     const location = buildRedirectUrl(redirectUri, code, state);
     res.writeHead(302, { Location: location });
     res.end();
@@ -155,9 +166,9 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse): P
       return;
     }
 
-    console.log(`[OAuth] authorize POST: client=${clientId.slice(0, 8)}…, redirect=${redirectUri}, hasChallenge=${!!codeChallenge}, registered clients: ${clients.size}`);
+    console.log(`[OAuth] authorize POST: client=${clientId.slice(0, 8)}…, redirect=${redirectUri}, hasChallenge=${!!codeChallenge}`);
 
-    const code = createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
+    const code = await createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
     const location = buildRedirectUrl(redirectUri, code, state);
     res.writeHead(302, { Location: location });
     res.end();
@@ -167,22 +178,24 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse): P
   }
 }
 
-function createAuthorizationCode(
+async function createAuthorizationCode(
   clientId: string,
   redirectUri: string,
   codeChallenge: string,
   codeChallengeMethod: string,
-): string {
+): Promise<string> {
   const code = generateId();
-  authCodes.set(code, {
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('mcp_oauth_auth_codes').insert({
     code,
-    clientId,
-    redirectUri,
-    codeChallenge,
-    codeChallengeMethod,
-    expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_challenge: codeChallenge || null,
+    code_challenge_method: codeChallengeMethod || null,
+    expires_at: new Date(Date.now() + AUTH_CODE_TTL_MS).toISOString(),
   });
-  console.log(`[OAuth] auth code created (code: ${code.slice(0, 8)}…, client: ${clientId.slice(0, 8)}…, authCodes size: ${authCodes.size})`);
+  if (error) throw new Error(`auth code persist failed: ${error.message}`);
+  console.log(`[OAuth] auth code created (code: ${code.slice(0, 8)}…, client: ${clientId.slice(0, 8)}…)`);
   return code;
 }
 
@@ -199,21 +212,22 @@ export async function handleToken(req: IncomingMessage, res: ServerResponse): Pr
   try {
     const body = await readBody(req);
 
-    // Support both JSON and form-urlencoded
     let grantType: string;
-    let code: string;
-    let clientId: string;
-    let redirectUri: string;
-    let codeVerifier: string;
+    let code = '';
+    let clientId = '';
+    let redirectUri = '';
+    let codeVerifier = '';
+    let refreshToken = '';
 
     const contentType = req.headers['content-type'] || '';
     if (contentType.includes('application/json')) {
       const data = JSON.parse(body);
       grantType = data.grant_type;
-      code = data.code;
-      clientId = data.client_id;
-      redirectUri = data.redirect_uri;
-      codeVerifier = data.code_verifier;
+      code = data.code || '';
+      clientId = data.client_id || '';
+      redirectUri = data.redirect_uri || '';
+      codeVerifier = data.code_verifier || '';
+      refreshToken = data.refresh_token || '';
     } else {
       const params = new URLSearchParams(body);
       grantType = params.get('grant_type') || '';
@@ -221,9 +235,15 @@ export async function handleToken(req: IncomingMessage, res: ServerResponse): Pr
       clientId = params.get('client_id') || '';
       redirectUri = params.get('redirect_uri') || '';
       codeVerifier = params.get('code_verifier') || '';
+      refreshToken = params.get('refresh_token') || '';
     }
 
-    console.log(`[OAuth] token: grant_type=${grantType}, client=${(clientId || '').slice(0, 8)}…, hasCode=${!!code}, hasVerifier=${!!codeVerifier}`);
+    console.log(`[OAuth] token: grant_type=${grantType}, client=${(clientId || '').slice(0, 8)}…, hasCode=${!!code}, hasVerifier=${!!codeVerifier}, hasRefresh=${!!refreshToken}`);
+
+    // ── Refresh grant ──
+    if (grantType === 'refresh_token') {
+      return handleRefreshGrant(res, refreshToken);
+    }
 
     if (grantType !== 'authorization_code') {
       console.log(`[OAuth] token: rejected unsupported grant_type: ${grantType}`);
@@ -231,60 +251,67 @@ export async function handleToken(req: IncomingMessage, res: ServerResponse): Pr
       return;
     }
 
+    const supabase = getSupabaseClient();
+
     // Look up the authorization code
-    const stored = authCodes.get(code);
+    const { data: stored, error: lookupErr } = await supabase
+      .from('mcp_oauth_auth_codes')
+      .select('code, client_id, redirect_uri, code_challenge, expires_at')
+      .eq('code', code)
+      .maybeSingle();
+
+    if (lookupErr) {
+      console.error('[OAuth] token: auth code lookup failed —', lookupErr.message);
+      jsonResponse(res, 500, { error: 'server_error' });
+      return;
+    }
     if (!stored) {
-      console.error(`[OAuth] token: unknown auth code (code: ${(code || '').slice(0, 8)}…, authCodes size: ${authCodes.size})`);
+      console.error(`[OAuth] token: unknown auth code (code: ${(code || '').slice(0, 8)}…)`);
       jsonResponse(res, 400, { error: 'invalid_grant', error_description: 'Unknown authorization code' });
       return;
     }
 
-    // Codes are single-use
-    authCodes.delete(code);
+    // Codes are single-use — delete immediately
+    await supabase.from('mcp_oauth_auth_codes').delete().eq('code', code);
 
     // Check expiry
-    if (Date.now() > stored.expiresAt) {
+    if (Date.now() > new Date(stored.expires_at).getTime()) {
       console.error('[OAuth] token: auth code expired');
       jsonResponse(res, 400, { error: 'invalid_grant', error_description: 'Authorization code expired' });
       return;
     }
 
     // Validate redirect_uri matches
-    if (redirectUri && redirectUri !== stored.redirectUri) {
-      console.error(`[OAuth] token: redirect_uri mismatch (got: ${redirectUri}, expected: ${stored.redirectUri})`);
+    if (redirectUri && redirectUri !== stored.redirect_uri) {
+      console.error(`[OAuth] token: redirect_uri mismatch (got: ${redirectUri}, expected: ${stored.redirect_uri})`);
       jsonResponse(res, 400, { error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
       return;
     }
 
     // Verify PKCE
-    if (stored.codeChallenge) {
+    if (stored.code_challenge) {
       if (!codeVerifier) {
         console.error('[OAuth] token: PKCE code_verifier missing');
         jsonResponse(res, 400, { error: 'invalid_request', error_description: 'code_verifier required' });
         return;
       }
-      if (!verifyPkce(codeVerifier, stored.codeChallenge)) {
+      if (!verifyPkce(codeVerifier, stored.code_challenge)) {
         console.error('[OAuth] token: PKCE verification failed');
         jsonResponse(res, 400, { error: 'invalid_grant', error_description: 'PKCE verification failed' });
         return;
       }
     }
 
-    // Issue access token (24 hours)
-    const expiresIn = 24 * 60 * 60;
-    const token = generateId();
-    accessTokens.set(token, {
-      token,
-      clientId: stored.clientId,
-      expiresAt: Date.now() + expiresIn * 1000,
-    });
+    // Issue access + refresh tokens
+    const tokens = await issueTokens(stored.client_id);
 
-    console.log(`[OAuth] token: issued access token (token: ${token.slice(0, 8)}…, client: ${stored.clientId.slice(0, 8)}…, accessTokens size: ${accessTokens.size})`);
+    console.log(`[OAuth] token: issued access+refresh (client: ${stored.client_id.slice(0, 8)}…)`);
 
     jsonResponse(res, 200, {
-      access_token: token,
+      access_token: tokens.accessToken,
       token_type: 'bearer',
-      expires_in: expiresIn,
+      expires_in: ACCESS_TOKEN_TTL_SECONDS,
+      refresh_token: tokens.refreshToken,
     });
   } catch (err) {
     console.error('[OAuth] token: error', err instanceof Error ? err.message : err);
@@ -292,18 +319,112 @@ export async function handleToken(req: IncomingMessage, res: ServerResponse): Pr
   }
 }
 
+async function handleRefreshGrant(res: ServerResponse, refreshToken: string): Promise<void> {
+  if (!refreshToken) {
+    jsonResponse(res, 400, { error: 'invalid_request', error_description: 'refresh_token required' });
+    return;
+  }
+  try {
+    const supabase = getSupabaseClient();
+    const { data: stored, error } = await supabase
+      .from('mcp_oauth_refresh_tokens')
+      .select('token, client_id, revoked')
+      .eq('token', refreshToken)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[OAuth] refresh: lookup failed —', error.message);
+      jsonResponse(res, 500, { error: 'server_error' });
+      return;
+    }
+    if (!stored || stored.revoked) {
+      console.error('[OAuth] refresh: unknown or revoked refresh token');
+      jsonResponse(res, 400, { error: 'invalid_grant', error_description: 'Invalid refresh token' });
+      return;
+    }
+
+    // Mint a new access token; keep the same (non-rotating) refresh token to
+    // avoid rotation-persistence bugs — the classic cause of refresh failures.
+    const accessToken = await issueAccessToken(stored.client_id);
+
+    console.log(`[OAuth] refresh: issued new access token (client: ${stored.client_id.slice(0, 8)}…)`);
+
+    jsonResponse(res, 200, {
+      access_token: accessToken,
+      token_type: 'bearer',
+      expires_in: ACCESS_TOKEN_TTL_SECONDS,
+      refresh_token: refreshToken,
+    });
+  } catch (err) {
+    console.error('[OAuth] refresh: error', err instanceof Error ? err.message : err);
+    jsonResponse(res, 400, { error: 'invalid_request' });
+  }
+}
+
+// ---- Token Issuance ----
+
+async function issueAccessToken(clientId: string): Promise<string> {
+  const token = generateId();
+  const expiresAtMs = Date.now() + ACCESS_TOKEN_TTL_SECONDS * 1000;
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('mcp_oauth_access_tokens').insert({
+    token,
+    client_id: clientId,
+    expires_at: new Date(expiresAtMs).toISOString(),
+  });
+  if (error) throw new Error(`access token persist failed: ${error.message}`);
+  validationCache.set(token, expiresAtMs);
+  return token;
+}
+
+async function issueTokens(clientId: string): Promise<{ accessToken: string; refreshToken: string }> {
+  const accessToken = await issueAccessToken(clientId);
+  const refreshToken = generateId();
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('mcp_oauth_refresh_tokens').insert({
+    token: refreshToken,
+    client_id: clientId,
+    revoked: false,
+  });
+  if (error) throw new Error(`refresh token persist failed: ${error.message}`);
+  return { accessToken, refreshToken };
+}
+
 // ---- Token Validation ----
 
-export function validateAccessToken(token: string): boolean {
-  const stored = accessTokens.get(token);
-  if (!stored) {
-    console.log(`[OAuth] validate: token not found (accessTokens size: ${accessTokens.size})`);
+export async function validateAccessToken(token: string): Promise<boolean> {
+  // Hot path: in-memory positive cache
+  const cached = validationCache.get(token);
+  if (cached !== undefined) {
+    if (Date.now() < cached) return true;
+    validationCache.delete(token);
+    return false; // access tokens are never reissued under the same value
+  }
+
+  // Cache miss (e.g. right after a redeploy) — Supabase is the source of truth.
+  try {
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from('mcp_oauth_access_tokens')
+      .select('expires_at')
+      .eq('token', token)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[OAuth] validate: supabase lookup failed —', error.message);
+      return false; // fail closed
+    }
+    if (!data) return false;
+
+    const expiresAtMs = new Date(data.expires_at).getTime();
+    if (Date.now() > expiresAtMs) {
+      await supabase.from('mcp_oauth_access_tokens').delete().eq('token', token);
+      return false;
+    }
+    validationCache.set(token, expiresAtMs);
+    return true;
+  } catch (err) {
+    console.error('[OAuth] validate: error —', err instanceof Error ? err.message : err);
     return false;
   }
-  if (Date.now() > stored.expiresAt) {
-    console.log(`[OAuth] validate: token expired (client: ${stored.clientId.slice(0, 8)}…)`);
-    accessTokens.delete(token);
-    return false;
-  }
-  return true;
 }

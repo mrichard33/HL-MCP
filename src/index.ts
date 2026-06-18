@@ -303,7 +303,7 @@ async function startHttpServer(port: number) {
       const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 
       if (bearerToken) {
-        const isOAuthValid = validateAccessToken(bearerToken);
+        const isOAuthValid = await validateAccessToken(bearerToken);
         const isStaticMatch = staticToken ? bearerToken === staticToken : false;
         if (!isOAuthValid && !isStaticMatch) {
           console.log(`[OAuth] /mcp: invalid bearer token (instance: ${instanceId})`);
