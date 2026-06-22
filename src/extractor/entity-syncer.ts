@@ -4,7 +4,7 @@ import { createLeadEvent, createLeadEventsBatch, syncWorkflowExecutionsFromTagDi
 import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection } from '../utils/normalize.js';
-import type { GHLContact, GHLOpportunity, GHLConversation, GHLPaginationMeta, GHLMessage } from '../types/ghl.js';
+import type { GHLContact, GHLOpportunity, GHLConversation, GHLPaginationMeta, GHLMessage, GHLAppointment } from '../types/ghl.js';
 
 // ---- Sync State Helpers ----
 
@@ -604,6 +604,13 @@ export async function syncAppointments(options?: {
 
     const now = nowET();
 
+    // GHL /calendars/events returns the live status under `appointmentStatus`
+    // (legacy typo variant: `appoinmentStatus`). The previous code read
+    // `apt.status`, which the events API never sends — so every row defaulted
+    // to 'confirmed', masking cancellations and no-shows. Read the real field.
+    const apptStatusOf = (apt: GHLAppointment): string =>
+      apt.appointmentStatus || apt.appoinmentStatus || apt.status || 'confirmed';
+
     // v1.4: Batch upserts
     const rows = events.map((apt) => ({
       ghl_appointment_id: apt.id,
@@ -611,7 +618,7 @@ export async function syncAppointments(options?: {
       ghl_calendar_id: apt.calendarId || null,
       ghl_location_id: apt.locationId || null,
       title: apt.title || null,
-      status: apt.status || 'confirmed',
+      status: apptStatusOf(apt),
       start_time: apt.startTime || null,
       end_time: apt.endTime || null,
       assigned_to: apt.assignedUserId || null,
@@ -644,7 +651,7 @@ export async function syncAppointments(options?: {
       try {
         leadEventSpecs.push({
           contactId: apt.contactId,
-          eventType: deriveAppointmentEventType(apt.status),
+          eventType: deriveAppointmentEventType(apptStatusOf(apt)),
           sourceId: apt.id,
           timestamp: apt.startTime,
           rawJson: apt,
