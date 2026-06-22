@@ -125,6 +125,8 @@ export interface GHLAppointment {
   locationId?: string;
   title?: string;
   status?: string;
+  appointmentStatus?: string;   // GHL /calendars/events live status field
+  appoinmentStatus?: string;    // GHL API typo variant — both appear in payloads
   startTime?: string;
   endTime?: string;
   assignedUserId?: string;
