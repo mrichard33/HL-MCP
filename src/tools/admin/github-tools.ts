@@ -10,6 +10,7 @@ import {
   getLpRepo,
   getN8nRepo,
   getDashboardRepo,
+  getGhlWorkflowsRepo,
   listBranches,
 } from '../../admin/github-client.js';
 
@@ -335,6 +336,74 @@ export const githubTools = {
     handler: async (args: { title: string; head: string; base?: string; body?: string; confirm?: boolean }) => {
       if (!args.confirm) return { preview: true, repo: getDashboardRepo(), title: args.title, head: args.head, base: args.base || 'main' };
       return await createPullRequest(args.title, args.head, args.base || 'main', args.body, getDashboardRepo());
+    },
+  },
+
+  // ─── GHL-Workflows Cross-Repo Tools ───────────────────────────
+
+  ghlworkflows_github_list_files: {
+    description: 'CROSS-REPO: List files in the GHL-Workflows GitHub repository (mrichard33/GHL-Workflows). For browsing the exported GHL workflow JSON definitions.',
+    inputSchema: z.object({
+      path: z.string().optional().describe('Directory path. Empty for root.'),
+      branch: z.string().optional().describe('Branch name (default: main)'),
+    }),
+    handler: async (args: { path?: string; branch?: string }) => {
+      return await listFiles(args.path || '', args.branch || 'main', getGhlWorkflowsRepo());
+    },
+  },
+
+  ghlworkflows_github_get_file: {
+    description: 'CROSS-REPO: Get a file from the GHL-Workflows GitHub repository. For reading a workflow JSON definition.',
+    inputSchema: z.object({
+      path: z.string().describe('File path (e.g. "E.0-master-router.json")'),
+      branch: z.string().optional().describe('Branch name (default: main)'),
+    }),
+    handler: async (args: { path: string; branch?: string }) => {
+      return await getFile(args.path, args.branch || 'main', getGhlWorkflowsRepo());
+    },
+  },
+
+  ghlworkflows_github_get_recent_commits: {
+    description: 'CROSS-REPO: Get recent commits from the GHL-Workflows GitHub repository. Check change history.',
+    inputSchema: z.object({
+      branch: z.string().optional().describe('Branch name (default: main)'),
+      limit: z.number().optional().describe('Number of commits (max 30)'),
+    }),
+    handler: async (args: { branch?: string; limit?: number }) => {
+      return await getRecentCommits(args.branch || 'main', args.limit, getGhlWorkflowsRepo());
+    },
+  },
+
+  ghlworkflows_github_search_code: {
+    description: 'CROSS-REPO: Search code in the GHL-Workflows GitHub repository.',
+    inputSchema: z.object({ query: z.string().describe('Search query') }),
+    handler: async (args: { query: string }) => {
+      return await searchCode(args.query, getGhlWorkflowsRepo());
+    },
+  },
+
+  ghlworkflows_github_list_branches: {
+    description: 'CROSS-REPO: List all branches in the GHL-Workflows GitHub repository. Shows which branches exist and their latest commit.',
+    inputSchema: z.object({}),
+    handler: async () => {
+      return await listBranches(getGhlWorkflowsRepo());
+    },
+  },
+
+  ghlworkflows_github_create_or_update_file: {
+    description: 'CROSS-REPO: Create or update a file in the GHL-Workflows GitHub repository. Requires confirm: true. main is the live source of truth — prefer a feature branch + PR over committing straight to main.',
+    inputSchema: z.object({
+      path: z.string().describe('File path'),
+      content: z.string().describe('File content'),
+      message: z.string().describe('Commit message'),
+      branch: z.string().optional().describe('Target branch (default: main).'),
+      sha: z.string().optional().describe('Current file SHA (required for updates — get from ghlworkflows_github_get_file)'),
+      confirm: z.boolean().optional().describe('Must be true to execute.'),
+    }),
+    handler: async (args: { path: string; content: string; message: string; branch?: string; sha?: string; confirm?: boolean }) => {
+      const branch = args.branch || 'main';
+      if (!args.confirm) return { preview: true, repo: getGhlWorkflowsRepo(), path: args.path, branch, message: args.message };
+      return await createOrUpdateFile(args.path, args.content, args.message, branch, args.sha, getGhlWorkflowsRepo());
     },
   },
 };

@@ -6,9 +6,10 @@
  * the GITHUB_PAT has access to. Defaults to GITHUB_REPO env var.
  * 
  * Cross-repo access:
- * - LP MCP:    getLpRepo() → LP_GITHUB_REPO env var
- * - n8n:       getN8nRepo() → N8N_GITHUB_REPO env var
- * - Dashboard: getDashboardRepo() → DASHBOARD_GITHUB_REPO env var
+ * - LP MCP:        getLpRepo() → LP_GITHUB_REPO env var
+ * - n8n:           getN8nRepo() → N8N_GITHUB_REPO env var
+ * - Dashboard:     getDashboardRepo() → DASHBOARD_GITHUB_REPO env var
+ * - GHL Workflows: getGhlWorkflowsRepo() → GHLWORKFLOWS_GITHUB_REPO env var
  */
 
 const GITHUB_API = 'https://api.github.com';
@@ -48,6 +49,13 @@ export function getN8nRepo(): string {
  */
 export function getDashboardRepo(): string {
   return process.env.DASHBOARD_GITHUB_REPO || 'mrichard33/Reece-Dashboard';
+}
+
+/**
+ * Get the GHL-Workflows repo name from env.
+ */
+export function getGhlWorkflowsRepo(): string {
+  return process.env.GHLWORKFLOWS_GITHUB_REPO || 'mrichard33/GHL-Workflows';
 }
 
 async function api(path: string, options: RequestInit = {}): Promise<unknown> {
