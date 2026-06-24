@@ -193,9 +193,20 @@ export const workflowTools = {
           raw = detail;
           source = 'highlevel_internal_api';
         } else {
-          const publicData = await ghl.getWorkflow(args.workflowId);
-          raw = JSON.parse(JSON.stringify(publicData));
-          source = 'highlevel_public_api';
+          // FIX: GHL's public API has no `GET /workflows/{id}` — only the
+          // location list endpoint. The old getWorkflow(id) fallback always
+          // 404'd. Resolve via the location workflow list instead.
+          const all = await ghl.getWorkflows();
+          const match = all.find((w) => w.id === args.workflowId);
+          if (!match) {
+            throw new Error(
+              `Workflow ${args.workflowId} not found in GHL location ${ghl.getLocationId()}. ` +
+              `It may have been deleted or the ID may be wrong. (GHL's public API has no ` +
+              `single-workflow endpoint; the location workflow list was searched.)`
+            );
+          }
+          raw = JSON.parse(JSON.stringify(match));
+          source = 'highlevel_public_api_list';
         }
         name = (raw.name as string) || undefined;
         triggerType = (raw.triggerType as string) || null;
@@ -244,16 +255,35 @@ export const workflowTools = {
       const ghl = new GHLClient();
       const supabase = getSupabaseClient();
 
+      // Deep workflow detail comes from the Firebase-authenticated internal
+      // API (backend.leadconnectorhq.com). Returns null when Firebase auth
+      // isn't configured or the internal call fails.
+      const detail = await ghl.getWorkflowDetail(args.workflowId);
+
       let rawJson: Record<string, unknown>;
       let source: string;
-      const detail = await ghl.getWorkflowDetail(args.workflowId);
+
       if (detail) {
         rawJson = detail;
         source = 'highlevel_internal_api';
       } else {
-        const publicData = await ghl.getWorkflow(args.workflowId);
-        rawJson = JSON.parse(JSON.stringify(publicData));
-        source = 'highlevel_public_api';
+        // FIX: GHL's public API v2 has NO `GET /workflows/{id}` endpoint —
+        // only the location list endpoint `GET /workflows/?locationId=...`.
+        // The previous fallback called ghl.getWorkflow(id), which hit
+        // /workflows/{id} and always 404'd. Resolve via the list instead.
+        const all = await ghl.getWorkflows();
+        const match = all.find((w) => w.id === args.workflowId);
+        if (!match) {
+          throw new Error(
+            `Workflow ${args.workflowId} not found in GHL location ${ghl.getLocationId()}. ` +
+            `It may have been deleted or the ID may be wrong. ` +
+            `(GHL's public API has no single-workflow endpoint, so the location workflow ` +
+            `list was searched. To capture deep detail — steps, triggers, actions — set ` +
+            `GHL_FIREBASE_API_KEY and GHL_FIREBASE_REFRESH_TOKEN to enable the internal API.)`
+          );
+        }
+        rawJson = JSON.parse(JSON.stringify(match)) as Record<string, unknown>;
+        source = 'highlevel_public_api_list';
       }
 
       const name = (rawJson.name as string) || 'Unknown';
@@ -261,16 +291,41 @@ export const workflowTools = {
       const version = (rawJson.version as number) || 1;
       const locationId = (rawJson.locationId as string) || ghl.getLocationId();
 
-      const { error: upsertError } = await supabase.from('workflows').upsert({
+      // Columns that are always safe to write from whichever source resolved.
+      const row: Record<string, unknown> = {
         ghl_workflow_id: args.workflowId,
         ghl_location_id: locationId,
         name,
         status,
         version,
-        raw_json: rawJson,
         synced_at: nowET(),
         deleted_at: null,
-      }, { onConflict: 'ghl_workflow_id' });
+      };
+
+      // raw_json handling: a shallow list-based refresh must never DOWNGRADE a
+      // richer raw_json already cached (e.g. one captured by a prior internal-API
+      // sync with steps/triggers/actions). The deep-detail path always writes;
+      // the shallow path only writes raw_json when the cache has nothing richer.
+      let preservedExistingRawJson = false;
+      if (source === 'highlevel_internal_api') {
+        row.raw_json = rawJson;
+      } else {
+        const { data: existing } = await supabase
+          .from('workflows')
+          .select('raw_json')
+          .eq('ghl_workflow_id', args.workflowId)
+          .maybeSingle();
+        const existingRaw = (existing?.raw_json || {}) as Record<string, unknown>;
+        if (Object.keys(existingRaw).length > Object.keys(rawJson).length) {
+          preservedExistingRawJson = true;
+        } else {
+          row.raw_json = rawJson;
+        }
+      }
+
+      const { error: upsertError } = await supabase
+        .from('workflows')
+        .upsert(row, { onConflict: 'ghl_workflow_id' });
 
       if (upsertError) {
         throw new Error(`Failed to update cache: ${upsertError.message}`);
@@ -283,6 +338,7 @@ export const workflowTools = {
         version,
         source,
         cache_updated: true,
+        preserved_existing_raw_json: preservedExistingRawJson,
         refreshed_at: nowET(),
         raw_json_top_level_keys: Object.keys(rawJson),
       };
