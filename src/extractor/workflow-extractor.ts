@@ -5,6 +5,16 @@ import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
 import { updateLastSynced, softDeleteMissing } from './entity-syncer.js';
 
+// v1.9: Fixes recurring 23505 duplicate-key errors on workflow_steps_pkey and
+// the resulting silent data loss. Cloned GHL workflows share their source
+// workflow's step (template) IDs; under the old single-column PK(step_id) every
+// clone's step inserts failed, leaving incomplete cached step graphs. Paired
+// with a composite PRIMARY KEY (workflow_id, step_id) migration, this file now:
+//   - batches the four detail-table inserts (was one PostgREST request per row),
+//   - checks every insert's error and only counts rows on success,
+//   - upserts steps with ignoreDuplicates as a defensive layer, and
+//   - guards against overlapping sync runs (see workflowSyncInProgress below).
+
 // v1.8: Verbose per-workflow diagnostic logging is gated behind
 // DEBUG_WORKFLOW_SYNC=true. When enabled, every workflow prints its
 // top-level Internal API keys + nested key structure (~7 lines/workflow).
@@ -14,6 +24,14 @@ import { updateLastSynced, softDeleteMissing } from './entity-syncer.js';
 // key structure (useful for catching GHL schema drift) and a
 // one-line summary prints at the end.
 const DEBUG_WORKFLOW_SYNC = process.env.DEBUG_WORKFLOW_SYNC === 'true';
+
+// v1.9: Overlap guard. extractAndSyncWorkflows is awaited by the hourly
+// scheduler, the sync_workflows MCP tool, and workflow-analysis. A manual
+// sync_workflows call interleaving with the scheduler mid-workflow can race the
+// delete-then-insert block; this module-level flag makes a concurrent run return
+// immediately (status 'already_running') instead of starting a second pass.
+// Mirrors the hlSyncInProgress pattern in src/tools/workflows.ts.
+let workflowSyncInProgress = false;
 
 export interface SyncResult {
   workflows_synced: number;
@@ -25,6 +43,7 @@ export interface SyncResult {
   snapshots_created: number;
   errors: string[];
   failed_workflow_ids: string[];
+  status?: string;
 }
 
 export interface SyncOptions {
@@ -313,6 +332,23 @@ function extractFromTemplates(templates: Record<string, unknown>[]): {
  * workflow_connections, and workflow_snapshots tables.
  */
 export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promise<SyncResult> {
+  // v1.9: Bail out if another sync is already running (see workflowSyncInProgress).
+  if (workflowSyncInProgress) {
+    return {
+      workflows_synced: 0,
+      workflows_total: 0,
+      steps_synced: 0,
+      triggers_synced: 0,
+      actions_synced: 0,
+      connections_synced: 0,
+      snapshots_created: 0,
+      errors: ['Workflow sync already in progress — skipping overlapping run.'],
+      failed_workflow_ids: [],
+      status: 'already_running',
+    };
+  }
+  workflowSyncInProgress = true;
+
   const ghl = new GHLClient();
   const supabase = getSupabaseClient();
   const batchSize = options.batchSize || 0;
@@ -589,12 +625,22 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
         await supabase.from('workflow_triggers').delete().eq('workflow_id', workflowDetail.id);
         await supabase.from('workflow_actions').delete().eq('workflow_id', workflowDetail.id);
 
-        // 6. Extract and insert steps
+        // v1.9: Accumulate detail rows into in-memory arrays and insert one
+        // batched call per table (was one PostgREST request per row). actionRows
+        // collects both step-level (here) and top-level (section 8) actions and
+        // is inserted once, in section 8, before the actions backfill reads it.
         const steps = workflowDetail.steps || [];
+        const stepRows: Array<Record<string, unknown>> = [];
+        const actionRows: Array<Record<string, unknown>> = [];
+        const connectionRows: Array<Record<string, unknown>> = [];
+        const triggerRows: Array<Record<string, unknown>> = [];
+
+        // 6. Build step rows (and step-level action rows)
         for (let i = 0; i < steps.length; i++) {
           const step = steps[i] as GHLWorkflowStep;
-          await supabase.from('workflow_steps').insert({
-            step_id: step.id || `${workflowDetail.id}_step_${i}`,
+          const stepId = step.id || `${workflowDetail.id}_step_${i}`;
+          stepRows.push({
+            step_id: stepId,
             workflow_id: workflowDetail.id,
             step_order: i + 1,
             step_type: step.type || 'unknown',
@@ -603,60 +649,101 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
             branch_condition: step.condition || null,
             raw_json: step,
           });
-          result.steps_synced++;
 
           // Extract actions from steps
           if (step.actions) {
             for (const action of step.actions) {
-              await supabase.from('workflow_actions').insert({
+              actionRows.push({
                 workflow_id: workflowDetail.id,
-                step_id: step.id || `${workflowDetail.id}_step_${i}`,
+                step_id: stepId,
                 action_type: action.type || 'unknown',
                 action_target: action.target || null,
                 raw_json: action,
               });
-              result.actions_synced++;
             }
           }
-
         }
 
-        // 6b. Insert connections from parsed graph (or fallback to sequential)
+        // Dedupe steps in-memory on step_id (keep first occurrence) — defends
+        // against a parser emitting the same node twice within one workflow.
+        const seenStepIds = new Set<string>();
+        const dedupedStepRows = stepRows.filter((r) => {
+          const id = r.step_id as string;
+          if (seenStepIds.has(id)) return false;
+          seenStepIds.add(id);
+          return true;
+        });
+
+        // Insert steps: single upsert on the composite (workflow_id, step_id) PK.
+        // ignoreDuplicates is a defensive layer against a manual sync racing the
+        // scheduler mid-workflow. Counter increments only on success.
+        if (dedupedStepRows.length > 0) {
+          const { error: stepsError } = await supabase
+            .from('workflow_steps')
+            .upsert(dedupedStepRows, { onConflict: 'workflow_id,step_id', ignoreDuplicates: true });
+          if (stepsError) {
+            result.errors.push(`Workflow ${workflowDetail.id} steps insert failed: ${stepsError.message}`);
+          } else {
+            result.steps_synced += dedupedStepRows.length;
+          }
+        }
+
+        // 6b. Build connections from parsed graph (or fallback to sequential)
         if (parsedConnections.length > 0) {
           for (const conn of parsedConnections) {
-            await supabase.from('workflow_connections').insert({
+            connectionRows.push({
               workflow_id: workflowDetail.id,
               from_step: conn.fromStep,
               to_step: conn.toStep,
               condition: conn.condition || null,
             });
-            result.connections_synced++;
           }
         } else {
           // Fallback: build connections between sequential steps
           for (let j = 0; j < steps.length - 1; j++) {
             const fromStep = steps[j] as GHLWorkflowStep;
             const toStep = steps[j + 1] as GHLWorkflowStep;
-            await supabase.from('workflow_connections').insert({
+            connectionRows.push({
               workflow_id: workflowDetail.id,
               from_step: fromStep.id || `${workflowDetail.id}_step_${j}`,
               to_step: toStep.id || `${workflowDetail.id}_step_${j + 1}`,
               condition: fromStep.condition || null,
             });
-            result.connections_synced++;
           }
         }
 
-        // 7. Extract and insert triggers
+        if (connectionRows.length > 0) {
+          const { error: connectionsError } = await supabase
+            .from('workflow_connections')
+            .insert(connectionRows);
+          if (connectionsError) {
+            result.errors.push(`Workflow ${workflowDetail.id} connections insert failed: ${connectionsError.message}`);
+          } else {
+            result.connections_synced += connectionRows.length;
+          }
+        }
+
+        // 7. Build and insert triggers. Triggers must land before the
+        // workflows.trigger_type/trigger_config backfill reads them back below.
         const triggers = workflowDetail.triggers || [];
         for (const trigger of triggers) {
-          await supabase.from('workflow_triggers').insert({
+          triggerRows.push({
             workflow_id: workflowDetail.id,
             trigger_event: trigger.type || trigger.name || (trigger as Record<string, unknown>).triggerName as string || (trigger as Record<string, unknown>).event as string || 'unknown',
             trigger_value: extractTriggerValue(trigger as unknown as Record<string, unknown>),
             raw_json: trigger,
           });
-          result.triggers_synced++;
+        }
+
+        if (triggerRows.length > 0) {
+          const { error: triggersError } = await supabase
+            .from('workflow_triggers')
+            .insert(triggerRows);
+          if (triggersError) {
+            result.errors.push(`Workflow ${workflowDetail.id} triggers insert failed: ${triggersError.message}`);
+          } else {
+            result.triggers_synced += triggerRows.length;
+          }
         }
 
         // Backfill workflows.trigger_type and trigger_config from workflow_triggers data
@@ -688,14 +775,26 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
         const topActions = workflowDetail.actions || [];
         for (const action of topActions) {
           const actionStepId = action.id && stepIds.has(action.id) ? action.id : null;
-          await supabase.from('workflow_actions').insert({
+          actionRows.push({
             workflow_id: workflowDetail.id,
             step_id: actionStepId,
             action_type: action.type || 'unknown',
             action_target: action.target || null,
             raw_json: action,
           });
-          result.actions_synced++;
+        }
+
+        // Insert all actions (step-level from section 6 + top-level) in one
+        // batched call, before the actions backfill reads them back below.
+        if (actionRows.length > 0) {
+          const { error: actionsError } = await supabase
+            .from('workflow_actions')
+            .insert(actionRows);
+          if (actionsError) {
+            result.errors.push(`Workflow ${workflowDetail.id} actions insert failed: ${actionsError.message}`);
+          } else {
+            result.actions_synced += actionRows.length;
+          }
         }
 
         // Backfill workflows.actions from workflow_actions data
@@ -774,6 +873,9 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
         completed_at: nowET(),
       }).eq('id', syncLog.id);
     }
+  } finally {
+    // v1.9: Always release the overlap guard, even on fatal error.
+    workflowSyncInProgress = false;
   }
 
   return result;
