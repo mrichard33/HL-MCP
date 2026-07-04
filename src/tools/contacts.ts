@@ -74,7 +74,7 @@ export const contactTools = {
   },
 
   update_contact: {
-    description: 'Update standard contact fields (name, email, phone, company) in GoHighLevel. Does NOT accept tags — tag mutations MUST go through add_tags / remove_tags. GHL\'s PUT /contacts/{id} wholesale-replaces the tag array, which has caused production tag-wipe incidents (Kristen Nichols 2026-05-19, n8n LP Enrichment v2.0 2026-05-15).',
+    description: 'Update standard contact fields (name, email, phone, company, address) in GoHighLevel. Does NOT accept tags — tag mutations MUST go through add_tags / remove_tags. GHL\'s PUT /contacts/{id} wholesale-replaces the tag array, which has caused production tag-wipe incidents (Kristen Nichols 2026-05-19, n8n LP Enrichment v2.0 2026-05-15).',
     inputSchema: z.object({
       contactId: z.string().describe('GoHighLevel contact ID'),
       firstName: z.string().optional(),
@@ -82,6 +82,10 @@ export const contactTools = {
       email: z.string().optional(),
       phone: z.string().optional(),
       companyName: z.string().optional(),
+      address1: z.string().optional().describe('Street address line 1'),
+      city: z.string().optional(),
+      state: z.string().optional().describe('Two-letter state code, e.g. FL'),
+      postalCode: z.string().optional(),
       // tags intentionally omitted — PUT /contacts/{id} with a tags array
       // wholesale-replaces the contact's full tag set. Use add_tags or
       // remove_tags (POST/DELETE /contacts/{id}/tags) which are additive.

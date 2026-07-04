@@ -23,7 +23,7 @@
 import { z } from 'zod';
 import { getSupabaseClient } from '../clients/supabase.js';
 
-const DEFAULT_NAMESPACES = ['p3:', 'loss-reason:', 'stage:', 'active-entry:', 'buyer:'];
+const DEFAULT_NAMESPACES = ['p3:', 'loss-reason:', 'stage:', 'active-entry:', 'buyer:', 'bj:stage-'];
 
 // LP custom field IDs as configured in GHL. Mirrors lp-mcp/src/actions/resolvers.js
 // (FIELD_LP_PROSPECT_ID = 'ZRQAVrzhtzApzLlHmT87'). The drift candidate tool
@@ -58,10 +58,10 @@ function decodeCustomField(customFields: unknown, fieldId: string): string | nul
 export const agenticIntegrityTools = {
   audit_namespace_violations: {
     description:
-      'Audit contacts for tag-stacking within exclusive namespaces (p3:, loss-reason:, stage:, active-entry:, buyer:). Returns one entry per (contact, namespace) where more than one tag from that family is present. Pair with LP MCP namespace exclusivity enforcement.',
+      'Audit contacts for tag-stacking within exclusive namespaces (p3:, loss-reason:, stage:, active-entry:, buyer:, bj:stage-). Returns one entry per (contact, namespace) where more than one tag from that family is present. Pair with LP MCP namespace exclusivity enforcement.',
     inputSchema: z.object({
       namespaces: z.array(z.string()).optional().describe(
-        'Tag prefixes to audit. Defaults to ["p3:", "loss-reason:", "stage:", "active-entry:", "buyer:"].'
+        'Tag prefixes to audit. Defaults to ["p3:", "loss-reason:", "stage:", "active-entry:", "buyer:", "bj:stage-"].'
       ),
       limit: z.number().optional().default(500).describe('Max contacts to scan (default 500)'),
       contact_id: z.string().optional().describe('Optional: scope the audit to a single GHL contact ID'),
