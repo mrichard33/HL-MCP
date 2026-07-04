@@ -8,6 +8,10 @@ export interface GHLContact {
   email?: string;
   phone?: string;
   companyName?: string;
+  address1?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
   tags?: string[];
   source?: string;
   customFields?: Record<string, unknown>[];
