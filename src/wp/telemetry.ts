@@ -16,6 +16,9 @@
  * skip: its max(existing, pct) projection is monotonic and self-idempotent,
  * and a blanket skip would freeze wp_watch_pct at the first synced value.
  *
+ * SUPABASE_ONLY_EVENTS (page_view, guide_progress) persist rows but never
+ * run the idempotency lookup or GHL projection.
+ *
  * Failure tolerance: the wp_page_events table is migrated manually
  * (supabase/migrations/010_wp_page_events.sql) — every Supabase call here
  * logs-and-continues so the service works before the migration runs.
@@ -27,6 +30,9 @@ import { projectEventToGhl } from './ghl-projection.js';
 
 // GHL contact IDs are alphanumeric, typically 20 chars
 const RAW_CID_PATTERN = /^[A-Za-z0-9]{15,32}$/;
+
+// Events that persist to wp_page_events but never project to GHL
+const SUPABASE_ONLY_EVENTS = new Set(['page_view', 'guide_progress']);
 
 /**
  * Verify a <contactId>.<sig> token. Returns the contact ID on success,
@@ -110,7 +116,7 @@ export async function recordTelemetryEvent(payload: WpTelemetryPayload): Promise
     console.error(`[wp-telemetry] insert failed for "${payload.event}":`, err instanceof Error ? err.message : err);
   }
 
-  if (!contactId || payload.event === 'page_view') return;
+  if (!contactId || SUPABASE_ONLY_EVENTS.has(payload.event)) return;
 
   // Idempotency guard (skipped for video_progress — see module header)
   if (payload.event !== 'video_progress') {
