@@ -17,6 +17,9 @@
  * GHL write-back run fire-and-forget so navigator.sendBeacon never blocks
  * page navigation. Unknown event names get the same 204 with nothing
  * stored (the allowlist is not leaked to clients).
+ *
+ * The /guide page (Documented Home Protection Guide) shares this pipeline:
+ * guide_cta_click projects to GHL; guide_progress is Supabase-only.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -31,6 +34,8 @@ const EVENT_ALLOWLIST = new Set([
   'cta_click',
   'video_progress',
   'report_ready',
+  'guide_cta_click',
+  'guide_progress',
 ]);
 
 const MAX_BODY_BYTES = 10 * 1024;
