@@ -91,6 +91,14 @@ export async function projectEventToGhl(evt: WpProjectionEvent): Promise<void> {
       addField('wp_last_engaged', evt.clientTs);
       break;
 
+    case 'guide_cta_click':
+      // Documented Home Protection Guide (/guide) — Protection Profile Review CTA.
+      // Distinct tag so agent_rules can route on guide intent separately from
+      // the film-page CTA.
+      tags.push('guide:cta-click');
+      addField('wp_last_engaged', evt.clientTs);
+      break;
+
     case 'report_ready':
       // data also carries total_opportunity_cost and static_load — Supabase only
       if (evt.data.grade !== undefined) addField('wp_risk_grade', String(evt.data.grade));
