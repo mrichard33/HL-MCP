@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>The Documented Home Protection Guide — Reece Windows &amp; Doors</title>
-<meta name="description" content="What your paperwork says about your protection — and what to do when it says nothing. The five documents that matter, what the wind-mitigation inspector looks for, and a ten-minute self-check." />
+<meta name="description" content="The five documents that prove your home is protected, what the wind-mitigation inspector actually checks, and a ten-minute self-check you can run tonight." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,500;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -29,7 +29,7 @@
   .wrap{width:100%; max-width:var(--col); margin:0 auto; padding:0 var(--pad);}
 
   /* ---- hero ---- */
-  .hero{padding:72px 0 56px; text-align:center;}
+  .hero{padding:72px 0 50px; text-align:center;}
   .eyebrow{font-size:12px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; color:var(--gold); margin:0 0 18px;}
   h1{font-family:var(--serif); font-weight:800; font-size:clamp(34px,7vw,52px); line-height:1.1; margin:0 0 18px; color:var(--white);}
   .hero .sub{color:var(--on-navy); font-size:18px; line-height:1.65; max-width:540px; margin:0 auto 30px;}
@@ -38,27 +38,26 @@
     padding:10px 0 10px 20px; font-family:var(--serif); font-style:italic; font-weight:600;
     font-size:20px; line-height:1.5; color:var(--cream);
   }
-  .rule{width:56px; height:3px; background:var(--red); border:0; margin:44px auto 0;}
+  .rule{width:56px; height:3px; background:var(--red); border:0; margin:40px auto 0;}
 
   /* ---- body sections ---- */
-  section{padding:38px 0 6px;}
+  section{padding:34px 0 4px;}
   .kicker{font-size:12px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; color:var(--gold); margin:0 0 10px;}
-  h2{font-family:var(--serif); font-weight:700; font-size:clamp(26px,5vw,34px); line-height:1.2; margin:0 0 18px; color:var(--white);}
-  h3{font-family:var(--sans); font-weight:700; font-size:17px; margin:26px 0 8px; color:var(--cream);}
+  h2{font-family:var(--serif); font-weight:700; font-size:clamp(26px,5vw,34px); line-height:1.2; margin:0 0 16px; color:var(--white);}
   p{color:var(--on-navy); font-size:16.5px; line-height:1.75; margin:0 0 16px;}
   p b, p strong{color:var(--cream); font-weight:600;}
   em{color:var(--cream);}
 
   .pull{
     background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12);
-    border-left:3px solid var(--gold); border-radius:10px; padding:20px 22px; margin:26px 0;
+    border-left:3px solid var(--gold); border-radius:10px; padding:18px 20px; margin:22px 0;
   }
   .pull p{margin:0; color:var(--cream); font-size:16.5px;}
 
   /* ---- document cards ---- */
   .doc{
     background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12);
-    border-radius:12px; padding:20px 22px; margin:0 0 16px;
+    border-radius:12px; padding:18px 20px; margin:0 0 14px;
   }
   .doc .dnum{
     display:inline-flex; align-items:center; justify-content:center;
@@ -66,17 +65,21 @@
     font-weight:800; font-size:13px; margin-right:10px; vertical-align:-6px;
   }
   .doc .dtitle{font-family:var(--sans); font-weight:700; font-size:16.5px; color:var(--white);}
-  .doc p{margin:12px 0 0; font-size:15.5px;}
+  .doc p{margin:10px 0 0; font-size:15.5px;}
+  .doc .where{
+    margin:10px 0 0; font-size:14px; color:var(--gold);
+  }
+  .doc .where b{color:var(--gold); font-weight:700;}
 
   /* ---- reasons ---- */
-  .reason{border-left:3px solid var(--red); padding:2px 0 2px 18px; margin:0 0 20px;}
+  .reason{border-left:3px solid var(--red); padding:2px 0 2px 18px; margin:0 0 18px;}
   .reason p{margin:0; font-size:16px;}
   .reason b{color:var(--white);}
 
   /* ---- shutter list ---- */
-  ul.gaps{list-style:none; margin:16px 0; padding:0;}
+  ul.gaps{list-style:none; margin:14px 0; padding:0;}
   ul.gaps li{
-    position:relative; padding:0 0 0 22px; margin:0 0 14px;
+    position:relative; padding:0 0 0 22px; margin:0 0 12px;
     color:var(--on-navy); font-size:16px; line-height:1.7;
   }
   ul.gaps li::before{content:""; position:absolute; left:0; top:9px; width:8px; height:8px; background:var(--red);}
@@ -85,21 +88,26 @@
   /* ---- checklist ---- */
   .check{
     background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12);
-    border-radius:12px; padding:24px 24px 12px; margin:22px 0;
+    border-radius:12px; padding:22px 22px 10px; margin:20px 0;
   }
-  .ci{margin:0 0 18px;}
+  .ci{margin:0 0 15px;}
   .ci .cbox{
     display:inline-block; width:15px; height:15px; border:2px solid var(--gold);
     border-radius:3px; margin-right:10px; vertical-align:-2px;
   }
   .ci .ct{font-weight:700; font-size:16px; color:var(--white);}
-  .ci p{margin:6px 0 0 27px; font-size:15px;}
+  .ci p{margin:5px 0 0 27px; font-size:15px;}
+  .score{
+    border-top:1px solid rgba(255,255,255,.14); margin-top:6px; padding:16px 0 8px;
+    font-family:var(--serif); font-weight:600; font-size:18px; color:var(--cream); text-align:center;
+  }
+  .score b{color:var(--gold);}
 
   /* ---- CTA ---- */
   .cta{
     background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
     border:1px solid rgba(224,178,60,.4); border-radius:14px;
-    padding:34px 30px; margin:34px 0 10px; text-align:center;
+    padding:32px 28px; margin:30px 0 10px; text-align:center;
   }
   .cta h3{font-family:var(--serif); font-weight:700; font-size:26px; margin:0 0 12px; color:var(--white);}
   .cta p{max-width:520px; margin:0 auto 14px; font-size:16px;}
@@ -113,11 +121,11 @@
   .cta .btn:focus-visible{outline:3px solid var(--gold); outline-offset:2px;}
   .cta .small{font-size:13.5px; color:var(--line-grey); margin:14px auto 0;}
 
-  .sig{font-family:var(--serif); font-style:italic; font-size:19px; color:var(--cream); margin:26px 0 0;}
+  .sig{font-family:var(--serif); font-style:italic; font-size:19px; color:var(--cream); margin:24px 0 0;}
 
   /* ---- footer ---- */
   .brandfoot{
-    border-top:1px solid rgba(255,255,255,.14); margin-top:54px; padding:28px 0 8px; text-align:center;
+    border-top:1px solid rgba(255,255,255,.14); margin-top:48px; padding:26px 0 8px; text-align:center;
   }
   .brandfoot .bname{font-weight:800; letter-spacing:.14em; font-size:14px; color:var(--white); text-transform:uppercase;}
   .brandfoot p{font-size:13.5px; color:var(--line-grey); max-width:560px; margin:10px auto;}
@@ -131,123 +139,104 @@
 <main class="wrap">
 
   <header class="hero">
-    <p class="eyebrow">A Homeowner&rsquo;s Field Guide &middot; From Randy Reece</p>
+    <p class="eyebrow">A 6-Minute Field Guide &middot; From Randy Reece</p>
     <h1>The Documented Home Protection Guide</h1>
-    <p class="sub">What your paperwork says about your protection &mdash; and what to do when it says nothing.</p>
+    <p class="sub">The five documents that prove your home is protected, what the inspector actually checks, and a ten-minute self-check you can run tonight.</p>
     <div class="domino">&ldquo;Protection is not what you install. It&rsquo;s what you can prove.&rdquo;</div>
     <hr class="rule" />
   </header>
 
   <section id="intro">
-    <p class="kicker">Why I put this guide together</p>
-    <p>My name is Randy Reece. My father started this company in 1972, and we&rsquo;ve been protecting Florida homes since 2005. In that time I&rsquo;ve stood in a lot of living rooms after a lot of storms, and I&rsquo;ve noticed something that most people in my industry won&rsquo;t say out loud:</p>
-    <p>Two homes on the same street can go through the same storm and come out with opposite outcomes. Not because one had better products. <b>Because one had better paperwork.</b></p>
-    <div class="pull"><p>That&rsquo;s a hard thing to hear if you&rsquo;ve already spent real money on shutters or windows. So let me say the second part, because it matters just as much: <b>it&rsquo;s not your fault you&rsquo;re underprotected &mdash; the industry sold you a product instead of a system.</b></p></div>
-    <p>Nobody handed you a file when the crew drove away. Nobody told you what an NOA was or why you&rsquo;d want yours. You did what a responsible homeowner does. The category failed you, not the other way around.</p>
-    <p>This guide fixes the information gap. In the next few pages you&rsquo;ll learn what documentation actually matters for a Florida home, what a wind-mitigation inspector is looking for when they walk your property, and how to run a ten-minute check on your own house &mdash; tonight, for free.</p>
-  </section>
-
-  <section id="part-1">
-    <p class="kicker">Part One</p>
-    <h2>The gap between &ldquo;installed&rdquo; and &ldquo;proven&rdquo;</h2>
-    <p>When you bought shutters or windows, you bought two things &mdash; you just may not have known it.</p>
-    <p>The first thing is <b>physical</b>: aluminum, glass, tracks, anchors. That&rsquo;s the part you can see from the driveway.</p>
-    <p>The second thing is <b>evidentiary</b>: the product approval that says what you installed was tested and rated, the permit that says it was installed legally, the inspection record that says it was installed correctly, and the labels and photos that let a stranger verify all of it years later.</p>
-    <p>The physical part protects your home during the storm. The evidentiary part protects your family after it &mdash; during the inspection, during the claim review, during the sale of your home, during every moment when someone who wasn&rsquo;t there asks, <em>&ldquo;Can you show me?&rdquo;</em></p>
-    <p>Most Florida homeowners own the first part and have never seen the second. That&rsquo;s the gap this guide closes.</p>
+    <p class="kicker">Why this guide exists</p>
+    <p>My name is Randy Reece. My father started this company in 1972, and we&rsquo;ve been protecting Florida homes since 2005. Here&rsquo;s what most people in my industry won&rsquo;t say out loud: two homes on the same street can go through the same storm and come out with opposite outcomes. Not because one had better products. <b>Because one had better paperwork.</b></p>
+    <div class="pull"><p><b>It&rsquo;s not your fault you&rsquo;re underprotected &mdash; the industry sold you a product instead of a system.</b> Nobody handed you a file when the crew drove away. Nobody told you what an NOA was or why you&rsquo;d want yours.</p></div>
+    <p>The fix starts with understanding one distinction. What you bought is <b>physical</b> &mdash; aluminum, glass, anchors. What protects your family after the storm is <b>evidentiary</b> &mdash; the approval, the permit, the inspection record, the labels. The physical part works during the storm; the paperwork works during the inspection, the claim review, and the sale of your home &mdash; every moment someone who wasn&rsquo;t there asks, <em>&ldquo;Can you show me?&rdquo;</em> Most Florida homeowners own the first part and have never seen the second. This guide closes that gap.</p>
   </section>
 
   <section id="part-2">
-    <p class="kicker">Part Two</p>
+    <p class="kicker">Part One</p>
     <h2>The five documents that matter</h2>
-    <p>If your home protection had a file folder, here&rsquo;s what would be in it.</p>
+    <p>If your home protection had a file folder, here&rsquo;s what would be in it &mdash; and where to find each piece.</p>
 
     <div class="doc"><span class="dnum">1</span><span class="dtitle">The product approval (NOA or FL number)</span>
-      <p>Every legitimate impact product installed in Florida carries an approval: a Miami-Dade Notice of Acceptance (NOA) or a Florida Product Approval (an &ldquo;FL number&rdquo;). This is the document that proves the product was tested to a standard &mdash; not just sold with a promise. It&rsquo;s usually referenced on a label on the product itself, on the permit, or in the installer&rsquo;s paperwork. If nobody can produce the approval number for what&rsquo;s on your home, then as far as any verifier is concerned, it&rsquo;s unrated.</p></div>
+      <p>Every legitimate impact product in Florida carries a Miami-Dade Notice of Acceptance (NOA) or a Florida Product Approval (&ldquo;FL number&rdquo;) &mdash; the proof it was tested to a standard, not just sold with a promise. No approval number, no rating, as far as any verifier is concerned.</p>
+      <p class="where"><b>Where to look:</b> product labels, your permit, or installer paperwork. FL numbers are searchable at floridabuilding.org; NOAs at miamidade.gov.</p></div>
 
     <div class="doc"><span class="dnum">2</span><span class="dtitle">The permit and final inspection</span>
-      <p>Opening protection is permitted work in Florida. The permit record shows the work was done legally; the final inspection record shows a building official signed off on how it was installed. Both live at your county or city building department, and most Florida counties let you search them online by address. Work done without a permit isn&rsquo;t just a code problem &mdash; it&rsquo;s a documentation dead end.</p></div>
+      <p>Opening protection is permitted work in Florida. The permit proves it was done legally; the passed final inspection proves a building official signed off on how. No permit means no record the work exists.</p>
+      <p class="where"><b>Where to look:</b> your county or city building department website &mdash; most let you search permits by address, free.</p></div>
 
-    <div class="doc"><span class="dnum">3</span><span class="dtitle">The wind-mitigation inspection report (Form OIR-B1-1802)</span>
-      <p>This is the standardized form a licensed inspector fills out when they evaluate your home&rsquo;s wind-resistant features &mdash; roof shape, roof attachment, and critically for our purposes, opening protection. It&rsquo;s the document insurers use to understand what your home actually has. These reports are generally valid for five years. If yours is older than that, or you&rsquo;ve never had one, your home&rsquo;s protection story is being told by an outdated document &mdash; or by no document at all.</p></div>
+    <div class="doc"><span class="dnum">3</span><span class="dtitle">The wind-mitigation report (Form OIR-B1-1802)</span>
+      <p>The standardized form a licensed inspector fills out on your home&rsquo;s wind-resistant features &mdash; including opening protection. It&rsquo;s how insurers understand what your home actually has, and it&rsquo;s generally valid for five years.</p>
+      <p class="where"><b>Where to look:</b> your closing documents, your email, or your insurance agent. Check the date &mdash; older than five years is expired.</p></div>
 
     <div class="doc"><span class="dnum">4</span><span class="dtitle">Labels and photographs</span>
-      <p>Impact windows carry permanent markings, usually etched in a corner of the glass. Shutters carry stamped or affixed labels. These are what an inspector physically looks for. Photographs of labels, of installed hardware, and of anchoring details give you a record that survives even if a label fades, a shutter panel gets repainted, or a document gets lost.</p></div>
+      <p>Impact windows carry etched markings in a corner of the glass; shutters carry stamped or affixed labels. These are what an inspector physically verifies &mdash; and photos of them survive even when the labels don&rsquo;t.</p>
+      <p class="where"><b>Where to look:</b> glass corners, shutter panels, tracks, and housings. Photograph everything you find, today.</p></div>
 
     <div class="doc"><span class="dnum">5</span><span class="dtitle">Warranty registration and installer records</span>
-      <p>Who installed it, when, under what warranty, and whether that warranty transfers. If the company that installed your protection has disappeared &mdash; and in this industry, many have &mdash; these records may be the only proof of the installation&rsquo;s provenance.</p></div>
+      <p>Who installed it, when, under what warranty, and whether it transfers. If your installer has disappeared &mdash; and in this industry, many have &mdash; these records may be the only proof of where your protection came from.</p>
+      <p class="where"><b>Where to look:</b> your closing folder, installer invoices, manufacturer warranty registration.</p></div>
 
-    <p>Five documents. That&rsquo;s the whole file. Most homeowners we meet have one of them, sometimes none.</p>
+    <p>Five documents. That&rsquo;s the whole file. Most homeowners we meet have one, sometimes none.</p>
   </section>
 
   <section id="part-3">
-    <p class="kicker">Part Three</p>
-    <h2>What the wind-mitigation inspector is actually looking for</h2>
-    <p>Here&rsquo;s the part almost nobody explains to homeowners before the inspector shows up.</p>
-    <p>When an inspector evaluates your opening protection, they are not asking, <em>&ldquo;Does this house have shutters?&rdquo;</em> They&rsquo;re asking, <b>&ldquo;Can I verify that every opening on this house is protected by a rated product?&rdquo;</b></p>
-    <p>That distinction changes everything, for three reasons:</p>
+    <p class="kicker">Part Two</p>
+    <h2>What the inspector is actually looking for</h2>
+    <p>When an inspector evaluates your opening protection, the question is never <em>&ldquo;does this house have shutters?&rdquo;</em> It&rsquo;s <b>&ldquo;can I verify that every opening is protected by a rated product?&rdquo;</b> Three rules follow from that:</p>
 
-    <div class="reason"><p><b>Reason one: verification requires evidence, not appearance.</b> The inspector needs to see a label, a marking, a product approval number, or permit documentation that ties what&rsquo;s on your home to a tested rating. A shutter with no label and no paperwork can&rsquo;t be verified &mdash; no matter how sturdy it looks. On the form, &ldquo;unverifiable&rdquo; and &ldquo;unprotected&rdquo; end up in the same place.</p></div>
+    <div class="reason"><p><b>Evidence beats appearance.</b> A shutter with no label and no paperwork can&rsquo;t be verified, no matter how sturdy it looks. On the form, &ldquo;unverifiable&rdquo; and &ldquo;unprotected&rdquo; end up in the same place.</p></div>
 
-    <div class="reason"><p><b>Reason two: it&rsquo;s an all-openings standard.</b> The classification looks at every glazed opening &mdash; every window, every sliding door, every entry door with glass. The strongest classifications require all of them to be verifiably protected. One skipped bathroom window, one garage side door, one opening the original crew ran out of panels for, and the whole home is classified by that weakest point.</p></div>
+    <div class="reason"><p><b>It&rsquo;s an all-openings standard.</b> Every window, sliding door, and glass entry door counts. One bare bathroom window or garage side door, and the whole home is classified by that weakest point.</p></div>
 
-    <div class="reason"><p><b>Reason three: the form doesn&rsquo;t record intentions.</b> It records what can be documented on inspection day. Whatever your protection actually is, the report only reflects what you can prove &mdash; which is why homeowners with genuinely protected homes can still end up with reports that say otherwise.</p></div>
+    <div class="reason"><p><b>The form doesn&rsquo;t record intentions.</b> It records what can be documented on inspection day &mdash; which is why genuinely protected homes can still end up with reports that say otherwise.</p></div>
 
-    <div class="pull"><p>We&rsquo;re a window and door company, not an insurance advisor, so I won&rsquo;t tell you what any of this means for your policy &mdash; that&rsquo;s between you and your carrier. What I can tell you, from twenty years of Florida installs, is <b>which features tend to qualify for wind-mitigation documentation and which gaps tend to show up on that form.</b> That&rsquo;s a construction question, and it&rsquo;s one we can answer.</p></div>
+    <div class="pull"><p>We&rsquo;re a window and door company, not an insurance advisor &mdash; what any of this means for your policy is between you and your carrier. What I can tell you, from twenty years of Florida installs, is <b>which features tend to qualify for wind-mitigation documentation and which gaps tend to show up on that form.</b></p></div>
   </section>
 
   <section id="part-4">
-    <p class="kicker">Part Four</p>
-    <h2>Why shutter owners have this problem more than anyone</h2>
-    <p>If you have shutters, the honest odds are that some of what you just read applies to your home. That&rsquo;s not a knock on you. It&rsquo;s how the shutter category was sold.</p>
-    <p>Shutters were marketed as a product, not a system. A crew installed panels or accordions, collected a check, and left. Here&rsquo;s what typically didn&rsquo;t happen:</p>
+    <p class="kicker">Part Three</p>
+    <h2>Why shutter owners get hit hardest</h2>
+    <p>Shutters were sold as a product, not a system. A crew installed panels, collected a check, and left &mdash; and here&rsquo;s what typically didn&rsquo;t happen:</p>
     <ul class="gaps">
-      <li><b>No approval documents were handed over.</b> The NOA existed somewhere &mdash; at the manufacturer, maybe in a permit file &mdash; but nobody gave you a copy or told you it mattered.</li>
-      <li><b>Labels weren&rsquo;t preserved.</b> Panel shutters get stacked in a garage for fifteen years. Labels fade, peel, get painted over. Accordion housings get caulked and repainted. The physical evidence erodes.</li>
-      <li><b>The approval covers the installation, not just the metal.</b> An NOA specifies anchors, spacing, and mounting details. If hardware was swapped over the years, or the original anchoring never matched the approval, the product on your wall may no longer match the rating on paper.</li>
-      <li><b>Some installs were never permitted at all.</b> Especially older ones. No permit means no inspection record, which means the county has no evidence the work exists.</li>
-      <li><b>Coverage was partial.</b> It was common to shutter the big front windows and leave a side door or a small bathroom window bare. Under an all-openings standard, that&rsquo;s the opening that defines the home.</li>
+      <li><b>No approval documents were handed over</b> &mdash; the NOA existed somewhere, but nobody gave you a copy.</li>
+      <li><b>Labels weren&rsquo;t preserved</b> &mdash; panels stacked in a garage for fifteen years fade, peel, and get painted over.</li>
+      <li><b>The approval covers the installation, not just the metal</b> &mdash; swapped hardware or off-spec anchoring means the product no longer matches the rating on paper.</li>
+      <li><b>Some installs were never permitted</b> &mdash; no permit, no inspection record, no evidence the work exists.</li>
+      <li><b>Coverage was partial</b> &mdash; front windows shuttered, a side door left bare. Under an all-openings standard, that bare opening defines the home.</li>
     </ul>
-    <p>So when I say most shutter owners have never seen their NOA, I&rsquo;m not trying to scare you. I&rsquo;m describing a paperwork norm from an era when nobody thought paperwork was the product. The good news: every one of these gaps is findable, and most are fixable.</p>
+    <p>None of that is a knock on you &mdash; it&rsquo;s a paperwork norm from an era when nobody thought paperwork was the product. Every one of these gaps is findable, and most are fixable.</p>
   </section>
 
   <section id="part-5">
-    <p class="kicker">Part Five</p>
+    <p class="kicker">Part Four</p>
     <h2>The ten-minute self-check</h2>
-    <p>You can run this tonight. No ladder, no tools, no appointment.</p>
+    <p>Run this tonight. No ladder, no tools, no appointment.</p>
     <div class="check">
       <div class="ci"><span class="cbox"></span><span class="ct">1. Walk the openings.</span>
-        <p>Count every window and glass door. Note any opening with no protection at all &mdash; that includes garage side doors and small bathroom windows. Weakest opening defines the home.</p></div>
+        <p>Count every window and glass door. Flag anything unprotected &mdash; including garage side doors and small bathroom windows.</p></div>
       <div class="ci"><span class="cbox"></span><span class="ct">2. Look for markings.</span>
-        <p>On impact windows, check the corners of the glass for etched markings. On shutters, look for stamped or affixed labels on panels, tracks, or housings. Photograph everything you find.</p></div>
+        <p>Glass corners on windows; labels on shutter panels, tracks, housings. Photograph everything.</p></div>
       <div class="ci"><span class="cbox"></span><span class="ct">3. Search your permit history.</span>
-        <p>Go to your county or city building department website and search permits by your address. Look for window, door, or shutter permits &mdash; and whether each shows a passed final inspection.</p></div>
+        <p>County building department site, search by address. Look for window/door/shutter permits with passed finals.</p></div>
       <div class="ci"><span class="cbox"></span><span class="ct">4. Find your wind-mitigation report.</span>
-        <p>Check your closing documents, your email, or ask whoever insured the home. Note the date &mdash; reports older than five years are generally expired.</p></div>
+        <p>Closing documents, email, or your agent. Older than five years = expired.</p></div>
       <div class="ci"><span class="cbox"></span><span class="ct">5. Pull your product paperwork.</span>
-        <p>Warranty documents, installer invoices, anything naming a manufacturer or product line. A product name plus a permit is often enough to trace an approval number.</p></div>
-      <div class="ci"><span class="cbox"></span><span class="ct">6. Score yourself honestly.</span>
-        <p>Five documents from Part Two. How many can you put your hands on right now?</p></div>
+        <p>Warranties, invoices, anything naming a manufacturer. A product name plus a permit can trace an approval number.</p></div>
+      <div class="score">Your file score: <b>___ of 5</b> documents in hand.</div>
     </div>
-    <p>If you found all five: genuinely, well done &mdash; you&rsquo;re in rare company, and your job is just to keep that file current.</p>
-    <p>If you found gaps: you now know exactly what they are, which puts you ahead of almost every homeowner on your street. The question is just what to do next.</p>
-  </section>
-
-  <section id="part-6">
-    <p class="kicker">Part Six</p>
-    <h2>What to do with what you found</h2>
-    <p>Some gaps you can close yourself: pulling permit records, photographing labels, scheduling an updated wind-mitigation inspection with a licensed inspector.</p>
-    <p>Some gaps are harder: an unverifiable product, a missing approval, an opening that was never protected, an install that never matched its rating. Those are construction questions, and they deserve a straight answer from someone who can actually read what you found.</p>
+    <p><b>Five of five?</b> You&rsquo;re in rare company &mdash; just keep the file current. <b>Found gaps?</b> You now know exactly what they are, which puts you ahead of almost every homeowner on your street. Some you can close yourself &mdash; permits, photos, a fresh inspection. Others &mdash; an unverifiable product, a missing approval, a bare opening &mdash; are construction questions, and they deserve a straight answer from someone who can read what you found.</p>
 
     <div class="cta" id="guide-cta">
       <h3>The Protection Profile Review</h3>
-      <p>A 15-minute phone call with a Reece advisor. You bring whatever your self-check turned up &mdash; photos, permit results, gaps and all. You walk away with your <b>Protection Profile</b>: a clear read on where your home&rsquo;s protection gaps and documentation gaps are, and what your next best step is.</p>
+      <p>A 15-minute phone call with a Reece advisor. Bring whatever your self-check turned up &mdash; photos, permit results, gaps and all. You walk away with your <b>Protection Profile</b>: a clear read on your home&rsquo;s protection and documentation gaps, and your next best step.</p>
       <p>No truck in your driveway, no salesperson at your table. A phone call and a straight answer.</p>
       <a class="btn" id="cta-button" href="https://api.leadconnectorhq.com/widget/booking/DQYMaJ22N6zL4SXjHukw?utm_source=dhp-guide&amp;utm_medium=guide-cta&amp;utm_campaign=documented-home-protection">Book My Protection Profile Review</a>
       <p class="small">15 minutes &middot; phone only &middot; yours to keep</p>
     </div>
 
-    <p>And if you&rsquo;re not ready for that, keep the checklist. Run it once a year. A protected home with a current file is a decision you only have to make once &mdash; but you do have to make it before the storm does.</p>
+    <p>Not ready? Keep the checklist and run it once a year. A protected home with a current file is a decision you only have to make once &mdash; but you do have to make it before the storm does.</p>
     <p class="sig">&mdash; Randy</p>
   </section>
 
