@@ -143,3 +143,51 @@ missing tokens record the event anonymously and skip GHL entirely.
 - `PAGE_ALLOWED_ORIGIN` — CORS origin for `/api/telemetry` (e.g. `https://report.getreecewindows.com`)
 - `WP_FOLLOWUP_WORKFLOW_ID` — optional; GHL workflow enrolled on `gate_complete`
 - `TRUST_RAW_CID` — dev only; accept bare contact IDs as tokens. Must be `false` in prod.
+
+## Estimator Funnel Events (landing.reecewindows.com / link.reecewindows.com)
+
+`POST /webhook/estimator-event` — public, fire-and-forget beacon ingestion for
+the Window Estimator calculator funnel. Accepts `application/json` and
+`text/plain` (sendBeacon Blob) bodies — the body is JSON either way. Returns
+**204** on success (never a body; sent before the insert so beacons never block
+navigation, and insert failures are logged, not surfaced), **400** on invalid
+input, **413** over the 16KB transport cap, **429** over 60 req/min per IP,
+**405** for non-POST. CORS origins: `https://landing.reecewindows.com`,
+`https://link.reecewindows.com`. No auth and no new environment variables —
+mitigations are the strict event vocabulary, the 8KB `payload` cap, the rate
+limit, and no exposed reads.
+
+Rows land in `estimator_events`
+(migration: `supabase/migrations/012_estimator_events.sql` — run manually in
+the Supabase dashboard); daily rollup view: `estimator_funnel_daily`
+(distinct sessions per funnel stage by day × page_variant × utm_source, plus
+average estimate value).
+
+### Request body
+
+```json
+{
+  "session_id": "required, ≤64 chars",
+  "contact_id": "optional GHL contact id",
+  "page_variant": "full | sml (default full)",
+  "event_type": "see vocabulary below",
+  "step": 1,
+  "payload": {},
+  "utm": { "source": "", "medium": "", "campaign": "", "content": "", "term": "" }
+}
+```
+
+`user_agent` is captured server-side. Unexpected top-level keys are ignored.
+
+### Event vocabulary
+
+| event_type | step | fired when |
+|------------|------|------------|
+| `page_view` | 1 | page load |
+| `step1_complete` | 1 | Step 1 validation passes (contact created in GHL) |
+| `window_added` | 2 | "Add Window to Estimate" clicked (payload: style, qty, isImpact, unitedInches) |
+| `step3_reached` | 3 | Step 3 (email/contact) shown |
+| `step3_complete` | 3 | email + consent validation passes |
+| `estimate_completed` | 4 | Step 4 rendered (payload: estimate_total, window_count, low, high) |
+| `verify_cta_clicked` | 4 | "Secure My Exact Price" clicked |
+| `keep_estimate_clicked` | 4 | "Keep My Estimate for Now" clicked |
