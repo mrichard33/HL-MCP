@@ -46,6 +46,10 @@ import { tryHandleAgenticRoute } from './http/agentic-routes.js';
 // journey pages are served by the dedicated static service (Dockerfile.wp,
 // same repo) at report.getreecewindows.com; GET / is back to health JSON.
 import { tryHandleWpRoute } from './http/wp-routes.js';
+// Estimator funnel — POST /webhook/estimator-event only. Public fire-and-forget
+// beacon ingestion for the calculator on landing/link.reecewindows.com; rows
+// land in Supabase estimator_events. No overlap with /webhooks/highlevel/*.
+import { tryHandleEstimatorRoute } from './http/estimator-routes.js';
 import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
 import {
@@ -163,6 +167,12 @@ async function startHttpServer(port: number) {
     // dedicated static service). /health, /mcp, OAuth, /webhooks and
     // /internal/* are untouched (no path overlap).
     if (await tryHandleWpRoute(req, res, url.pathname)) {
+      return;
+    }
+
+    // Estimator funnel telemetry (/webhook/estimator-event only). Public
+    // fire-and-forget beacon ingestion — see src/http/estimator-routes.ts.
+    if (await tryHandleEstimatorRoute(req, res, url.pathname)) {
       return;
     }
 
@@ -390,6 +400,7 @@ async function startHttpServer(port: number) {
     console.log(`  Instance:      ${instanceId}`);
     console.log(`  Health check:  http://0.0.0.0:${port}/health (also at /)`);
     console.log(`  WP telemetry:  http://0.0.0.0:${port}/api/telemetry`);
+    console.log(`  Estimator:     http://0.0.0.0:${port}/webhook/estimator-event`);
     console.log(`  MCP endpoint:  http://0.0.0.0:${port}/mcp`);
     console.log(`  OAuth metadata: http://0.0.0.0:${port}/.well-known/oauth-authorization-server`);
     console.log(`  Static token:  ${staticToken ? 'configured' : 'not set (OAuth-only auth)'}`);
