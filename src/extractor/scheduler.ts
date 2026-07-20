@@ -14,6 +14,8 @@ import {
   syncTags,
   syncTriggerLinks,
 } from './entity-syncer.js';
+import { reapStaleSyncRuns, reapOnBoot } from './sync-reaper.js';
+import { withBoundedRetry } from '../utils/retry.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 
 /** Track running state per job to prevent concurrent runs. */
@@ -45,6 +47,20 @@ function isJobRunning(name: string): boolean {
  * synced tables). Trading "possible brief overlap" for "no permanent
  * deadlock" is the right call.
  *
+ * v1.9 (2026-07-20) — KNOWN SIDE EFFECT of the above, now mitigated.
+ * When the timeout wins the race, the abandoned inner promise never reaches
+ * its own try/catch, so `logSyncFailed()` is never called and the `sync_log`
+ * row inserted by `logSyncStart()` stays `status='running'` permanently.
+ * Observed: 57 orphaned opportunities rows in a 24h window against only 31
+ * completed. Two consequences, both bad:
+ *   1. sync_log grows a permanent population of zombie rows.
+ *   2. get_sync_health computes failure_rate as failed/total — orphans are
+ *      neither, so a job timing out on most cycles still reported ~1.4%
+ *      healthy. The monitoring was blind to its most common failure.
+ * Mitigated by src/extractor/sync-reaper.ts (boot sweep + 30-min cron).
+ * The reaper is cleanup, NOT a fix for whatever is making a job slow — if
+ * you see the GroupMe alert firing, go find the slow path.
+ *
  * Timeouts are sized to the realistic upper bound of a healthy sync:
  *   - workflows: 234 workflows × ~5s each = ~20 min observed; 30 min ceiling.
  *   - contacts / opportunities: full mode is ~38 pages × rate limit =
@@ -53,6 +69,8 @@ function isJobRunning(name: string): boolean {
  *     covers the first-run 1-year backfill.
  *   - conversations: v1.7 watermark walk is typically <1 min per 15-min
  *     cycle. 15 min ceiling is very generous.
+ *   - sync_reaper: Supabase-only, no GHL calls, touches at most a few dozen
+ *     rows. 2 min is already generous.
  *   - Everything else defaults to 10 min.
  *
  * Override any job via env: JOB_TIMEOUT_MS_{NAME_UPPERCASED}
@@ -71,6 +89,7 @@ const JOB_TIMEOUTS_MS: Record<string, number> = {
   tags: 5 * 60 * 1000,
   trigger_links: 5 * 60 * 1000,
   templates: 5 * 60 * 1000,
+  sync_reaper: 2 * 60 * 1000,
 };
 const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -102,6 +121,7 @@ async function runJob(name: string, fn: () => Promise<unknown>): Promise<void> {
       reject(new Error(
         `[Scheduler] ${name} exceeded ${Math.round(timeoutMs / 1000)}s hard timeout — aborting to release mutex. ` +
         `Background work may continue until its own fetch timeouts expire. ` +
+        `Its sync_log row will be left 'running' and cleaned up by sync-reaper. ` +
         `Override via env JOB_TIMEOUT_MS_${name.toUpperCase()}.`,
       ));
     }, timeoutMs);
@@ -170,6 +190,7 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  *     trigger_links, templates every 6 hours. These rarely change; 30-min
  *     cadence was overkill.
  *   - Synthetic: workflows + funnel_progression hourly.
+ *   - Hygiene: sync_reaper every 30 min (v1.9).
  *
  * On first run (no prior sync_state), appointments use a 1-year lookback
  * to backfill historical data. Subsequent runs use the normal 2-week
@@ -190,9 +211,16 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  * complete in less total wall time than the broken parallel version ever
  * did. The recurring every-15-minute crons stay parallel because they're
  * in incremental mode (much smaller per-cycle cost).
+ *
+ * v1.9 (2026-07-20) — Two additions, both driven by a single day's sync_log:
+ *   - sync-reaper: boot sweep + 30-min cron to fail rows orphaned in
+ *     'running' by the v1.7 timeout race (57 orphans/24h on opportunities).
+ *   - withBoundedRetry around opportunities: 8 hard failures in 24h were all
+ *     transient "GHL API error 500", retried zero times, each costing a full
+ *     15-minute cycle.
  */
 export function startScheduledSync(): void {
-  console.log('[Scheduler] Starting scheduled sync jobs (v1.8)');
+  console.log('[Scheduler] Starting scheduled sync jobs (v1.9)');
 
   // One-time diagnostic: Firebase auth status affects workflow data quality
   const hasFirebaseAuth = !!(process.env.GHL_FIREBASE_API_KEY && process.env.GHL_FIREBASE_REFRESH_TOKEN);
@@ -226,8 +254,28 @@ export function startScheduledSync(): void {
     .join(', ');
   console.log(`[Scheduler] Per-job hard timeouts: ${timeoutSummary}, default:${Math.round(DEFAULT_JOB_TIMEOUT_MS / 60000)}m (override via JOB_TIMEOUT_MS_{NAME})`);
 
+  // v1.9: Surface reaper config.
+  console.log(
+    `[Scheduler] Sync reaper: timeout ${process.env.SYNC_REAPER_TIMEOUT_MINUTES || '30'}m, ` +
+    `alert threshold ${process.env.SYNC_REAPER_ALERT_THRESHOLD || '5'} ` +
+    `(override via SYNC_REAPER_TIMEOUT_MINUTES / SYNC_REAPER_ALERT_THRESHOLD)`,
+  );
+
   // Run initial sync with first-run detection
   (async () => {
+    // v1.9: Boot sweep FIRST, before any job starts. Anything still marked
+    // 'running' at this point is definitionally orphaned — this process just
+    // started, so nothing it owns can be in flight. Clearing these before the
+    // boot chain keeps the reaper's later counts meaningful (otherwise the
+    // first 30-min pass would reap a pile of pre-restart rows and trip the
+    // GroupMe alert for what is really just a redeploy).
+    try {
+      await reapOnBoot();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[Scheduler] Boot reap failed (non-fatal): ${msg}`);
+    }
+
     const appointmentsFirstRun = await isFirstRunFor('appointments');
     if (appointmentsFirstRun) {
       console.log('[Scheduler] First appointment sync detected — will perform 1-year historical backfill');
@@ -275,7 +323,10 @@ export function startScheduledSync(): void {
 
       await runJob('contacts', () => syncContacts({ mode: 'full' }));
 
-      await runJob('opportunities', () => syncOpportunities({ mode: 'full' }));
+      await runJob('opportunities', () => withBoundedRetry(
+        () => syncOpportunities({ mode: 'full' }),
+        { label: 'syncOpportunities(boot/full)' },
+      ));
 
       await runJob('appointments', () => {
         if (appointmentsFirstRun) {
@@ -320,6 +371,17 @@ export function startScheduledSync(): void {
     runJob('funnel_progression', computeFunnelProgression);
   });
 
+  // v1.9: Stale-run reaper every 30 minutes.
+  //
+  // Offset to :07/:37 deliberately. The 15-min sync crons fire at
+  // :00/:15/:30/:45; running the reaper on those same boundaries risks
+  // reading sync_log mid-write and, worse, could reap a row belonging to a
+  // job that had only just started. :07 and :37 sit well clear of every
+  // other scheduled job in this file.
+  cron.schedule('7,37 * * * *', () => {
+    runJob('sync_reaper', reapStaleSyncRuns);
+  });
+
   // v1.6: 15-min cadence for contacts + opportunities now runs in INCREMENTAL
   // mode. Pulls only records with dateUpdated >= (last_synced_at - overlap)
   // for contacts, and skips unchanged-row upserts for opportunities.
@@ -337,8 +399,16 @@ export function startScheduledSync(): void {
     runJob('contacts', () => syncContacts({ mode: 'incremental' }));
   });
 
+  // v1.9: wrapped in withBoundedRetry. On 2026-07-20 this job hard-failed 8
+  // times in 24h, every one a transient "GHL API error 500: Internal server
+  // error", retried zero times — each failure discarded a whole 15-minute
+  // cycle. Retry is bounded at 3 attempts / ~3s worst case, comfortably
+  // inside the 10-minute job ceiling, so it cannot itself cause a timeout.
   cron.schedule('*/15 * * * *', () => {
-    runJob('opportunities', () => syncOpportunities({ mode: 'incremental' }));
+    runJob('opportunities', () => withBoundedRetry(
+      () => syncOpportunities({ mode: 'incremental' }),
+      { label: 'syncOpportunities(incremental)' },
+    ));
   });
 
   // Appointments stays at 15 min — already time-windowed, very efficient.
@@ -377,7 +447,10 @@ export function startScheduledSync(): void {
 
   cron.schedule('10 3 * * *', () => {
     console.log('[Scheduler] Daily 3:10 AM ET full reconcile — opportunities');
-    runJob('opportunities', () => syncOpportunities({ mode: 'full' }));
+    runJob('opportunities', () => withBoundedRetry(
+      () => syncOpportunities({ mode: 'full' }),
+      { label: 'syncOpportunities(daily/full)' },
+    ));
   }, { timezone: 'America/New_York' });
 
   // v1.6: Low-volume config entities moved from every 30 min to every
@@ -407,10 +480,11 @@ export function startScheduledSync(): void {
     runJob('templates', syncTemplates);
   });
 
-  console.log('[Scheduler] Cron jobs registered (v1.8):');
+  console.log('[Scheduler] Cron jobs registered (v1.9):');
   console.log('  0 * * * *          — workflows, funnel progression (hourly)');
-  console.log('  */15 * * * *       — contacts (incremental), opportunities (incremental), appointments, conversations/messages');
+  console.log('  7,37 * * * *       — sync reaper (stale running-run cleanup)');
+  console.log('  */15 * * * *       — contacts (incremental), opportunities (incremental, bounded-retry), appointments, conversations/messages');
   console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
-  console.log('  10 3 * * * ET      — opportunities daily full reconcile (America/New_York)');
+  console.log('  10 3 * * * ET      — opportunities daily full reconcile (America/New_York, bounded-retry)');
   console.log('  0 */6 * * *        — pipelines, custom_fields, custom_values, tags, trigger_links, templates (every 6 hr)');
 }
