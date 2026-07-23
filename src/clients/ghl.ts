@@ -714,9 +714,18 @@ export class GHLClient {
    * Uses DELETE /contacts/{contactId}/workflow/{workflowId}
    */
   async removeContactFromWorkflow(workflowId: string, contactId: string, eventStartTime?: string): Promise<unknown> {
+    // Only send a body when there is something in it. `{}` is truthy, so the
+    // previous version always serialized "{}" into the DELETE, which GHL's
+    // strict DTO validation rejects. LP MCP's equivalent
+    // (src/actions/handlers/workflows.js :: executeRemoveFromWorkflow) sends
+    // NO body and has always worked — this restores parity.
     const body: Record<string, string> = {};
     if (eventStartTime) body.eventStartTime = eventStartTime;
-    return this.request(`/contacts/${contactId}/workflow/${workflowId}`, { method: 'DELETE', body });
+    const hasBody = Object.keys(body).length > 0;
+    return this.request(`/contacts/${contactId}/workflow/${workflowId}`, {
+      method: 'DELETE',
+      ...(hasBody ? { body } : {}),
+    });
   }
 
   async getWorkflowDetail(workflowId: string): Promise<Record<string, unknown> | null> {
