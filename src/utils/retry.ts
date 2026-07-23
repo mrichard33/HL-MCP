@@ -85,7 +85,8 @@ function sleep(ms: number): Promise<void> {
  * Run `fn`, retrying transient failures with exponential backoff + jitter.
  *
  * Jitter is full-range (0..delay) to avoid synchronizing retries across the
- * several sync jobs that fire on the same */15 cron boundary. Without it, a
+ * several sync jobs that fire on the same every-15-minute cron boundary
+ * ("15" schedule). Without it, a
  * GHL blip would put every job on an identical retry schedule and produce a
  * thundering herd against an already-struggling upstream.
  *

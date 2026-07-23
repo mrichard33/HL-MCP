@@ -480,8 +480,20 @@ export const workflowTools = {
     }),
     handler: async (args: { workflowId: string; contactId: string; eventStartTime?: string }) => {
       const ghl = new GHLClient();
-      const result = await ghl.enrollContactInWorkflow(args.workflowId, args.contactId, args.eventStartTime);
-      return { success: true, workflowId: args.workflowId, contactId: args.contactId, result };
+      try {
+        const result = await ghl.enrollContactInWorkflow(args.workflowId, args.contactId, args.eventStartTime);
+        return { success: true, workflowId: args.workflowId, contactId: args.contactId, result };
+      } catch (err) {
+        // Surface the real GHL status + body. Thrown errors are replaced by a
+        // generic message at the MCP transport, so return the detail instead.
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          success: false,
+          workflowId: args.workflowId,
+          contactId: args.contactId,
+          error: message,
+        };
+      }
     },
   },
 
@@ -494,8 +506,23 @@ export const workflowTools = {
     }),
     handler: async (args: { workflowId: string; contactId: string; eventStartTime?: string }) => {
       const ghl = new GHLClient();
-      const result = await ghl.removeContactFromWorkflow(args.workflowId, args.contactId, args.eventStartTime);
-      return { success: true, workflowId: args.workflowId, contactId: args.contactId, result };
+      try {
+        const result = await ghl.removeContactFromWorkflow(args.workflowId, args.contactId, args.eventStartTime);
+        return { success: true, workflowId: args.workflowId, contactId: args.contactId, result };
+      } catch (err) {
+        // Surface the real GHL status + body. Thrown errors are replaced by a
+        // generic message at the MCP transport, so return the detail instead.
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          success: false,
+          workflowId: args.workflowId,
+          contactId: args.contactId,
+          error: message,
+          hint: message.includes('422') || message.includes('400')
+            ? 'GHL rejected the request. If the workflow has scheduled events, pass eventStartTime.'
+            : undefined,
+        };
+      }
     },
   },
 };
