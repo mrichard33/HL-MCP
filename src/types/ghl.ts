@@ -136,6 +136,13 @@ export interface GHLAppointment {
   assignedUserId?: string;
   dateAdded?: string;
   dateUpdated?: string;
+  /**
+   * GHL's explicit delete flag. Present on every event in the
+   * /calendars/events payload. This is the ONLY trustworthy delete signal for
+   * appointments — absence from a fetch is not, because the appointment sync
+   * pulls a bounded time window and paginates.
+   */
+  deleted?: boolean;
   [key: string]: unknown;
 }
 
