@@ -697,34 +697,53 @@ export async function syncAppointments(options?: {
     // are 2-3%, consistent with real deletions. This change is scoped to
     // appointments precisely because only this sync pairs a bounded fetch with
     // a table-wide sweep.
+    // BOTH of these must be CHUNKED. PostgREST serializes .in() into the URL
+    // query string, so a single call with the whole event list (~2,240 ids,
+    // ~56KB) blows the server's URL length limit and the request fails. The
+    // first cut of this shipped unchunked with no error check on the restore
+    // and silently did nothing: 2,040 in-window rows stayed tombstoned across
+    // four sync passes. Chunk at UPSERT_BATCH_SIZE and check every error.
     const deletedAptIds = events.filter((a) => a.deleted === true).map((a) => a.id);
-    if (deletedAptIds.length > 0) {
-      const { error: tombstoneErr } = await supabase
+    let tombstonedCount = 0;
+    for (const batch of chunk(deletedAptIds, UPSERT_BATCH_SIZE)) {
+      const { data: rows, error: tombstoneErr } = await supabase
         .from('appointments')
         .update({ deleted_at: now, updated_at: now })
-        .in('ghl_appointment_id', deletedAptIds)
-        .is('deleted_at', null);
+        .in('ghl_appointment_id', batch)
+        .is('deleted_at', null)
+        .select('ghl_appointment_id');
       if (tombstoneErr) {
         errors.push(`Appointment tombstone: ${tombstoneErr.message}`);
+        console.error(`[EntitySync] syncAppointments: tombstone batch failed: ${tombstoneErr.message}`);
       } else {
-        console.log(`[EntitySync] syncAppointments: tombstoned ${deletedAptIds.length} GHL-deleted appointments`);
+        tombstonedCount += rows?.length || 0;
       }
+    }
+    if (tombstonedCount > 0) {
+      console.log(`[EntitySync] syncAppointments: tombstoned ${tombstonedCount} GHL-deleted appointments`);
     }
 
     // Restore any row GHL is currently reporting as NOT deleted. This unwinds
     // the historical false tombstones as those appointments come back through
     // the sync window, so the repair is self-healing for in-window rows.
     const liveAptIds = events.filter((a) => a.deleted !== true).map((a) => a.id);
-    if (liveAptIds.length > 0) {
-      const { data: restoredRows } = await supabase
+    let restoredCount = 0;
+    for (const batch of chunk(liveAptIds, UPSERT_BATCH_SIZE)) {
+      const { data: rows, error: restoreErr } = await supabase
         .from('appointments')
         .update({ deleted_at: null, updated_at: now })
-        .in('ghl_appointment_id', liveAptIds)
+        .in('ghl_appointment_id', batch)
         .not('deleted_at', 'is', null)
         .select('ghl_appointment_id');
-      if (restoredRows?.length) {
-        console.log(`[EntitySync] syncAppointments: restored ${restoredRows.length} falsely-tombstoned appointments`);
+      if (restoreErr) {
+        errors.push(`Appointment restore: ${restoreErr.message}`);
+        console.error(`[EntitySync] syncAppointments: restore batch failed: ${restoreErr.message}`);
+      } else {
+        restoredCount += rows?.length || 0;
       }
+    }
+    if (restoredCount > 0) {
+      console.log(`[EntitySync] syncAppointments: restored ${restoredCount} falsely-tombstoned appointments`);
     }
 
     await updateLastSynced('appointments');
