@@ -663,9 +663,69 @@ export async function syncAppointments(options?: {
     const eventsWritten = await createLeadEventsBatch(leadEventSpecs);
     console.log(`[EntitySync] syncAppointments: wrote ${eventsWritten}/${leadEventSpecs.length} lead events (batched)`);
 
-    // Soft-delete appointments no longer in GHL (within the synced time window)
-    const activeAptIds = events.map((a) => a.id);
-    await softDeleteMissing('appointments', 'ghl_appointment_id', activeAptIds, ghl.getLocationId());
+    // Tombstone ONLY appointments GHL explicitly reports as deleted.
+    //
+    // This used to call softDeleteMissing(), which is table-wide and window-
+    // blind: it selects every non-deleted row for the location and tombstones
+    // any id absent from the current fetch. But this sync deliberately fetches
+    // a BOUNDED window (-14d/+30d above), so every appointment outside that
+    // window was tombstoned on every pass — the comment here said "within the
+    // synced time window", but nothing implemented that.
+    //
+    // Measured 2026-07-28: 8,028 of 8,087 rows (99.3%) carried deleted_at while
+    // GHL's own raw_json.deleted was false on EVERY ONE of them — not a single
+    // tombstone in the table corresponded to a real deletion. The rows arrived
+    // in identical-microsecond batches (993 at 2026-06-15T20:30:02.025, 975,
+    // 846, 751, 703 …), the signature of a bulk sweep. Anything filtering
+    // `deleted_at IS NULL` — including the appointment capacity/fill dashboard
+    // — was reading under 1% of the book.
+    //
+    // A second, subtler path corrupted rows INSIDE the window: a short or empty
+    // page from the paginated fetch drops live ids out of activeAptIds, and the
+    // sweep reads that gap as deletion. (Same fault visible elsewhere as
+    // "empty page at startIndex=N but probe found rows".) That accounted for
+    // the 297 tombstoned future-dated appointments.
+    //
+    // So absence is not a usable delete signal here on either count. GHL's
+    // /calendars/events feed carries an explicit `deleted` field on every
+    // event, and cancellation is already captured in `status` — which is the
+    // signal consumers actually want. Tombstone on the explicit flag only.
+    //
+    // NOTE: softDeleteMissing() is still correct for the UNBOUNDED syncs that
+    // fetch a full entity list (contacts, opportunities, workflows, tags …),
+    // where absence really does mean the record is gone. Their tombstone rates
+    // are 2-3%, consistent with real deletions. This change is scoped to
+    // appointments precisely because only this sync pairs a bounded fetch with
+    // a table-wide sweep.
+    const deletedAptIds = events.filter((a) => a.deleted === true).map((a) => a.id);
+    if (deletedAptIds.length > 0) {
+      const { error: tombstoneErr } = await supabase
+        .from('appointments')
+        .update({ deleted_at: now, updated_at: now })
+        .in('ghl_appointment_id', deletedAptIds)
+        .is('deleted_at', null);
+      if (tombstoneErr) {
+        errors.push(`Appointment tombstone: ${tombstoneErr.message}`);
+      } else {
+        console.log(`[EntitySync] syncAppointments: tombstoned ${deletedAptIds.length} GHL-deleted appointments`);
+      }
+    }
+
+    // Restore any row GHL is currently reporting as NOT deleted. This unwinds
+    // the historical false tombstones as those appointments come back through
+    // the sync window, so the repair is self-healing for in-window rows.
+    const liveAptIds = events.filter((a) => a.deleted !== true).map((a) => a.id);
+    if (liveAptIds.length > 0) {
+      const { data: restoredRows } = await supabase
+        .from('appointments')
+        .update({ deleted_at: null, updated_at: now })
+        .in('ghl_appointment_id', liveAptIds)
+        .not('deleted_at', 'is', null)
+        .select('ghl_appointment_id');
+      if (restoredRows?.length) {
+        console.log(`[EntitySync] syncAppointments: restored ${restoredRows.length} falsely-tombstoned appointments`);
+      }
+    }
 
     await updateLastSynced('appointments');
     await logSyncComplete(syncLogId, events.length);
