@@ -61,10 +61,29 @@ function isJobRunning(name: string): boolean {
  * The reaper is cleanup, NOT a fix for whatever is making a job slow — if
  * you see the GroupMe alert firing, go find the slow path.
  *
+ * v2.0 (2026-07-28) — opportunities raised 10 min → 20 min. This ceiling
+ * was not a safety margin, it was a guillotine: the job's real runtime is
+ * ~18 min (measured: a completed run 18:15:00 → 18:33:08 ET = 1088s), so
+ * the 10-min timeout fired on essentially every cycle. Measured over 24h:
+ * 96 runs, 84 failed (87.5%), 11 completed — and those 11 "completions"
+ * were abandoned promises finishing AFTER the scheduler had already
+ * declared the run failed and released the mutex. Every other entity in
+ * the same window sat at 0-1%.
+ *
+ * WHY the job needs ~18 min is a separate, deeper defect documented on the
+ * cron below: the server-side incremental filter 422s on every call, so
+ * every cycle silently falls back to fetching all ~15k opportunities.
+ * 20 min matches observed reality with headroom; it stays under the
+ * 30-min sync-reaper threshold, so a genuinely hung job is still caught.
+ * Override via JOB_TIMEOUT_MS_OPPORTUNITIES if the fallback path is ever
+ * removed and the job gets fast again.
+ *
  * Timeouts are sized to the realistic upper bound of a healthy sync:
  *   - workflows: 234 workflows × ~5s each = ~20 min observed; 30 min ceiling.
- *   - contacts / opportunities: full mode is ~38 pages × rate limit =
- *     a few minutes; 10 min ceiling is generous.
+ *   - contacts: full mode is ~38 pages × rate limit = a few minutes;
+ *     10 min ceiling is generous.
+ *   - opportunities: see v2.0 note above — 20 min, matched to the
+ *     client-diff fallback's measured ~18 min.
  *   - appointments: 2-week/30-day window is tiny (<1 min); 10 min ceiling
  *     covers the first-run 1-year backfill.
  *   - conversations: v1.7 watermark walk is typically <1 min per 15-min
@@ -79,7 +98,7 @@ function isJobRunning(name: string): boolean {
 const JOB_TIMEOUTS_MS: Record<string, number> = {
   workflows: 30 * 60 * 1000,
   contacts: 10 * 60 * 1000,
-  opportunities: 10 * 60 * 1000,
+  opportunities: 20 * 60 * 1000,
   appointments: 10 * 60 * 1000,
   conversations: 15 * 60 * 1000,
   funnel_progression: 5 * 60 * 1000,
@@ -173,7 +192,8 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  *
  * v1.7 sync architecture:
  *   - Real-time: GHL webhooks (handled in src/webhooks/handler.ts)
- *   - Incremental: every 15 min for contacts + opportunities. Contacts uses
+ *   - Incremental: contacts every 15 min, opportunities every 30 min
+ *     (v2.0 — see the opportunities cron below). Contacts uses
  *     POST /contacts/search with a dateUpdated filter; opportunities uses a
  *     client-side diff against Supabase's date_updated column.
  *   - Full reconcile: daily at 3:05 / 3:10 AM America/New_York for contacts
@@ -209,8 +229,7 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  * after the 1a744e2a deploy. Running them sequentially instead lets each
  * get full bucket access, so none of them get throttled and all four
  * complete in less total wall time than the broken parallel version ever
- * did. The recurring every-15-minute crons stay parallel because they're
- * in incremental mode (much smaller per-cycle cost).
+ * did.
  *
  * v1.9 (2026-07-20) — Two additions, both driven by a single day's sync_log:
  *   - sync-reaper: boot sweep + 30-min cron to fail rows orphaned in
@@ -218,9 +237,15 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  *   - withBoundedRetry around opportunities: 8 hard failures in 24h were all
  *     transient "GHL API error 500", retried zero times, each costing a full
  *     15-minute cycle.
+ *
+ * v2.0 (2026-07-28) — opportunities incremental moved off the every-15-minute
+ * boundary to :20/:50, and its job timeout raised 10 min → 20 min. The v1.8 note
+ * below said "if we ever see 429s on recurring cycles, serialize this block
+ * the same way boot was" — that day arrived, but the honest fix turned out
+ * to be cadence + ceiling rather than serialization. See the cron comment.
  */
 export function startScheduledSync(): void {
-  console.log('[Scheduler] Starting scheduled sync jobs (v1.9)');
+  console.log('[Scheduler] Starting scheduled sync jobs (v2.0)');
 
   // One-time diagnostic: Firebase auth status affects workflow data quality
   const hasFirebaseAuth = !!(process.env.GHL_FIREBASE_API_KEY && process.env.GHL_FIREBASE_REFRESH_TOKEN);
@@ -247,6 +272,17 @@ export function startScheduledSync(): void {
   // v1.6: Surface the incremental overlap buffer for easy verification in logs.
   const incrementalOverlap = parseInt(process.env.INCREMENTAL_SYNC_OVERLAP_MINUTES || '10', 10);
   console.log(`[Scheduler] Incremental sync overlap buffer: ${incrementalOverlap} min (override via INCREMENTAL_SYNC_OVERLAP_MINUTES)`);
+
+  // v2.0: The opportunities incremental now runs every 30 min. Its overlap
+  // buffer must stay comfortably under that gap or changes can fall between
+  // cycles. Warn loudly rather than fail — the daily full reconcile still
+  // backstops any gap, but a silent 30-min hole is worth surfacing.
+  if (incrementalOverlap < 10) {
+    console.warn(
+      `[Scheduler] INCREMENTAL_SYNC_OVERLAP_MINUTES=${incrementalOverlap} is below the recommended 10 min. ` +
+      'Opportunities now sync every 30 min (v2.0); a short overlap risks missing edge-of-window updates.',
+    );
+  }
 
   // v1.7: Surface per-job timeout ceilings so hangs are easier to diagnose.
   const timeoutSummary = Object.entries(JOB_TIMEOUTS_MS)
@@ -382,29 +418,61 @@ export function startScheduledSync(): void {
     runJob('sync_reaper', reapStaleSyncRuns);
   });
 
-  // v1.6: 15-min cadence for contacts + opportunities now runs in INCREMENTAL
-  // mode. Pulls only records with dateUpdated >= (last_synced_at - overlap)
-  // for contacts, and skips unchanged-row upserts for opportunities.
+  // v1.6: 15-min cadence for contacts now runs in INCREMENTAL mode. Pulls
+  // only records with dateUpdated >= (last_synced_at - overlap).
   //
-  // v1.8 note: recurring crons stay parallel (not serialized like boot)
-  // because incremental mode is much smaller per-cycle:
-  //   contacts incremental: a handful of API calls (only changed records)
-  //   opps incremental: full list fetch + client-side diff (~27 calls)
-  //   appointments: ~5 calls (one per calendar, 2-week window)
-  //   conversations watermark: 1-5 calls typical (only recent activity)
-  // Combined that's under 50 calls per cycle vs 60-token bucket capacity
-  // + 60/min refill — fits comfortably. If we ever see 429s on recurring
-  // cycles, serialize this block the same way boot was.
+  // Contacts genuinely is cheap: POST /contacts/search honours the
+  // dateUpdated filter, so a normal cycle is a handful of calls and
+  // finishes in ~7s (measured avg over 24h: 96/97 runs completed).
   cron.schedule('*/15 * * * *', () => {
     runJob('contacts', () => syncContacts({ mode: 'incremental' }));
   });
 
-  // v1.9: wrapped in withBoundedRetry. On 2026-07-20 this job hard-failed 8
-  // times in 24h, every one a transient "GHL API error 500: Internal server
-  // error", retried zero times — each failure discarded a whole 15-minute
-  // cycle. Retry is bounded at 3 attempts / ~3s worst case, comfortably
-  // inside the 10-minute job ceiling, so it cannot itself cause a timeout.
-  cron.schedule('*/15 * * * *', () => {
+  // v2.0 (2026-07-28): opportunities incremental moved from */15 to :20/:50.
+  //
+  // WHY THE CADENCE CHANGED. This job is not cheap, and the comment that
+  // said it was ("opps incremental: full list fetch + client-side diff,
+  // ~27 calls") was describing an opportunity book a quarter of today's
+  // size. Two compounding facts:
+  //
+  //   1. The server-side filter is DEAD. Every cycle logs
+  //        syncOpportunities: server-side search failed
+  //        (GHL API error 422: {"message":"Invalid field - dateUpdated"})
+  //      POST /opportunities/search rejects the dateUpdated filter on this
+  //      tenant and always has — the "fast path" added in v1.8 (T2.3b) has
+  //      never once succeeded. Its fallback was designed for occasional
+  //      failure, so nothing ever flagged that the fallback had quietly
+  //      become the ONLY path.
+  //   2. The fallback fetches EVERYTHING. getAllOpportunities() pages the
+  //      whole location — ~14.9k opportunities at 100/page ≈ 150
+  //      rate-limited GHL calls — then paginates Supabase for a
+  //      date_updated map and diffs client-side. Measured runtime ~18 min,
+  //      against a 15-min cron and a 10-min job ceiling.
+  //
+  // The result was a job mathematically guaranteed to fail: 96 runs/24h,
+  // 84 failed (87.5%), while every other entity sat at 0-1%. It also
+  // meant ~150 GHL calls every 15 min contending with contacts,
+  // appointments and conversations on the same :00/:15/:30/:45 boundary.
+  //
+  // :20/:50 is chosen to clear every other job in this file — the 15-min
+  // boundary, the reaper at :07/:37, and the 3:05/3:10 ET daily fulls —
+  // so the heavy fetch runs uncontended. 30 min also exceeds the measured
+  // 18-min runtime with real headroom, and pairs with the 20-min job
+  // ceiling above.
+  //
+  // TRADE-OFF, stated plainly: opportunity cache freshness goes from
+  // ~15 min to ~30 min. The 10-min incremental overlap buffer means no
+  // gap opens between cycles, and the 3:10 AM ET full reconcile still
+  // handles drift and soft-deletes. Reporting that reads the
+  // opportunities cache is unaffected at this resolution.
+  //
+  // THIS IS A MITIGATION, NOT THE CURE. The cure is a working server-side
+  // filter, which would take this job back to seconds and let it return to
+  // a 15-min (or faster) cadence. That needs the correct GHL field name
+  // verified against the live API — do NOT guess it. Guessing `dateUpdated`
+  // by analogy with the contacts DTO is precisely what produced a fast path
+  // that 422'd silently for months.
+  cron.schedule('20,50 * * * *', () => {
     runJob('opportunities', () => withBoundedRetry(
       () => syncOpportunities({ mode: 'incremental' }),
       { label: 'syncOpportunities(incremental)' },
@@ -440,6 +508,10 @@ export function startScheduledSync(): void {
   // crons off the 15-min boundary entirely. 3:10 ET for opportunities (rather
   // than running simultaneously with contacts) also avoids hammering the GHL
   // API with two concurrent full-fetch jobs at the same minute.
+  //
+  // v2.0: still correct after the opportunities incremental moved to :20/:50 —
+  // 3:10 clears :20 and :50 by a wide margin, so the daily full can never be
+  // dropped by the shared job-name mutex.
   cron.schedule('5 3 * * *', () => {
     console.log('[Scheduler] Daily 3:05 AM ET full reconcile — contacts');
     runJob('contacts', () => syncContacts({ mode: 'full' }));
@@ -480,10 +552,11 @@ export function startScheduledSync(): void {
     runJob('templates', syncTemplates);
   });
 
-  console.log('[Scheduler] Cron jobs registered (v1.9):');
+  console.log('[Scheduler] Cron jobs registered (v2.0):');
   console.log('  0 * * * *          — workflows, funnel progression (hourly)');
   console.log('  7,37 * * * *       — sync reaper (stale running-run cleanup)');
-  console.log('  */15 * * * *       — contacts (incremental), opportunities (incremental, bounded-retry), appointments, conversations/messages');
+  console.log('  */15 * * * *       — contacts (incremental), appointments, conversations/messages');
+  console.log('  20,50 * * * *      — opportunities (incremental, bounded-retry) [v2.0: off the 15-min boundary, 30-min cadence]');
   console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
   console.log('  10 3 * * * ET      — opportunities daily full reconcile (America/New_York, bounded-retry)');
   console.log('  0 */6 * * *        — pipelines, custom_fields, custom_values, tags, trigger_links, templates (every 6 hr)');
