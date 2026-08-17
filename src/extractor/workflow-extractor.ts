@@ -51,15 +51,36 @@ export interface SyncOptions {
 }
 
 /**
- * Converts a delay value and unit into minutes.
+ * Converts a delay value and unit into WHOLE minutes.
+ *
+ * workflow_steps.delay_minutes is an INTEGER column. GHL accepts fractional
+ * waits — `{ value: 0.5, type: 'minutes' }` is a legal 30-second step — and the
+ * old `default: return delay` passed that 0.5 straight through, which Postgres
+ * rejected with `invalid input syntax for type integer: "0.5"`.
+ *
+ * Because steps are written as ONE batched upsert per workflow, that single bad
+ * value failed the whole batch: every step of the workflow was dropped from the
+ * cache, not just the fractional one. The sync reported completed_with_errors
+ * and continued, so the loss was silent. Observed 2026-08-17 on
+ * 111d4991-0a5f-45b9-bef8-e8df3f5ab955 ("Replied To Open Ended Email With
+ * Answer Sorting"), which cached zero steps.
+ *
+ * Math.ceil, not Math.round: a sub-minute wait is a real delay and must not
+ * round to 0, which reads downstream as "no wait" — detect_wait_bottlenecks and
+ * detect_message_overlap both key on delay_minutes. This matches the 'seconds'
+ * branch, which has always ceil'd. Ceil is identity on integer input, so no
+ * existing cached value changes.
+ *
+ * !Number.isFinite guards NaN/Infinity, which fail the integer column the same
+ * way a fraction does.
  */
-function toDelayMinutes(delay?: number, unit?: string): number {
-  if (!delay) return 0;
+export function toDelayMinutes(delay?: number, unit?: string): number {
+  if (!delay || !Number.isFinite(delay)) return 0;
   switch (unit?.toLowerCase()) {
-    case 'hours': return delay * 60;
-    case 'days': return delay * 60 * 24;
+    case 'hours': return Math.ceil(delay * 60);
+    case 'days': return Math.ceil(delay * 60 * 24);
     case 'seconds': return Math.ceil(delay / 60);
-    default: return delay; // assume minutes
+    default: return Math.ceil(delay); // assume minutes
   }
 }
 
