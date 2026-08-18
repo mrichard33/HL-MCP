@@ -5,6 +5,7 @@ import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection } from '../utils/normalize.js';
 import type { GHLContact, GHLOpportunity, GHLConversation, GHLPaginationMeta, GHLMessage, GHLAppointment } from '../types/ghl.js';
+import { createHash } from 'node:crypto';
 
 // ---- Sync State Helpers ----
 
@@ -81,6 +82,29 @@ const INCREMENTAL_OVERLAP_MINUTES = parseInt(
   process.env.INCREMENTAL_SYNC_OVERLAP_MINUTES || '10',
   10,
 );
+
+// Appointment delta gate. The -14d/+30d window fetch is unavoidable (GHL
+// calendar events expose no reliable dateUpdated filter), but blindly
+// upserting the whole window wrote ~1,790 rows every 15 min (~170K/day)
+// into a ~10K-row table. Modes:
+//   off     — legacy: upsert everything
+//   shadow  — compute + store payload hashes, log would-skip, upsert everything
+//   enforce — upsert only rows whose payload hash changed
+const APPT_SYNC_DELTA_MODE = (process.env.APPT_SYNC_DELTA_MODE || 'shadow').toLowerCase();
+
+function apptPayloadHash(row: Record<string, unknown>): string {
+  const sortKeys = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sortKeys);
+    if (v && typeof v === 'object') {
+      return Object.keys(v as Record<string, unknown>).sort().reduce((acc: Record<string, unknown>, k) => {
+        acc[k] = sortKeys((v as Record<string, unknown>)[k]);
+        return acc;
+      }, {});
+    }
+    return v;
+  };
+  return createHash('sha256').update(JSON.stringify(sortKeys(row))).digest('hex');
+}
 
 /**
  * Chunk an array into batches of a given size.
@@ -611,21 +635,63 @@ export async function syncAppointments(options?: {
     const apptStatusOf = (apt: GHLAppointment): string =>
       apt.appointmentStatus || apt.appoinmentStatus || apt.status || 'confirmed';
 
-    // v1.4: Batch upserts
-    const rows = events.map((apt) => ({
-      ghl_appointment_id: apt.id,
-      ghl_contact_id: apt.contactId || null,
-      ghl_calendar_id: apt.calendarId || null,
-      ghl_location_id: apt.locationId || null,
-      title: apt.title || null,
-      status: apptStatusOf(apt),
-      start_time: apt.startTime || null,
-      end_time: apt.endTime || null,
-      assigned_to: apt.assignedUserId || null,
-      raw_json: apt,
-      synced_at: now,
-      updated_at: now,
-    }));
+    // v1.4: Batch upserts. Delta gate hashes CONTENT fields only —
+    // synced_at/updated_at change every cycle by construction and would
+    // defeat the gate.
+    const allRows = events.map((apt) => {
+      const content = {
+        ghl_appointment_id: apt.id,
+        ghl_contact_id: apt.contactId || null,
+        ghl_calendar_id: apt.calendarId || null,
+        ghl_location_id: apt.locationId || null,
+        title: apt.title || null,
+        status: apptStatusOf(apt),
+        start_time: apt.startTime || null,
+        end_time: apt.endTime || null,
+        assigned_to: apt.assignedUserId || null,
+        raw_json: apt,
+      };
+      return {
+        ...content,
+        payload_hash: APPT_SYNC_DELTA_MODE !== 'off' ? apptPayloadHash(content) : null,
+        synced_at: now,
+        updated_at: now,
+      };
+    });
+
+    // Delta gate: load stored hashes (chunked — .in() serializes into the
+    // URL) and keep only changed rows. Fails open: prefetch error (e.g.
+    // payload_hash column missing) runs the cycle ungated.
+    let rows = allRows;
+    let skippedUnchanged = 0;
+    if (APPT_SYNC_DELTA_MODE !== 'off') {
+      const storedHash = new Map<string, string | null>();
+      let prefetchOk = true;
+      for (const batch of chunk(allRows.map((r) => r.ghl_appointment_id), UPSERT_BATCH_SIZE)) {
+        const { data, error } = await supabase
+          .from('appointments')
+          .select('ghl_appointment_id, payload_hash')
+          .in('ghl_appointment_id', batch);
+        if (error) {
+          console.warn(`[EntitySync] syncAppointments: hash prefetch failed (${error.message}) — cycle runs ungated`);
+          prefetchOk = false;
+          break;
+        }
+        for (const r of (data || []) as { ghl_appointment_id: string; payload_hash: string | null }[]) {
+          storedHash.set(r.ghl_appointment_id, r.payload_hash);
+        }
+      }
+      if (prefetchOk) {
+        const changed = allRows.filter((r) => storedHash.get(r.ghl_appointment_id) !== r.payload_hash);
+        skippedUnchanged = allRows.length - changed.length;
+        if (APPT_SYNC_DELTA_MODE === 'enforce') {
+          rows = changed;
+          console.log(`[EntitySync] syncAppointments: delta enforce — ${changed.length} changed, ${skippedUnchanged} unchanged skipped`);
+        } else {
+          console.log(`[EntitySync] syncAppointments: delta shadow — ${changed.length} changed, ${skippedUnchanged} would skip (writing all)`);
+        }
+      }
+    }
 
     let upsertedCount = 0;
     for (const batch of chunk(rows, UPSERT_BATCH_SIZE)) {
@@ -637,7 +703,7 @@ export async function syncAppointments(options?: {
         upsertedCount += batch.length;
       }
     }
-    console.log(`[EntitySync] syncAppointments: upserted ${upsertedCount}/${rows.length} appointments`);
+    console.log(`[EntitySync] syncAppointments: upserted ${upsertedCount}/${rows.length} appointments (${skippedUnchanged} unchanged)`);
 
     // v1.8 (T2.1b): Batched lead events for appointments. Previously a 500-
     // to-1000-iteration sequential loop per 15-min cycle. Now a single
@@ -645,8 +711,13 @@ export async function syncAppointments(options?: {
     // funnel progression (appointment_booked / appointment_showed /
     // appointment_cancelled), so we keep this path intact — just batch it.
     console.log('[EntitySync] syncAppointments: building lead event specs...');
+    // Enforce mode: only changed appointments can produce NEW lead events —
+    // unchanged ones already emitted theirs (event_hash dedupes regardless;
+    // this stops rebuilding ~1,700 specs per cycle).
+    const changedIds = new Set(rows.map((r) => r.ghl_appointment_id));
     const leadEventSpecs: LeadEventSpec[] = [];
     for (const apt of events) {
+      if (APPT_SYNC_DELTA_MODE === 'enforce' && !changedIds.has(apt.id)) continue;
       if (!apt.startTime || !apt.contactId) continue;
       try {
         leadEventSpecs.push({
@@ -747,9 +818,9 @@ export async function syncAppointments(options?: {
     }
 
     await updateLastSynced('appointments');
-    await logSyncComplete(syncLogId, events.length);
-    console.log(`[EntitySync] Appointments synced: ${events.length}`);
-    return { synced: events.length, errors };
+    await logSyncComplete(syncLogId, rows.length);
+    console.log(`[EntitySync] Appointments synced: ${rows.length} written, ${skippedUnchanged} unchanged (mode=${APPT_SYNC_DELTA_MODE})`);
+    return { synced: rows.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
