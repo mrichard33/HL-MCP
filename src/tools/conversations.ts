@@ -88,6 +88,31 @@ async function checkAdvisoryLock(
   }
 }
 
+/**
+ * Channels this tool cannot actually deliver, mapped to the instruction the
+ * caller needs instead of a GHL rejection.
+ *
+ * ghl.sendMessage() sends the body in `message`. GHL's POST
+ * /conversations/messages does not read the body from `message` on the Email
+ * channel — it wants html, a subject and a resolved to-address — so it answers
+ * 422 CONVERSATIONS_MSG_NO_CONTENT. That error reads like an empty body, which
+ * sends whoever hit it looking for a regression that does not exist. Fail here,
+ * where we can say what to do instead.
+ *
+ * ONLY Email is listed. WhatsApp, GMB, IG, FB and Live_Chat are not verified
+ * either way; adding them on suspicion would break sends that may work today.
+ * Verify against the live API before adding a channel to this map.
+ */
+const UNSUPPORTED_SEND_CHANNELS: Record<string, string> = {
+  Email:
+    "send_message cannot send Email. GHL's POST /conversations/messages ignores the `message` field on " +
+    'the Email channel and answers 422 CONVERSATIONS_MSG_NO_CONTENT; it requires html, a subject and a ' +
+    'resolved to-address, none of which this tool carries. Email sending lives in LP MCP ' +
+    '(src/send-message-handler.js), which resolves the to-address, sets the subject, keeps the FROM ' +
+    'correct and threads the reply. Queue an LP MCP send_message agent action with action_payload ' +
+    '{ channel: "email", subject, message, pre_generated: true, requires_ai_generation: false }.',
+};
+
 export const conversationTools = {
   list_conversations: {
     description: 'List conversations, optionally filtered by contact. Queries Supabase by default. Set forceLive=true for live GHL API (requires contactId).',
@@ -173,11 +198,18 @@ export const conversationTools = {
 
   send_message: {
     description:
-      'Send a message in a conversation via GoHighLevel. Optionally pass triggerId to trigger an advisory check against the LP MCP outbound-lock table — useful when the send is in response to an inbound message and you want to know if LP MCP already queued a reply for the same trigger.',
+      'Send a message in a conversation via GoHighLevel. DOES NOT SEND EMAIL — the Email channel is rejected ' +
+      'with instructions, because GHL requires html/subject/to-address that this tool does not carry; email ' +
+      'sends go through LP MCP send-message-handler. Optionally pass triggerId to trigger an advisory check ' +
+      'against the LP MCP outbound-lock table — useful when the send is in response to an inbound message and ' +
+      'you want to know if LP MCP already queued a reply for the same trigger.',
     inputSchema: z.object({
       conversationId: z.string().describe('GHL conversation ID'),
       contactId: z.string().describe('GHL contact ID'),
-      type: z.enum(['SMS', 'Email', 'WhatsApp', 'GMB', 'IG', 'FB', 'Live_Chat']).default('SMS'),
+      type: z
+        .enum(['SMS', 'Email', 'WhatsApp', 'GMB', 'IG', 'FB', 'Live_Chat'])
+        .default('SMS')
+        .describe("Channel. 'Email' is accepted by the schema but rejected at send time with the correct path — see UNSUPPORTED_SEND_CHANNELS."),
       message: z.string().describe('Message body'),
       triggerId: z
         .string()
@@ -193,6 +225,14 @@ export const conversationTools = {
       message: string;
       triggerId?: string;
     }) => {
+      // Refuse channels this tool cannot deliver BEFORE spending a GHL call, so
+      // the caller gets the real reason instead of a 422 that reads like an
+      // empty message body.
+      const unsupported = UNSUPPORTED_SEND_CHANNELS[args.type];
+      if (unsupported) {
+        throw new Error(unsupported);
+      }
+
       let advisory: { held: boolean; held_by?: string; advisory_unavailable?: boolean } | undefined;
       if (args.triggerId) {
         advisory = await checkAdvisoryLock(args.contactId, args.triggerId);
