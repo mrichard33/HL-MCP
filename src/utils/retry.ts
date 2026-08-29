@@ -33,6 +33,21 @@ export interface BoundedRetryOptions {
   baseDelayMs?: number;
   /** Upper bound on any single backoff delay. Default 10_000. */
   maxDelayMs?: number;
+  /**
+   * Explicit per-retry delay schedule in ms, used verbatim — no doubling, no
+   * jitter, no maxDelayMs cap. delaysMs[0] is the wait before attempt 2.
+   *
+   * Added 2026-08-29 for the LP MCP tag forward, which needs a specific
+   * 2s/10s/60s ladder. The computed schedule below cannot express that: it
+   * doubles from baseDelayMs, caps at maxDelayMs (10s by default), and
+   * applies full-range jitter, so the third wait could land anywhere in
+   * 0..10s rather than at 60s.
+   *
+   * Prefer the computed schedule for anything on a shared cron boundary —
+   * the jitter there is deliberate anti-herd behaviour, not noise. Use this
+   * only when the ladder itself is the requirement.
+   */
+  delaysMs?: number[];
   /** Label used in log lines so retries are attributable. */
   label?: string;
   /** Decides whether a given error is worth retrying. Default: isTransientUpstreamError. */
@@ -75,6 +90,34 @@ export function isTransientUpstreamError(err: unknown): boolean {
   }
 
   return false;
+}
+
+/**
+ * Retryability for an outbound POST to another one of our own services.
+ *
+ * isTransientUpstreamError is shaped around GHLClient's error strings and
+ * misses the failure that matters most here: AbortSignal.timeout() rejects
+ * with "The operation was aborted due to timeout", which contains no errno,
+ * no status, and none of the words that predicate looks for. That single
+ * string is 4,150 of the 4,222 rows in webhook_failures — the entire reason
+ * this retry exists. Reusing the default predicate would have produced a
+ * retry that never fired on the dominant failure mode.
+ *
+ * Retries on: abort/timeout, any 5xx from the peer, and network-level errors.
+ * Does NOT retry 4xx — a malformed payload will be malformed on attempt 3.
+ */
+export function isRetryableServiceCallError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+
+  // AbortSignal.timeout() / AbortController — the dominant mode.
+  if (/(aborted|abort(ed)? due to timeout|timeout|timed out|AbortError)/i.test(msg)) {
+    return true;
+  }
+  // Peer returned 5xx (e.g. "LP MCP returned 502: upstream error").
+  if (/returned 5\d{2}\b/i.test(msg)) return true;
+  if (/\b(429|rate.?limit)\b/i.test(msg)) return true;
+
+  return isTransientUpstreamError(err);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -126,8 +169,16 @@ export async function withBoundedRetry<T>(
         throw err;
       }
 
-      const backoff = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
-      const delay = Math.floor(Math.random() * backoff);
+      const explicit = options.delaysMs;
+      let delay: number;
+      if (explicit && explicit.length > 0) {
+        // Clamp to the last entry so a maxAttempts above the ladder's length
+        // keeps waiting rather than falling back to 0ms and hammering.
+        delay = explicit[Math.min(attempt - 1, explicit.length - 1)];
+      } else {
+        const backoff = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+        delay = Math.floor(Math.random() * backoff);
+      }
       console.warn(
         `[Retry] ${label}: attempt ${attempt}/${maxAttempts} failed (${msg}) — ` +
         `retrying in ${delay}ms`,

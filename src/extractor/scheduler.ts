@@ -17,6 +17,7 @@ import {
 import { reapStaleSyncRuns, reapOnBoot } from './sync-reaper.js';
 import { withBoundedRetry } from '../utils/retry.js';
 import { getSupabaseClient } from '../clients/supabase.js';
+import { checkWebhookFailures } from './webhook-failure-alert.js';
 
 /** Track running state per job to prevent concurrent runs. */
 const runningJobs = new Map<string, boolean>();
@@ -525,6 +526,18 @@ export function startScheduledSync(): void {
     ));
   }, { timezone: 'America/New_York' });
 
+  // Daily webhook_failures growth check (Project 2, 2026-08-29). Runs at 3:15
+  // ET, after the two full reconciles, so it is off the 15-min boundary and
+  // not competing with them. Alerts only above WEBHOOK_FAILURE_ALERT_THRESHOLD
+  // — see webhook-failure-alert.ts. Not wrapped in runJob(): it writes no
+  // entity data and must never take a sync_log slot or a job mutex.
+  cron.schedule('15 3 * * *', () => {
+    console.log('[Scheduler] Daily 3:15 AM ET webhook_failures growth check');
+    checkWebhookFailures().catch((err) => {
+      console.error(`[Scheduler] webhook failure check threw: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, { timezone: 'America/New_York' });
+
   // v1.6: Low-volume config entities moved from every 30 min to every
   // 6 hours (00:00, 06:00, 12:00, 18:00 UTC). These rarely change;
   // 30-min cadence was overkill and contributed to Supabase write churn.
@@ -558,6 +571,7 @@ export function startScheduledSync(): void {
   console.log('  */15 * * * *       — contacts (incremental), appointments, conversations/messages');
   console.log('  20,50 * * * *      — opportunities (incremental, bounded-retry) [v2.0: off the 15-min boundary, 30-min cadence]');
   console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
+  console.log('  15 3 * * * ET      — webhook_failures growth check (GroupMe alert above threshold)');
   console.log('  10 3 * * * ET      — opportunities daily full reconcile (America/New_York, bounded-retry)');
   console.log('  0 */6 * * *        — pipelines, custom_fields, custom_values, tags, trigger_links, templates (every 6 hr)');
 }

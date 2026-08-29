@@ -1,5 +1,6 @@
 import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
+import { postGroupMeAlert } from '../utils/groupme.js';
 
 /**
  * Reaper for sync_log rows orphaned in status='running'.
@@ -62,38 +63,6 @@ export interface ReapResult {
   byEntity: Record<string, number>;
   alerted: boolean;
   errors: string[];
-}
-
-/**
- * Post a system-class alert to GroupMe.
- *
- * Best-effort and never throws: a failed alert must not fail the reaper, or
- * we'd be back to losing the cleanup for a monitoring problem. Silently no-ops
- * when GROUPME_BOT_ID is unset (local dev / test).
- */
-async function postGroupMeAlert(text: string): Promise<boolean> {
-  const botId = process.env.GROUPME_BOT_ID;
-  if (!botId) {
-    console.warn('[SyncReaper] GROUPME_BOT_ID not set — skipping alert');
-    return false;
-  }
-
-  try {
-    const res = await fetch('https://api.groupme.com/v3/bots/post', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bot_id: botId, text }),
-    });
-    if (!res.ok) {
-      console.error(`[SyncReaper] GroupMe alert failed: HTTP ${res.status}`);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[SyncReaper] GroupMe alert threw: ${msg}`);
-    return false;
-  }
 }
 
 /**
@@ -186,6 +155,7 @@ export async function reapStaleSyncRuns(): Promise<ReapResult> {
       `Worst offender: ${worst[0]} (${worst[1]}).\n` +
       `This means that job is exceeding its hard timeout repeatedly — check ` +
       `JOB_TIMEOUTS_MS and the job's slow path. Reaped rows are cleanup, not the fix.`,
+      'SyncReaper',
     );
   }
 

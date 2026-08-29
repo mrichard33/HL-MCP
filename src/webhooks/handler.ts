@@ -3,6 +3,7 @@ import { getSupabaseClient } from '../clients/supabase.js';
 import { nowET } from '../utils/timezone.js';
 import { deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection, extractMessageBody } from '../utils/normalize.js';
+import { withBoundedRetry, isRetryableServiceCallError } from '../utils/retry.js';
 import {
   emitSystemEvent,
   contactToSystemEvent,
@@ -119,15 +120,33 @@ async function logWebhookFailure(
   eventType: string,
   error: string,
   payload: unknown,
+  retryCount = 0,
 ): Promise<void> {
+  const supabase = getSupabaseClient();
+  const base = {
+    endpoint,
+    event_type: eventType,
+    error_message: error,
+    payload,
+  };
+
   try {
-    const supabase = getSupabaseClient();
-    await supabase.from('webhook_failures').insert({
-      endpoint,
-      event_type: eventType,
-      error_message: error,
-      payload,
+    const { error: insertErr } = await supabase.from('webhook_failures').insert({
+      ...base,
+      retry_count: retryCount,
+      last_retry_at: retryCount > 0 ? new Date().toISOString() : null,
     });
+    if (!insertErr) return;
+
+    // retry_count / last_retry_at arrive in migration 013. If the code is live
+    // before the migration is applied, fall back to the pre-013 shape rather
+    // than losing the row: an unlogged failure is invisible, and invisible
+    // failures are the whole reason this project exists.
+    console.warn(
+      `[Webhook] webhook_failures insert failed (${insertErr.message}) — ` +
+      'retrying without retry columns; apply migration 013',
+    );
+    await supabase.from('webhook_failures').insert(base);
   } catch {
     // Swallow logging errors to not break the webhook response
   }
@@ -438,34 +457,76 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
   // ghl.tag_added / ghl.tag_removed system_events for the Decision
   // Engine. Fire-and-forget — never block the GHL webhook ack.
   if (payload.type === 'ContactTagUpdate') {
-    const lpMcpBaseUrl = process.env.LP_MCP_BASE_URL
-      || 'https://lp-mcp-production.up.railway.app';
-    fetch(`${lpMcpBaseUrl}/webhooks/ghl-tag`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contact_id: id, tags: newTags }),
-      signal: AbortSignal.timeout(5000),
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          const text = await response.text().catch(() => '<no body>');
-          await logWebhookFailure(
-            'lp-mcp:/webhooks/ghl-tag',
-            'ContactTagUpdate',
-            `LP MCP returned ${response.status}: ${text}`,
-            { contact_id: id, tags: newTags },
-          );
-        }
-      })
-      .catch(async (err) => {
-        await logWebhookFailure(
-          'lp-mcp:/webhooks/ghl-tag',
-          'ContactTagUpdate',
-          err instanceof Error ? err.message : String(err),
-          { contact_id: id, tags: newTags },
-        );
-      });
+    forwardTagUpdateToLpMcp(id, newTags);
   }
+}
+
+/**
+ * Forward a tag change to LP MCP, with bounded retry.
+ *
+ * Before 2026-08-29 this was a single fire-and-forget POST: one attempt, a 5s
+ * timeout, and on failure a row in webhook_failures and nothing else. 4,222
+ * tag events were lost that way, 4,150 of them to the 5s timeout alone. A
+ * dropped tag event silently skips every tag-triggered agent rule, entry
+ * hygiene check, and stage advancement for that contact.
+ *
+ * Three attempts at 2s / 10s / 60s. The ladder is deliberately wide at the
+ * end: the 502s in the failure data are Railway cold starts and restarts, and
+ * a container that is still booting needs closer to a minute than to a second.
+ *
+ * Still detached — this must never block the GHL webhook ack, which is what
+ * the caller depends on. The trade-off is that the retry chain lives in
+ * memory for up to ~75s, so a redeploy mid-chain loses it; the daily
+ * webhook_failures alert and the replay tool are what cover that residue.
+ *
+ * occurred_at is stamped here rather than at the receiver so the value
+ * survives a retry: LP MCP keys its emitted tag events on it, and a key that
+ * shifted between attempts would let one change fire a rule twice.
+ */
+function forwardTagUpdateToLpMcp(contactId: string, newTags: string[]): void {
+  const lpMcpBaseUrl = process.env.LP_MCP_BASE_URL
+    || 'https://lp-mcp-production.up.railway.app';
+  const body = JSON.stringify({
+    contact_id: contactId,
+    tags: newTags,
+    occurred_at: new Date().toISOString(),
+  });
+
+  let attempts = 0;
+
+  withBoundedRetry(
+    async () => {
+      attempts++;
+      const response = await fetch(`${lpMcpBaseUrl}/webhooks/ghl-tag`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '<no body>');
+        // Message shape matters: isRetryableServiceCallError matches
+        // /returned 5\d{2}/ to decide a 502 is worth another attempt.
+        throw new Error(`LP MCP returned ${response.status}: ${text}`);
+      }
+      return response;
+    },
+    {
+      maxAttempts: 3,
+      delaysMs: [2_000, 10_000, 60_000],
+      label: 'lp-mcp:/webhooks/ghl-tag',
+      isRetryable: isRetryableServiceCallError,
+    },
+  ).catch(async (err) => {
+    // Only now, with every attempt spent, is this a real failure.
+    await logWebhookFailure(
+      'lp-mcp:/webhooks/ghl-tag',
+      'ContactTagUpdate',
+      err instanceof Error ? err.message : String(err),
+      { contact_id: contactId, tags: newTags },
+      attempts,
+    );
+  });
 }
 
 async function handleOpportunityWebhook(payload: Record<string, unknown>): Promise<void> {
