@@ -1,4 +1,4 @@
--- 013_run_sql_full_resultset.sql
+-- 014_run_sql_full_resultset.sql
 -- Fix run_sql so it returns the WHOLE result set instead of one scalar.
 --
 -- Applied by the Supabase branching workflow like any other migration in this
