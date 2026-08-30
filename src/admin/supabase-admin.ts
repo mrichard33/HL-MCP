@@ -2,32 +2,52 @@
  * Supabase admin operations: direct SQL execution, table listing, schema inspection.
  * Uses the run_sql RPC function for arbitrary SQL.
  *
- * IMPORTANT: run_sql does `EXECUTE query_text INTO result` where result is typed as json.
- * ALL SELECT queries must be wrapped in json_agg because even simple aggregates like
- * MAX(timestamp) or COUNT(*) fail when the RPC tries to cast non-JSON types into the
- * json result variable. Only queries already containing json_agg are skipped.
+ * A SELECT returns an array of row objects — [] for zero rows, and a single-row
+ * single-column result stays [{col: value}] rather than collapsing to a scalar.
+ *
+ * ─── History (2026-08-30) ──────────────────────────────────────────────────
+ * This module used to wrap every SELECT in json_agg before sending, and unwrap
+ * single values on the way back, because run_sql carried the original
+ * `EXECUTE query_text INTO result` body — which returns only the FIRST COLUMN of
+ * the FIRST ROW and raises on any non-JSON scalar. Migration
+ * 014_run_sql_full_resultset.sql fixes that server-side, so the workaround is
+ * gone.
+ *
+ * Removing it also fixes a bug the workaround itself had. It wrapped as
+ * `SELECT json_agg(t) FROM (<query>) t`, and Postgres binds a bare `t` to a
+ * COLUMN named t before the subquery alias. So any query with a column called
+ * `t` aggregated that column instead of the row:
+ *
+ *   SELECT now() AS ts, 'text-value' AS t, count(*) AS n FROM contacts
+ *     -> ["text-value"]        -- other columns and the row shape, gone
+ *
+ * No error, just a plausible-looking wrong answer — the same failure class as
+ * the defect 014 fixed, one layer up.
  */
 
 import { getSupabaseClient } from '../clients/supabase.js';
 
+export function isSelectish(queryText: string): boolean {
+  const upper = (queryText || '').trim().toUpperCase();
+  return upper.startsWith('SELECT') || upper.startsWith('WITH');
+}
+
 /**
- * Wrap ALL SELECT queries in json_agg so the run_sql RPC can return them.
- * The RPC's INTO variable is json-typed — even COUNT returns bigint which
- * sometimes fails, and MAX/MIN on timestamps always fails without wrapping.
- * Only skips if query already contains json_agg or is not a SELECT.
+ * Throw unless a SELECT came back as a row array.
+ *
+ * Pure, so it is testable without a Supabase client. A non-array here means
+ * run_sql is still the pre-014 body, which answers a multi-column SELECT with
+ * its first column and drops the rest. There is no safe way to use that value,
+ * so this refuses it rather than letting a caller act on truncated data.
  */
-function wrapSelectForJsonAgg(queryText: string): string {
-  const trimmed = queryText.trim();
-  const upper = trimmed.toUpperCase();
-
-  // Only wrap SELECT statements
-  if (!upper.startsWith('SELECT')) return trimmed;
-
-  // Don't double-wrap if already using json_agg
-  if (upper.includes('JSON_AGG')) return trimmed;
-
-  // Wrap everything — the RPC result variable is json-typed
-  return `SELECT json_agg(t) FROM (${trimmed}) t`;
+export function assertRowArray(queryText: string, data: unknown): unknown {
+  if (!isSelectish(queryText) || Array.isArray(data)) return data;
+  throw new Error(
+    'run_sql returned a non-array for a SELECT, which means migration '
+    + '014_run_sql_full_resultset.sql is NOT applied on this Supabase instance. '
+    + 'Refusing the result: the old function body returns only the first column '
+    + 'of the first row, so this value is silently truncated.',
+  );
 }
 
 /**
@@ -96,8 +116,7 @@ function autoFixJsonbLike(query: string): string {
 
 export async function runSQL(queryText: string): Promise<unknown> {
   const supabase = getSupabaseClient();
-  const wrapped = wrapSelectForJsonAgg(queryText);
-  const { data, error } = await supabase.rpc('run_sql', { query_text: wrapped });
+  const { data, error } = await supabase.rpc('run_sql', { query_text: queryText });
 
   if (error) {
     // Auto-fix: jsonb ILIKE/LIKE type mismatch — cast to text and retry once
@@ -109,9 +128,8 @@ export async function runSQL(queryText: string): Promise<unknown> {
     if (isJsonbLikeError) {
       const fixedQuery = autoFixJsonbLike(queryText);
       if (fixedQuery !== queryText) {
-        const wrappedFixed = wrapSelectForJsonAgg(fixedQuery);
         const { data: retryData, error: retryError } = await supabase.rpc('run_sql', {
-          query_text: wrappedFixed,
+          query_text: fixedQuery,
         });
         if (retryError) {
           throw new Error(
@@ -120,7 +138,7 @@ export async function runSQL(queryText: string): Promise<unknown> {
             `Attempted fix: ${fixedQuery}`
           );
         }
-        return unwrapSingleValue(retryData);
+        return assertRowArray(fixedQuery, retryData);
       }
       // Could not auto-fix — provide helpful guidance
       throw new Error(
@@ -133,21 +151,7 @@ export async function runSQL(queryText: string): Promise<unknown> {
     throw new Error(`SQL execution error: ${error.message}`);
   }
 
-  return unwrapSingleValue(data);
-}
-
-/**
- * json_agg returns an array — for single-value queries (COUNT, MAX, etc.)
- * unwrap to return just the value for a cleaner caller experience.
- */
-function unwrapSingleValue(data: unknown): unknown {
-  if (Array.isArray(data) && data.length === 1 && typeof data[0] === 'object') {
-    const keys = Object.keys(data[0] as Record<string, unknown>);
-    if (keys.length === 1) {
-      return (data[0] as Record<string, unknown>)[keys[0]];
-    }
-  }
-  return data;
+  return assertRowArray(queryText, data);
 }
 
 export async function listTables(prefix?: string): Promise<unknown> {
@@ -163,8 +167,8 @@ export async function listTables(prefix?: string): Promise<unknown> {
   }
   innerQuery += ' ORDER BY relname';
 
-  const query = `SELECT json_agg(t) FROM (${innerQuery}) t`;
-  const result = await runSQL(query);
+  // No json_agg wrap — run_sql aggregates server-side since 014.
+  const result = await runSQL(innerQuery);
   return { tables: result };
 }
 
@@ -194,7 +198,7 @@ export async function getTableSchema(tableName: string): Promise<unknown> {
     ORDER BY c.ordinal_position
   `;
 
-  const query = `SELECT json_agg(t) FROM (${innerQuery}) t`;
-  const result = await runSQL(query);
+  // No json_agg wrap — run_sql aggregates server-side since 014.
+  const result = await runSQL(innerQuery);
   return { table: tableName, columns: result };
 }
