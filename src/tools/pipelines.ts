@@ -59,10 +59,11 @@ export const pipelineTools = {
     description: 'Create a new opportunity (deal) in GoHighLevel.',
     inputSchema: z.object({
       pipelineId: z.string().describe('Pipeline ID'),
-      name: z.string().describe('Opportunity name'),
+      name: z.string().describe('Opportunity name. Use the contact\'s FULL name — an opportunity named with a bare first name is indistinguishable from the ones the LP milestone chain used to create by accident.'),
       stageId: z.string().optional(),
       contactId: z.string().optional(),
       monetaryValue: z.number().optional(),
+      source: z.string().optional().describe('Opportunity source, e.g. the contact\'s own source. GHL cannot set this after the fact through any path that carries attribution, so an opportunity created without one stays source-less and drops out of every source-performance report.'),
       status: z.enum(['open', 'won', 'lost', 'abandoned']).optional().default('open'),
     }),
     handler: async (args: Record<string, unknown>) => {
@@ -85,6 +86,7 @@ export const pipelineTools = {
       stageId: z.string().optional(),
       status: z.enum(['open', 'won', 'lost', 'abandoned']).optional(),
       monetaryValue: z.number().optional(),
+      source: z.string().optional().describe('Opportunity source. Use this to repair an opportunity created without one.'),
       lostReasonId: z.string().optional().describe('GHL built-in Lost Reason picker ID. Required when status="lost" and any workflow (e.g. WF1 P1 Loss Router) gates on the built-in lostReasonId field. Look up valid IDs with the get_lost_reasons tool.'),
       customFields: z.array(z.object({
         id: z.string().describe('Custom field ID'),
