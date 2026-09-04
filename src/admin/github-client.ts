@@ -18,6 +18,10 @@
  * every text file for the query as a case-insensitive substring. Cached
  * per repo@ref for 120s. Works on any branch; exact substring semantics.
  * Mirrors LP-MCP PR #491.
+ *
+ * v1.4: listBranches now PAGINATES and filters daily backup branches, and
+ * pull requests became readable (listPullRequests, getPullRequestFiles,
+ * checkPrOverlap). Mirrors LP-MCP PR #829. See the v1.4 section below.
  */
 
 import * as zlib from 'node:zlib';
@@ -80,23 +84,309 @@ async function api(path: string, options: RequestInit = {}): Promise<unknown> {
   return res.json();
 }
 
-// ─── Branch listing (new in v1.2) ────────────────────────────────
+// ─── Pagination and backup-branch filtering (v1.4) ───────────────
+//
+// listBranches used to be a single `?per_page=100` with no page loop
+// and no truncation flag. LP-MCP carries ~93 daily bk-MM-DD-YYYY
+// backup branches, which consumed the page and cut the list off
+// alphabetically partway through claude/* — main and every feat/ and
+// fix/ branch fell off the end, with nothing saying the list was
+// short. Confirmed live 2026-09-03.
 
-export async function listBranches(repo?: string): Promise<unknown> {
+const PER_PAGE = 100;
+const DEFAULT_MAX_PAGES = 10;
+
+/**
+ * Page until a SHORT page proves the set is exhausted. A full page is
+ * never evidence of completion — that is the off-by-one that silently
+ * truncates at exact multiples of the page size. If the page cap is
+ * hit, the caller is told rather than handed a quietly short list.
+ */
+async function apiPaged(
+  basePath: string,
+  maxPages = DEFAULT_MAX_PAGES
+): Promise<{ items: unknown[]; truncated: boolean }> {
+  const out: unknown[] = [];
+  let truncated = false;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const sep = basePath.includes('?') ? '&' : '?';
+    const data = (await api(`${basePath}${sep}per_page=${PER_PAGE}&page=${page}`)) as unknown[];
+    if (!Array.isArray(data) || data.length === 0) break;
+    out.push(...data);
+    if (data.length < PER_PAGE) break;
+    if (page === maxPages) truncated = true;
+  }
+
+  return { items: out, truncated };
+}
+
+const BACKUP_BRANCH_RE = /^bk-\d{2}-\d{2}-\d{4}$/i;
+
+/**
+ * Exported for test. Deliberately anchored and exact-width: a branch
+ * genuinely named "bk-fix/something" or "backfill-coverage-probe" (a
+ * real LP-MCP branch) is real work and must NOT be swallowed by the
+ * backup filter. Hiding real work is worse than the noise removed.
+ */
+export function isBackupBranch(name?: string | null): boolean {
+  return BACKUP_BRANCH_RE.test(name || '');
+}
+
+// ─── Branch listing (v1.2, paginated + filtered in v1.4) ─────────
+
+interface RawBranch {
+  name: string;
+  commit: { sha: string; url: string };
+  protected: boolean;
+}
+
+export async function listBranches(
+  repo?: string,
+  includeBackups = false,
+  contains?: string
+): Promise<unknown> {
   const r = getRepo(repo);
-  const data = (await api(`/repos/${r}/branches?per_page=100`)) as Array<{
-    name: string;
-    commit: { sha: string; url: string };
-    protected: boolean;
-  }>;
+  const { items, truncated } = await apiPaged(`/repos/${r}/branches`);
+
+  const all = (items as RawBranch[]).map((b) => ({
+    name: b.name,
+    sha: b.commit.sha.slice(0, 7),
+    protected: b.protected,
+  }));
+
+  const backups = all.filter((b) => isBackupBranch(b.name));
+  let branches = includeBackups ? all : all.filter((b) => !isBackupBranch(b.name));
+
+  if (contains) {
+    const needle = contains.toLowerCase();
+    branches = branches.filter((b) => b.name.toLowerCase().includes(needle));
+  }
+
   return {
     repo: r,
-    branches: data.map((b) => ({
-      name: b.name,
-      sha: b.commit.sha.slice(0, 7),
-      protected: b.protected,
-    })),
-    count: data.length,
+    total_branches: all.length,
+    backup_branches_excluded: includeBackups ? 0 : backups.length,
+    count: branches.length,
+    truncated,
+    branches,
+  };
+}
+
+// ─── Pull request reads (v1.4) ───────────────────────────────────
+//
+// This wrapper could OPEN a pull request (createPullRequest) and had no
+// way to read one back, so "what is open right now" and "do these two
+// PRs touch the same file" were unanswerable from this service.
+
+export interface PrFileSet {
+  pr: { number: number; title?: string; head?: string };
+  files: Set<string>;
+}
+
+export interface OverlapCollision {
+  pr_a: { number: number; title?: string; head?: string };
+  pr_b: { number: number; title?: string; head?: string };
+  shared_file_count: number;
+  shared_files: string[];
+}
+
+/**
+ * Exported for test. Pure pairwise intersection — no network.
+ *
+ * Reports SHARED FILES, not a merge verdict. GitHub's own `mergeable`
+ * is computed against main as it stands and goes stale the moment any
+ * sibling PR merges, and it cannot see two PRs editing different lines
+ * of the same function. Shared files flags what to read; it does not
+ * pretend to rule.
+ */
+export function computeOverlaps(fileSets: PrFileSet[]): {
+  collisions: OverlapCollision[];
+  clean: Array<{ number: number; title?: string; files: number }>;
+} {
+  const collisions: OverlapCollision[] = [];
+  for (let i = 0; i < fileSets.length; i++) {
+    for (let j = i + 1; j < fileSets.length; j++) {
+      const a = fileSets[i];
+      const b = fileSets[j];
+      const shared = [...a.files].filter((f) => b.files.has(f));
+      if (shared.length > 0) {
+        collisions.push({
+          pr_a: { number: a.pr.number, title: a.pr.title, head: a.pr.head },
+          pr_b: { number: b.pr.number, title: b.pr.title, head: b.pr.head },
+          shared_file_count: shared.length,
+          shared_files: shared.sort(),
+        });
+      }
+    }
+  }
+  collisions.sort((x, y) => y.shared_file_count - x.shared_file_count);
+
+  const collided = new Set<number>();
+  for (const c of collisions) {
+    collided.add(c.pr_a.number);
+    collided.add(c.pr_b.number);
+  }
+  const clean = fileSets
+    .filter((s) => !collided.has(s.pr.number))
+    .map((s) => ({ number: s.pr.number, title: s.pr.title, files: s.files.size }));
+
+  return { collisions, clean };
+}
+
+interface RawPr {
+  number: number;
+  title: string;
+  state: string;
+  draft?: boolean;
+  head?: { ref: string };
+  base?: { ref: string };
+  user?: { login: string };
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+function shapePr(p: RawPr) {
+  return {
+    number: p.number,
+    title: p.title,
+    state: p.state,
+    draft: p.draft === true,
+    head: p.head?.ref,
+    base: p.base?.ref,
+    author: p.user?.login,
+    created_at: p.created_at,
+    updated_at: p.updated_at,
+    url: p.html_url,
+  };
+}
+
+export async function listPullRequests(
+  state: 'open' | 'closed' | 'all' = 'open',
+  base?: string,
+  limit = 50,
+  repo?: string
+): Promise<unknown> {
+  const r = getRepo(repo);
+  const cap = Math.min(limit, 300);
+  let path = `/repos/${r}/pulls?state=${state}&sort=updated&direction=desc`;
+  if (base) path += `&base=${encodeURIComponent(base)}`;
+
+  const { items, truncated } = await apiPaged(path, 3);
+  const prs = (items as RawPr[]).slice(0, cap).map(shapePr);
+
+  return {
+    repo: r,
+    state,
+    count: prs.length,
+    total_fetched: items.length,
+    truncated: truncated || items.length > cap,
+    pull_requests: prs,
+  };
+}
+
+interface RawPrFile {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  previous_filename?: string;
+}
+
+export async function getPullRequestFiles(prNumber: number, repo?: string): Promise<unknown> {
+  const r = getRepo(repo);
+  const pr = (await api(`/repos/${r}/pulls/${prNumber}`)) as RawPr & {
+    mergeable?: boolean | null;
+    mergeable_state?: string;
+    changed_files?: number;
+  };
+  const { items, truncated } = await apiPaged(`/repos/${r}/pulls/${prNumber}/files`, 5);
+
+  const files = (items as RawPrFile[]).map((f) => ({
+    path: f.filename,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    previous_path: f.previous_filename,
+  }));
+
+  return {
+    repo: r,
+    number: prNumber,
+    title: pr.title,
+    state: pr.state,
+    head: pr.head?.ref,
+    base: pr.base?.ref,
+    // mergeable is computed asynchronously by GitHub; null means "not
+    // ready yet", which is NOT the same as "will not merge". Reported
+    // as-is rather than coerced to a boolean.
+    mergeable: pr.mergeable,
+    mergeable_state: pr.mergeable_state,
+    changed_files: pr.changed_files,
+    files_listed: files.length,
+    truncated,
+    files,
+  };
+}
+
+export async function checkPrOverlap(
+  base = 'main',
+  maxPrs = 25,
+  includeDrafts = true,
+  repo?: string
+): Promise<unknown> {
+  const r = getRepo(repo);
+  const cap = Math.min(maxPrs, 50);
+
+  const { items } = await apiPaged(
+    `/repos/${r}/pulls?state=open&base=${encodeURIComponent(base)}&sort=updated&direction=desc`,
+    3
+  );
+
+  const candidates = (items as RawPr[])
+    .filter((p) => (includeDrafts ? true : p.draft !== true))
+    .slice(0, cap);
+
+  if (candidates.length === 0) {
+    return {
+      repo: r,
+      base,
+      open_prs: 0,
+      verdict: 'No open pull requests. Nothing to clash.',
+    };
+  }
+
+  const fileSets: Array<PrFileSet & { truncated: boolean }> = [];
+  for (const p of candidates) {
+    const { items: fileRows, truncated } = await apiPaged(
+      `/repos/${r}/pulls/${p.number}/files`,
+      5
+    );
+    fileSets.push({
+      pr: shapePr(p),
+      files: new Set((fileRows as RawPrFile[]).map((f) => f.filename)),
+      truncated,
+    });
+  }
+
+  const { collisions, clean } = computeOverlaps(fileSets);
+  const partial = fileSets.filter((s) => s.truncated).map((s) => s.pr.number);
+
+  return {
+    repo: r,
+    base,
+    open_prs: fileSets.length,
+    inspected_cap: cap,
+    more_open_than_inspected: items.length > candidates.length,
+    colliding_pairs: collisions.length,
+    collisions,
+    no_overlap: clean,
+    // A truncated file list makes that PR's overlap a LOWER BOUND — it
+    // may share more than reported. Said out loud rather than left to
+    // look complete.
+    partial_file_lists: partial,
+    note: 'Shared files flag pairs worth reading before merging both. It is not a merge verdict: PRs sharing no file cannot conflict textually, but PRs sharing a file may still merge cleanly.',
   };
 }
 
