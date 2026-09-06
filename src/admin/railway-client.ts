@@ -5,6 +5,17 @@
 
 const RAILWAY_API = 'https://backboard.railway.app/graphql/v2';
 
+// Railway's API stalls intermittently. Without a timeout a stalled request
+// hangs the MCP tool call forever and the caller sees a bare "Failed" with
+// no error text. Bound it so a stall becomes a readable error instead.
+const TIMEOUT_MS = Number(process.env.RAILWAY_API_TIMEOUT_MS) || 20000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+interface RetryableError extends Error {
+  retryable?: boolean;
+}
+
 function getHeaders(): Record<string, string> {
   const token = process.env.RAILWAY_API_TOKEN;
   if (!token) throw new Error('Missing RAILWAY_API_TOKEN environment variable');
@@ -32,21 +43,59 @@ function getEnvironmentId(): string {
   return id;
 }
 
-async function gql(query: string, variables: Record<string, unknown> = {}): Promise<unknown> {
-  const res = await fetch(RAILWAY_API, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Railway API ${res.status}: ${text}`);
+async function attempt(query: string, variables: Record<string, unknown>): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(RAILWAY_API, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    const name = (err as Error)?.name || '';
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      const e: RetryableError = new Error(
+        `Railway API did not respond within ${TIMEOUT_MS}ms (backboard.railway.app may be degraded).`
+      );
+      e.retryable = true;
+      throw e;
+    }
+    const e: RetryableError = new Error(
+      `Railway API request failed: ${(err as Error)?.message || String(err)}`
+    );
+    e.retryable = true;
+    throw e;
   }
-  const json = (await res.json()) as { data?: unknown; errors?: Array<{ message: string }> };
+
+  if (!res.ok) {
+    const text = (await res.text().catch(() => '')).slice(0, 500);
+    const e: RetryableError = new Error(`Railway API ${res.status}: ${text || res.statusText}`);
+    e.retryable = res.status >= 500 || res.status === 429;
+    throw e;
+  }
+
+  let json: { data?: unknown; errors?: Array<{ message: string }> };
+  try {
+    json = (await res.json()) as { data?: unknown; errors?: Array<{ message: string }> };
+  } catch {
+    throw new Error('Railway API returned a non-JSON response.');
+  }
+
   if (json.errors?.length) {
     throw new Error(`Railway GraphQL error: ${json.errors.map((e) => e.message).join(', ')}`);
   }
   return json.data;
+}
+
+async function gql(query: string, variables: Record<string, unknown> = {}): Promise<unknown> {
+  try {
+    return await attempt(query, variables);
+  } catch (err) {
+    if (!(err as RetryableError)?.retryable) throw err;
+    await sleep(1000);
+    return await attempt(query, variables);
+  }
 }
 
 export async function getServiceStatus(): Promise<unknown> {
@@ -79,7 +128,19 @@ export async function getServiceStatus(): Promise<unknown> {
       serviceId: getServiceId(),
       environmentId: getEnvironmentId(),
     }
-  )) as Record<string, unknown>;
+  )) as Record<string, unknown> | null;
+
+  // Railway returns service: null for an unknown service, or one the token
+  // cannot see. Say so explicitly rather than returning an empty shape.
+  if (!data || !data.service) {
+    return {
+      error: 'service_not_found',
+      service_id: getServiceId(),
+      message:
+        'Railway returned no service for this ID. Check RAILWAY_SERVICE_ID, or that RAILWAY_API_TOKEN is scoped to the project that owns it.',
+    };
+  }
+
   return data;
 }
 
@@ -108,9 +169,9 @@ export async function getDeploymentLogs(filter?: string, limit = 500): Promise<u
       serviceId: getServiceId(),
       environmentId: getEnvironmentId(),
     }
-  )) as { deployments: { edges: Array<{ node: { id: string; status: string } }> } };
+  )) as { deployments?: { edges?: Array<{ node: { id: string; status: string } }> } } | null;
 
-  const latestDeploy = depData.deployments.edges[0]?.node;
+  const latestDeploy = depData?.deployments?.edges?.[0]?.node;
   if (!latestDeploy) return { logs: [], message: 'No deployments found' };
 
   const logData = (await gql(
@@ -122,9 +183,9 @@ export async function getDeploymentLogs(filter?: string, limit = 500): Promise<u
       }
     }`,
     { deploymentId: latestDeploy.id, limit }
-  )) as { deploymentLogs: Array<{ message: string; timestamp: string; severity: string }> };
+  )) as { deploymentLogs?: Array<{ message: string; timestamp: string; severity: string }> } | null;
 
-  let logs = logData.deploymentLogs || [];
+  let logs = logData?.deploymentLogs || [];
   if (filter) {
     const lowerFilter = filter.toLowerCase();
     logs = logs.filter((l) => l.message.toLowerCase().includes(lowerFilter));
@@ -147,10 +208,10 @@ export async function getEnvVars(): Promise<unknown> {
       serviceId: getServiceId(),
       environmentId: getEnvironmentId(),
     }
-  )) as { variables: Record<string, string> };
+  )) as { variables?: Record<string, string> } | null;
 
   // Return names and value lengths only — NEVER actual values
-  const vars = Object.entries(data.variables || {}).map(([name, value]) => ({
+  const vars = Object.entries(data?.variables || {}).map(([name, value]) => ({
     name,
     is_set: value !== null && value !== undefined && value !== '',
     value_length: value ? value.length : 0,
@@ -207,9 +268,9 @@ export async function triggerRedeploy(): Promise<unknown> {
       serviceId: getServiceId(),
       environmentId: getEnvironmentId(),
     }
-  )) as { deployments: { edges: Array<{ node: { id: string } }> } };
+  )) as { deployments?: { edges?: Array<{ node: { id: string } }> } } | null;
 
-  const latestId = depData.deployments.edges[0]?.node?.id;
+  const latestId = depData?.deployments?.edges?.[0]?.node?.id;
   if (!latestId) throw new Error('No deployments found to redeploy from');
 
   const data = await gql(
