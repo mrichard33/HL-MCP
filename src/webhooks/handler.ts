@@ -4,6 +4,7 @@ import { nowET } from '../utils/timezone.js';
 import { deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection, extractMessageBody } from '../utils/normalize.js';
 import { withBoundedRetry, isRetryableServiceCallError } from '../utils/retry.js';
+import { trackBackground } from '../graceful-shutdown.js';
 import {
   emitSystemEvent,
   contactToSystemEvent,
@@ -450,14 +451,14 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
 
   // ── Populate workflow_executions from active-w* tag diff (non-blocking) ──
   // See comment block above syncWorkflowExecutionsFromTagDiff for rationale.
-  syncWorkflowExecutionsFromTagDiff(id, locationId, newTags, previousTags).catch((err) => {
+  trackBackground(syncWorkflowExecutionsFromTagDiff(id, locationId, newTags, previousTags).catch((err) => {
     console.warn(`[Webhook] workflow_executions tag-diff failed for contact ${id}: ${err instanceof Error ? err.message : String(err)}`);
-  });
+  }));
 
   // ── Forward to agentic event bus (non-blocking) ──
   const systemEvent = contactToSystemEvent(payload);
   if (systemEvent) {
-    emitSystemEvent(systemEvent).catch(() => {}); // fire-and-forget
+    trackBackground(emitSystemEvent(systemEvent).catch(() => {})); // fire-and-forget
   }
 
   // ── Forward to LP MCP for tag-event emission (Wave 1.2) ──
@@ -465,7 +466,7 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
   // ghl.tag_added / ghl.tag_removed system_events for the Decision
   // Engine. Fire-and-forget — never block the GHL webhook ack.
   if (payload.type === 'ContactTagUpdate') {
-    forwardTagUpdateToLpMcp(id, newTags);
+    trackBackground(forwardTagUpdateToLpMcp(id, newTags));
   }
 }
 
@@ -483,15 +484,23 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
  * a container that is still booting needs closer to a minute than to a second.
  *
  * Still detached — this must never block the GHL webhook ack, which is what
- * the caller depends on. The trade-off is that the retry chain lives in
- * memory for up to ~75s, so a redeploy mid-chain loses it; the daily
- * webhook_failures alert and the replay tool are what cover that residue.
+ * the caller depends on.
+ *
+ * 2026-09-11: it is no longer lost on a redeploy. The note here used to read
+ * "the retry chain lives in memory for up to ~75s, so a redeploy mid-chain
+ * loses it". It now RETURNS its promise so the caller can hand it to
+ * trackBackground, and graceful shutdown waits for the chain to finish before
+ * the process exits. The full ladder (2s + 10s + 60s) fits inside the 90s
+ * SHUTDOWN_GRACE_MS with room to spare, and on the happy path the whole thing
+ * is done in well under 5s, so the drain is unaffected in normal operation.
+ * webhook_failures and the replay tool remain the backstop for a chain that
+ * genuinely outlives the grace window.
  *
  * occurred_at is stamped here rather than at the receiver so the value
  * survives a retry: LP MCP keys its emitted tag events on it, and a key that
  * shifted between attempts would let one change fire a rule twice.
  */
-function forwardTagUpdateToLpMcp(contactId: string, newTags: string[]): void {
+function forwardTagUpdateToLpMcp(contactId: string, newTags: string[]): Promise<void> {
   const lpMcpBaseUrl = process.env.LP_MCP_BASE_URL
     || 'https://lp-mcp-production.up.railway.app';
   const body = JSON.stringify({
@@ -502,7 +511,7 @@ function forwardTagUpdateToLpMcp(contactId: string, newTags: string[]): void {
 
   let attempts = 0;
 
-  withBoundedRetry(
+  return withBoundedRetry(
     async () => {
       attempts++;
       const response = await fetch(`${lpMcpBaseUrl}/webhooks/ghl-tag`, {
@@ -534,7 +543,9 @@ function forwardTagUpdateToLpMcp(contactId: string, newTags: string[]): void {
       { contact_id: contactId, tags: newTags },
       attempts,
     );
-  });
+  // Collapse the success branch's Response to void — the caller only needs to
+  // know the chain finished, never what LP MCP sent back.
+  }).then(() => {});
 }
 
 async function handleOpportunityWebhook(payload: Record<string, unknown>): Promise<void> {
@@ -583,7 +594,7 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
   // ── Forward to agentic event bus (non-blocking) ──
   const systemEvent = opportunityToSystemEvent(payload);
   if (systemEvent) {
-    emitSystemEvent(systemEvent).catch(() => {});
+    trackBackground(emitSystemEvent(systemEvent).catch(() => {}));
   }
 }
 
@@ -626,7 +637,7 @@ async function handleAppointmentWebhook(payload: Record<string, unknown>): Promi
   // ── Forward to agentic event bus (non-blocking) ──
   const systemEvent = appointmentToSystemEvent(payload);
   if (systemEvent) {
-    emitSystemEvent(systemEvent).catch(() => {});
+    trackBackground(emitSystemEvent(systemEvent).catch(() => {}));
   }
 }
 
@@ -659,7 +670,7 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
   // ── Forward inbound messages to agentic event bus (non-blocking) ──
   const systemEvent = messageToSystemEvent(payload);
   if (systemEvent) {
-    emitSystemEvent(systemEvent).catch(() => {});
+    trackBackground(emitSystemEvent(systemEvent).catch(() => {}));
   }
 }
 
@@ -711,7 +722,7 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
   }
 
   // ── Forward to agentic event bus (non-blocking) ──
-  emitSystemEvent({
+  trackBackground(emitSystemEvent({
     event_type: 'workflow.contact_added',
     source: 'ghl',
     entity_type: 'workflow',
@@ -720,7 +731,7 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
     payload,
     priority: 'normal',
     event_timestamp: stableTs,
-  }).catch(() => {});
+  }).catch(() => {}));
 }
 
 // ---- Main webhook router ----

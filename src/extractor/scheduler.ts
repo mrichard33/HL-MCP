@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import type { ScheduledTask, TaskOptions } from 'node-cron';
 import { extractAndSyncWorkflows } from './workflow-extractor.js';
 import { syncTemplates } from './template-syncer.js';
 import { toET } from '../utils/timezone.js';
@@ -245,6 +246,49 @@ async function isFirstRunFor(entityName: string): Promise<boolean> {
  * the same way boot was" — that day arrived, but the honest fix turned out
  * to be cadence + ceiling rather than serialization. See the cron comment.
  */
+/**
+ * Every cron task this module registers, so shutdown can stop them.
+ *
+ * Before the graceful-shutdown work these were fire-and-forget: node-cron kept
+ * firing new jobs right up to the moment the process died, which meant a
+ * deploy could start a fresh sweep inside a container that was already
+ * draining — and that sweep would then be killed mid-write.
+ */
+const scheduledTasks: ScheduledTask[] = [];
+
+/** cron.schedule, but the task is remembered so stopScheduledSync() can reach it. */
+function schedule(expression: string, fn: () => void, options?: TaskOptions): ScheduledTask {
+  const task = cron.schedule(expression, fn, options);
+  scheduledTasks.push(task);
+  return task;
+}
+
+/**
+ * Stop every registered cron task. Called from the shutdown 'start' hook, so
+ * it runs BEFORE the drain wait and no new sweep can begin.
+ *
+ * Does NOT cancel a job already running — those are resumable through sync_log
+ * plus the stale-run reaper, and killing one mid-write is the thing we are
+ * trying to avoid, not cause. Never throws: a scheduler that will not stop
+ * must not block the drain.
+ */
+export function stopScheduledSync(): void {
+  let stopped = 0;
+  for (const task of scheduledTasks) {
+    try {
+      // node-cron 4.x returns a promise here; we do not await it. stop() takes
+      // effect synchronously for scheduling purposes, and awaiting 16 of them
+      // would add latency to a drain for no benefit.
+      void task.stop();
+      stopped++;
+    } catch (err) {
+      console.warn(`[Scheduler] task stop failed (ignored): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  scheduledTasks.length = 0;
+  console.log(`[Scheduler] Stopped ${stopped} cron job(s) — no new sweeps will start`);
+}
+
 export function startScheduledSync(): void {
   console.log('[Scheduler] Starting scheduled sync jobs (v2.0)');
 
@@ -395,7 +439,7 @@ export function startScheduledSync(): void {
   // v1.5: Workflow sync cadence reduced from every-10-min to hourly. Workflow
   // definitions change rarely; hourly is plenty and reduces Firebase/GHL
   // internal-API load. Funnel progression also hourly — same top-of-hour slot.
-  cron.schedule('0 * * * *', () => {
+  schedule('0 * * * *', () => {
     runJob('workflows', async () => {
       const result = await extractAndSyncWorkflows();
       console.log(
@@ -404,7 +448,7 @@ export function startScheduledSync(): void {
     });
   });
 
-  cron.schedule('0 * * * *', () => {
+  schedule('0 * * * *', () => {
     runJob('funnel_progression', computeFunnelProgression);
   });
 
@@ -415,7 +459,7 @@ export function startScheduledSync(): void {
   // reading sync_log mid-write and, worse, could reap a row belonging to a
   // job that had only just started. :07 and :37 sit well clear of every
   // other scheduled job in this file.
-  cron.schedule('7,37 * * * *', () => {
+  schedule('7,37 * * * *', () => {
     runJob('sync_reaper', reapStaleSyncRuns);
   });
 
@@ -425,7 +469,7 @@ export function startScheduledSync(): void {
   // Contacts genuinely is cheap: POST /contacts/search honours the
   // dateUpdated filter, so a normal cycle is a handful of calls and
   // finishes in ~7s (measured avg over 24h: 96/97 runs completed).
-  cron.schedule('*/15 * * * *', () => {
+  schedule('*/15 * * * *', () => {
     runJob('contacts', () => syncContacts({ mode: 'incremental' }));
   });
 
@@ -473,7 +517,7 @@ export function startScheduledSync(): void {
   // verified against the live API — do NOT guess it. Guessing `dateUpdated`
   // by analogy with the contacts DTO is precisely what produced a fast path
   // that 422'd silently for months.
-  cron.schedule('20,50 * * * *', () => {
+  schedule('20,50 * * * *', () => {
     runJob('opportunities', () => withBoundedRetry(
       () => syncOpportunities({ mode: 'incremental' }),
       { label: 'syncOpportunities(incremental)' },
@@ -481,12 +525,12 @@ export function startScheduledSync(): void {
   });
 
   // Appointments stays at 15 min — already time-windowed, very efficient.
-  cron.schedule('*/15 * * * *', () => {
+  schedule('*/15 * * * *', () => {
     runJob('appointments', syncAppointments);
   });
 
   // Conversations/messages stays at 15 min — v1.7 watermark walk is fast.
-  cron.schedule('*/15 * * * *', () => {
+  schedule('*/15 * * * *', () => {
     runJob('conversations', async () => {
       const result = await syncConversationsAndMessages();
       console.log(
@@ -513,12 +557,12 @@ export function startScheduledSync(): void {
   // v2.0: still correct after the opportunities incremental moved to :20/:50 —
   // 3:10 clears :20 and :50 by a wide margin, so the daily full can never be
   // dropped by the shared job-name mutex.
-  cron.schedule('5 3 * * *', () => {
+  schedule('5 3 * * *', () => {
     console.log('[Scheduler] Daily 3:05 AM ET full reconcile — contacts');
     runJob('contacts', () => syncContacts({ mode: 'full' }));
   }, { timezone: 'America/New_York' });
 
-  cron.schedule('10 3 * * *', () => {
+  schedule('10 3 * * *', () => {
     console.log('[Scheduler] Daily 3:10 AM ET full reconcile — opportunities');
     runJob('opportunities', () => withBoundedRetry(
       () => syncOpportunities({ mode: 'full' }),
@@ -531,7 +575,7 @@ export function startScheduledSync(): void {
   // not competing with them. Alerts only above WEBHOOK_FAILURE_ALERT_THRESHOLD
   // — see webhook-failure-alert.ts. Not wrapped in runJob(): it writes no
   // entity data and must never take a sync_log slot or a job mutex.
-  cron.schedule('15 3 * * *', () => {
+  schedule('15 3 * * *', () => {
     console.log('[Scheduler] Daily 3:15 AM ET webhook_failures growth check');
     checkWebhookFailures().catch((err) => {
       console.error(`[Scheduler] webhook failure check threw: ${err instanceof Error ? err.message : String(err)}`);
@@ -541,27 +585,27 @@ export function startScheduledSync(): void {
   // v1.6: Low-volume config entities moved from every 30 min to every
   // 6 hours (00:00, 06:00, 12:00, 18:00 UTC). These rarely change;
   // 30-min cadence was overkill and contributed to Supabase write churn.
-  cron.schedule('0 */6 * * *', () => {
+  schedule('0 */6 * * *', () => {
     runJob('pipelines', syncPipelines);
   });
 
-  cron.schedule('0 */6 * * *', () => {
+  schedule('0 */6 * * *', () => {
     runJob('custom_fields', syncCustomFields);
   });
 
-  cron.schedule('0 */6 * * *', () => {
+  schedule('0 */6 * * *', () => {
     runJob('custom_values', syncCustomValues);
   });
 
-  cron.schedule('0 */6 * * *', () => {
+  schedule('0 */6 * * *', () => {
     runJob('tags', syncTags);
   });
 
-  cron.schedule('0 */6 * * *', () => {
+  schedule('0 */6 * * *', () => {
     runJob('trigger_links', syncTriggerLinks);
   });
 
-  cron.schedule('0 */6 * * *', () => {
+  schedule('0 */6 * * *', () => {
     runJob('templates', syncTemplates);
   });
 
