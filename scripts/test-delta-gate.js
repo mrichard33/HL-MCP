@@ -289,3 +289,158 @@ test('THE CEILING: shadow and off can never write more than the pre-filter allow
     assert.ok(r.rows.length < opps.length, `mode=${mode} escalated to a full-table write`);
   }
 });
+
+// ── v2.2.2: hash substance, not timestamps ────────────────────────────────
+//
+// v2.2.1 hashed date_updated alongside the record's content. Production proved
+// that made the gate inert on the incremental path:
+//     timestamp pre-filter — 329 candidates, 21150 unchanged
+//     [DeltaGate] enforce — 329 changed, 0 unchanged skipped
+// Zero skipped, every cycle: the pre-filter selects rows whose timestamp moved,
+// so hashing that timestamp guaranteed the gate agreed. Two filters, one signal.
+
+test('a timestamp bump with identical content does NOT change the hash', () => {
+  // The whole point. GHL bumps dateUpdated without the record changing.
+  const content = { id: 'o1', name: 'Acme', status: 'open', monetary_value: 500 };
+  const cycle1 = payloadHash(content);
+  const cycle2 = payloadHash(content);
+  assert.strictEqual(cycle1, cycle2);
+
+  // ...and including the timestamp is what broke it — kept as the counter-example.
+  assert.notStrictEqual(
+    payloadHash({ ...content, date_updated: '2026-09-11T19:00:00Z' }),
+    payloadHash({ ...content, date_updated: '2026-09-11T19:30:00Z' }),
+    'if this ever passes, date_updated has crept back into the hashed content',
+  );
+});
+
+test('a real content change still changes the hash', () => {
+  // The fix must not buy quiet by going blind.
+  const base = { id: 'o1', name: 'Acme', status: 'open', monetary_value: 500 };
+  for (const changed of [
+    { ...base, status: 'won' },
+    { ...base, monetary_value: 501 },
+    { ...base, name: 'Acme Ltd' },
+  ]) {
+    assert.notStrictEqual(payloadHash(base), payloadHash(changed));
+  }
+});
+
+test('a record GHL gives no timestamp for is stable across cycles', () => {
+  // The `|| now` fallback wrote a fresh timestamp into the hashed content every
+  // cycle, so these records were rewritten forever no matter what. Hashing
+  // substance only means an unchanged record hashes identically even when the
+  // row it lands in carries a brand-new date_updated.
+  const content = { id: 'o2', name: 'No Timestamp Co', status: 'open' };
+  const row = (t) => ({ ...content, date_updated: t, payload_hash: payloadHash(content) });
+  assert.strictEqual(
+    row('2026-09-11T19:00:00Z').payload_hash,
+    row('2026-09-11T19:30:00Z').payload_hash,
+  );
+});
+
+test('the gate actually skips timestamp-only churn end to end', async () => {
+  // The regression in one assertion: candidates whose content is unchanged must
+  // come back as skipped, not as "329 changed, 0 skipped".
+  const contents = [
+    { id: 'a', name: 'A', status: 'open' },
+    { id: 'b', name: 'B', status: 'open' },
+    { id: 'c', name: 'C-CHANGED', status: 'won' },
+  ];
+  const rows = contents.map((c) => ({ id: c.id, payload_hash: payloadHash(c) }));
+  const stored = {
+    a: payloadHash({ id: 'a', name: 'A', status: 'open' }),       // same
+    b: payloadHash({ id: 'b', name: 'B', status: 'open' }),       // same
+    c: payloadHash({ id: 'c', name: 'C', status: 'open' }),       // differs
+  };
+
+  const r = await gateByPayloadHash({
+    supabase: stubSupabase({ stored }),
+    table: 't', idColumn: 'id', rows, mode: 'enforce', label: 'churn',
+  });
+  assert.deepStrictEqual(r.rows.map((x) => x.id), ['c']);
+  assert.strictEqual(r.skippedUnchanged, 2, 'timestamp-only churn must be skipped');
+});
+
+// ── the decision that regressed twice, now directly asserted ──────────────
+import {
+  opportunityHashableContent,
+  contactHashableContent,
+} from '../dist/extractor/entity-syncer.js';
+
+test('OPPORTUNITY: a dateUpdated bump alone produces an identical hash', () => {
+  // The exact production failure. Same record, GHL bumped the timestamp.
+  const base = {
+    id: 'o1', pipelineId: 'p1', pipelineStageId: 's1', contactId: 'c1',
+    locationId: 'L', name: 'Acme', status: 'open', monetaryValue: 500,
+    dateAdded: '2026-01-01T00:00:00Z', dateUpdated: '2026-09-11T19:00:00Z',
+  };
+  const bumped = { ...base, dateUpdated: '2026-09-11T19:30:00Z' };
+  assert.strictEqual(
+    payloadHash(opportunityHashableContent(base)),
+    payloadHash(opportunityHashableContent(bumped)),
+    'a timestamp-only bump must not read as a content change',
+  );
+});
+
+test('OPPORTUNITY: no timestamp at all still hashes stably', () => {
+  // The `|| now` fallback rewrote these forever.
+  const a = { id: 'o2', name: 'No Timestamp Co', status: 'open' };
+  assert.strictEqual(
+    payloadHash(opportunityHashableContent(a)),
+    payloadHash(opportunityHashableContent({ ...a })),
+  );
+});
+
+test('OPPORTUNITY: every substantive field still moves the hash', () => {
+  const base = { id: 'o1', pipelineId: 'p1', name: 'Acme', status: 'open', monetaryValue: 500 };
+  const variants = [
+    { ...base, status: 'won' },
+    { ...base, monetaryValue: 501 },
+    { ...base, name: 'Acme Ltd' },
+    { ...base, pipelineStageId: 'moved' },
+    { ...base, assignedTo: 'rep-2' },
+    { ...base, customFields: { a: 1 } },
+  ];
+  for (const v of variants) {
+    assert.notStrictEqual(
+      payloadHash(opportunityHashableContent(base)),
+      payloadHash(opportunityHashableContent(v)),
+      `a change to this field must be detected: ${JSON.stringify(v)}`,
+    );
+  }
+});
+
+test('OPPORTUNITY: the hashed content contains no volatile keys', () => {
+  const keys = Object.keys(opportunityHashableContent({ id: 'o1', dateUpdated: 'x' }));
+  for (const banned of ['date_updated', 'synced_at', 'updated_at', 'payload_hash']) {
+    assert.ok(!keys.includes(banned), `${banned} must never be hashed`);
+  }
+});
+
+test('CONTACT: a dateUpdated bump alone produces an identical hash', () => {
+  const base = {
+    id: 'c1', locationId: 'L', firstName: 'Sam', lastName: 'Lee',
+    email: 's@x.com', tags: ['lead'], dateUpdated: '2026-09-11T19:00:00Z',
+  };
+  assert.strictEqual(
+    payloadHash(contactHashableContent(base)),
+    payloadHash(contactHashableContent({ ...base, dateUpdated: '2026-09-11T19:30:00Z' })),
+  );
+});
+
+test('CONTACT: tag changes are still detected', () => {
+  // Tags drive workflow-enrollment analytics — losing these would be silent.
+  const base = { id: 'c1', firstName: 'Sam', tags: ['lead'] };
+  assert.notStrictEqual(
+    payloadHash(contactHashableContent(base)),
+    payloadHash(contactHashableContent({ ...base, tags: ['lead', 'active-w123'] })),
+  );
+});
+
+test('CONTACT: the hashed content contains no volatile keys', () => {
+  const keys = Object.keys(contactHashableContent({ id: 'c1', dateUpdated: 'x' }));
+  for (const banned of ['date_updated', 'synced_at', 'updated_at', 'payload_hash']) {
+    assert.ok(!keys.includes(banned), `${banned} must never be hashed`);
+  }
+});
