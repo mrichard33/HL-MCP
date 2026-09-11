@@ -104,10 +104,35 @@ const FIREBASE_TOKEN_URL = 'https://securetoken.googleapis.com/v1/token';
 const REQUEST_TIMEOUT_MS = parseInt(process.env.GHL_REQUEST_TIMEOUT_MS || '60000', 10);
 
 // v1.3: 429 retry policy. Matches intent of the 2026-04-04 planned fix
-// (see CONVERSATION_SYNC_CHANGES.md). Exponential backoff on 429 only —
-// other errors (500, 401, etc.) throw immediately.
+// (see CONVERSATION_SYNC_CHANGES.md). Exponential backoff.
+//
+// v2.3: the same backoff now also covers GHL's upstream gateway timeout —
+// see isUpstreamTimeout below. Every OTHER error (a genuine 401, a 500,
+// a 404) still throws on the first attempt: retrying those only delays a
+// failure we want to see immediately.
 const MAX_RETRIES_ON_429 = 3;
-const RETRY_BACKOFF_MS = [2000, 4000, 8000];
+// Overridable so tests can exercise the retry loop without sleeping 6s.
+const RETRY_BACKOFF_MS = (process.env.GHL_RETRY_BACKOFF_MS || '2000,4000,8000')
+  .split(',')
+  .map((n) => parseInt(n.trim(), 10) || 0);
+
+/**
+ * Is this failure GHL's gateway timing out upstream, rather than a real error?
+ *
+ * GHL answers an upstream timeout with an HTTP 401 and the body
+ * `{"statusCode":401,"message":"Command timed out"}`. The status code is
+ * simply wrong — it is not an auth failure, and the very next request with
+ * the same credentials succeeds. Observed 7 times in 48h on 2026-09-10/11,
+ * spread across opportunities, appointments and contacts; each one aborted a
+ * whole sync cycle and wasted the 30-minute window until the next one.
+ *
+ * Matching on the MESSAGE and not the status is deliberate. A real 401 (bad,
+ * expired or unscoped token) never carries this body, so it still fails fast
+ * and loudly instead of being buried under three silent retries.
+ */
+export function isUpstreamTimeout(body: string): boolean {
+  return /command timed out/i.test(body);
+}
 
 // v1.8 (T2.2b): Gate verbose per-workflow diagnostic logging shared with
 // workflow-extractor.ts. When false, getWorkflowTriggers() suppresses
@@ -213,6 +238,12 @@ export class GHLClient {
 
       if (!response.ok) {
         const errorBody = await response.text();
+        if (isUpstreamTimeout(errorBody) && attempt < MAX_RETRIES_ON_429 - 1) {
+          const backoff = RETRY_BACKOFF_MS[attempt];
+          console.warn(`[GHL] upstream timeout (${response.status}) on ${method} ${path} (attempt ${attempt + 1}/${MAX_RETRIES_ON_429}), retrying in ${backoff}ms`);
+          await sleep(backoff);
+          continue;
+        }
         throw new Error(`GHL API error ${response.status}: ${errorBody}`);
       }
 
@@ -270,6 +301,15 @@ export class GHLClient {
 
       if (!response.ok) {
         const errorBody = await response.text();
+        // Checked BEFORE the auth warning: a gateway timeout arrives as a 401
+        // but has nothing to do with the token, and saying so sends whoever
+        // reads the logs off rotating credentials that were never broken.
+        if (isUpstreamTimeout(errorBody) && attempt < MAX_RETRIES_ON_429 - 1) {
+          const backoff = RETRY_BACKOFF_MS[attempt];
+          console.warn(`[GHL] upstream timeout (${response.status}) on ${method} ${path} oauth (attempt ${attempt + 1}/${MAX_RETRIES_ON_429}), retrying in ${backoff}ms`);
+          await sleep(backoff);
+          continue;
+        }
         if (response.status === 401 || response.status === 403) {
           console.error(`[GHL] OAuth ${response.status} for ${path} — token may be invalid, expired, or missing required scopes. Body: ${errorBody}`);
         }

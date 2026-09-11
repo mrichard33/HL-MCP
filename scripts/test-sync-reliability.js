@@ -70,11 +70,14 @@ test('every caller queued behind a 429 pause is eventually served', async () => 
   assert.ok(elapsed < 8000, `took ${elapsed}ms`);
 });
 
-// ── 2 & 3. Opportunity paging + soft-delete safety ────────────────────────
+// ── 2, 3 & 4. Opportunity paging, soft-delete safety, upstream-timeout retry ──
 process.env.GHL_API_KEY = 'test-key';
 process.env.GHL_LOCATION_ID = 'test-location';
+// Real backoff is 2s/4s/8s. The retry tests below would spend 6s asleep proving
+// nothing about timing, so shrink the schedule before the module reads it.
+process.env.GHL_RETRY_BACKOFF_MS = '10,10,10';
 
-const { GHLClient } = await import('../dist/clients/ghl.js');
+const { GHLClient, isUpstreamTimeout } = await import('../dist/clients/ghl.js');
 const { isSoftDeleteBatchPlausible } = await import('../dist/extractor/entity-syncer.js');
 
 /** Build a client whose paging is stubbed — no network, no credentials. */
@@ -162,5 +165,87 @@ test('soft-delete safety limits are env-overridable', () => {
     assert.strictEqual(isSoftDeleteBatchPlausible(1102, 21102).ok, true);
   } finally {
     delete process.env.SOFT_DELETE_MAX_RATIO;
+  }
+});
+
+// ── 4. GHL's upstream gateway timeout ─────────────────────────────────────
+//
+// GHL answers an upstream timeout with an HTTP 401 whose body says
+// "Command timed out". It is not an auth failure — the next cycle succeeds on
+// the same credentials — but the client treated every non-429 as fatal, so one
+// GHL hiccup killed a whole sync run. Seven of these in 48h on 2026-09-10/11,
+// across opportunities, appointments and contacts.
+//
+// The risk in fixing it is the opposite mistake: retrying a REAL 401 hides an
+// expired token behind three silent attempts. Both directions are asserted.
+
+/** Stub global fetch with a scripted list of responses; records the call count. */
+function stubFetch(responses) {
+  const real = globalThis.fetch;
+  const calls = { n: 0 };
+  globalThis.fetch = async () => {
+    const r = responses[Math.min(calls.n, responses.length - 1)];
+    calls.n++;
+    return {
+      ok: r.status >= 200 && r.status < 300,
+      status: r.status,
+      text: async () => r.body,
+      json: async () => JSON.parse(r.body),
+    };
+  };
+  return { calls, restore: () => { globalThis.fetch = real; } };
+}
+
+const TIMEOUT_401 = '{"statusCode":401,"message":"Command timed out"}';
+const REAL_401 = '{"statusCode":401,"message":"Invalid JWT"}';
+
+test('a gateway timeout is recognised; a genuine auth failure is not', () => {
+  assert.strictEqual(isUpstreamTimeout(TIMEOUT_401), true);
+  assert.strictEqual(isUpstreamTimeout(REAL_401), false);
+  assert.strictEqual(isUpstreamTimeout('{"statusCode":500,"message":"Internal server error"}'), false);
+  assert.strictEqual(isUpstreamTimeout(''), false);
+});
+
+test('THE BUG: a gateway timeout is retried instead of killing the sync', async () => {
+  const { calls, restore } = stubFetch([
+    { status: 401, body: TIMEOUT_401 },
+    { status: 200, body: '{"opportunities":[{"id":"opp-1"}]}' },
+  ]);
+  try {
+    const result = await new GHLClient().getOpportunities();
+    assert.strictEqual(result.opportunities.length, 1,
+      'the retry must return the successful response');
+    assert.strictEqual(calls.n, 2, 'expected exactly one retry');
+  } finally {
+    restore();
+  }
+});
+
+test('a genuine 401 still fails on the first attempt', async () => {
+  // Retrying this would turn "our token expired" into a slow, silent failure.
+  const { calls, restore } = stubFetch([{ status: 401, body: REAL_401 }]);
+  try {
+    await assert.rejects(
+      () => new GHLClient().getOpportunities(),
+      /GHL API error 401/,
+    );
+    assert.strictEqual(calls.n, 1, 'a real auth failure must NOT be retried');
+  } finally {
+    restore();
+  }
+});
+
+test('a timeout that never clears gives up and surfaces the real error', async () => {
+  // Retries are bounded: the sync still fails, it just no longer fails on the
+  // first transient blip. The error text must stay diagnosable.
+  const { calls, restore } = stubFetch([{ status: 401, body: TIMEOUT_401 }]);
+  try {
+    await assert.rejects(
+      () => new GHLClient().getOpportunities(),
+      /Command timed out/,
+    );
+    assert.strictEqual(calls.n, 3, 'expected MAX_RETRIES_ON_429 attempts, then a throw');
+  } finally {
+    restore();
   }
 });
