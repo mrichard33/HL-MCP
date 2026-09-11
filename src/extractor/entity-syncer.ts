@@ -113,6 +113,59 @@ const DELTA_DEFAULTS = {
   conversations: 'shadow',
 } as const;
 
+// ---- What gets HASHED (exported so the decision itself is testable) ----
+//
+// These return the substantive record ONLY. Three things are deliberately absent
+// and must stay absent:
+//   • synced_at / updated_at — move every cycle by construction.
+//   • date_updated — an upstream timestamp bump is not a content change, and
+//     hashing it made the gate inert (production 2026-09-11: "329 changed, 0
+//     unchanged skipped", every cycle).
+//   • anything derived from `now` — the old `date_updated: x || now` fallback
+//     meant every record GHL returns without a timestamp got a fresh value in
+//     its hash each cycle and was rewritten forever.
+//
+// The rows written still carry date_updated; it is simply not part of the
+// identity the gate compares. Consequence, on purpose: date_updated tracks when
+// the content last changed rather than when GHL last touched the row.
+//
+// This decision regressed twice before being pinned down here. Test it, do not
+// re-derive it.
+
+export function opportunityHashableContent(o: GHLOpportunity): Record<string, unknown> {
+  return {
+    ghl_opportunity_id: o.id,
+    ghl_pipeline_id: o.pipelineId,
+    ghl_stage_id: o.pipelineStageId || null,
+    ghl_contact_id: o.contactId || null,
+    ghl_location_id: o.locationId || null,
+    name: o.name,
+    status: o.status,
+    monetary_value: o.monetaryValue || null,
+    currency: o.currency || 'USD',
+    source: o.source || null,
+    assigned_to: o.assignedTo || null,
+    custom_fields: o.customFields || {},
+    date_added: o.dateAdded || o.createdAt || null,
+  };
+}
+
+export function contactHashableContent(c: GHLContact): Record<string, unknown> {
+  return {
+    ghl_contact_id: c.id,
+    ghl_location_id: c.locationId || null,
+    first_name: c.firstName || null,
+    last_name: c.lastName || null,
+    email: c.email || null,
+    phone: c.phone || null,
+    company_name: c.companyName || null,
+    tags: c.tags || [],
+    source: c.source || null,
+    custom_fields: c.customFields || {},
+    date_added: c.dateAdded || null,
+  };
+}
+
 // v1.6: Compute the "since" floor for an incremental sync by subtracting
 // the overlap buffer from the entity's last_synced_at.
 async function computeIncrementalFloor(entityName: string): Promise<string | null> {
@@ -393,23 +446,16 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     }
 
     const now = nowET();
-    const contentRows = contacts.map((c) => ({
-      ghl_contact_id: c.id,
-      ghl_location_id: c.locationId || null,
-      first_name: c.firstName || null,
-      last_name: c.lastName || null,
-      email: c.email || null,
-      phone: c.phone || null,
-      company_name: c.companyName || null,
-      tags: c.tags || [],
-      source: c.source || null,
-      custom_fields: c.customFields || {},
-      date_added: c.dateAdded || null,
-      date_updated: c.dateUpdated || now,
-    }));
+    // v2.2.2 — substance only in the hash, same as syncOpportunities. Contacts
+    // carried the identical defect: date_updated inside the hashed content, with
+    // a `|| now` fallback that rewrote every timestamp-less contact on every
+    // cycle forever.
+    const hashableRows = contacts.map(contactHashableContent);
 
-    const allRows = contentRows.map((content) => ({
+    const allRows = hashableRows.map((content, i) => ({
       ...content,
+      // Written, but not hashed.
+      date_updated: contacts[i].dateUpdated || now,
       payload_hash: contactMode !== 'off' ? payloadHash(content) : null,
       synced_at: now,
       updated_at: now,
@@ -658,14 +704,36 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
           }
           oppHashesPrefetched = prefetchOk;
 
-          toUpsert = filterByNewerTimestamp(
-            fullList,
-            (o) => o.id,
-            (o) => o.dateUpdated || o.updatedAt,
-            existingDates,
-          );
-          skippedUnchanged = fullList.length - toUpsert.length;
-          console.log(`[EntitySync] syncOpportunities: timestamp pre-filter — ${toUpsert.length} candidates, ${skippedUnchanged} unchanged`);
+          // v2.2.2 — the pre-filter is the ceiling for the modes that need one,
+          // and is deliberately BYPASSED when the gate is enforcing.
+          //
+          // Why bypass it under enforce: now that date_updated is excluded from
+          // the hash (see below), a row the gate skips keeps its old stored
+          // date_updated and therefore stays a pre-filter candidate forever. Left
+          // in place, the candidate set would creep toward the whole table and
+          // the ceiling would quietly erode to nothing.
+          //
+          // Under enforce the gate is what limits writes, so handing it the full
+          // list costs one in-memory hash pass and loses nothing — this is
+          // exactly what full mode already does, measured at 21,473 fetched ->
+          // 12 written.
+          //
+          // Under off/shadow the gate does not limit anything, so the pre-filter
+          // is the only ceiling and must run. Those modes always write, which
+          // refreshes date_updated, so candidacy self-corrects there.
+          if (oppMode === 'enforce') {
+            toUpsert = fullList;
+            console.log(`[EntitySync] syncOpportunities: enforce — passing all ${fullList.length} to the hash gate (pre-filter bypassed)`);
+          } else {
+            toUpsert = filterByNewerTimestamp(
+              fullList,
+              (o) => o.id,
+              (o) => o.dateUpdated || o.updatedAt,
+              existingDates,
+            );
+            skippedUnchanged = fullList.length - toUpsert.length;
+            console.log(`[EntitySync] syncOpportunities: timestamp pre-filter (ceiling for mode=${oppMode}) — ${toUpsert.length} candidates, ${skippedUnchanged} unchanged`);
+          }
           incrementalPath = 'client-diff';
         }
       }
@@ -690,28 +758,34 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
     }
 
     const now = nowET();
-    const contentRows = toUpsert.map((o) => ({
-      ghl_opportunity_id: o.id,
-      ghl_pipeline_id: o.pipelineId,
-      ghl_stage_id: o.pipelineStageId || null,
-      ghl_contact_id: o.contactId || null,
-      ghl_location_id: o.locationId || null,
-      name: o.name,
-      status: o.status,
-      monetary_value: o.monetaryValue || null,
-      currency: o.currency || 'USD',
-      source: o.source || null,
-      assigned_to: o.assignedTo || null,
-      custom_fields: o.customFields || {},
-      date_added: o.dateAdded || o.createdAt || null,
-      date_updated: o.dateUpdated || o.updatedAt || now,
-    }));
+    // v2.2.2 — what gets HASHED is the substantive record only. date_updated is
+    // written to the row but deliberately excluded from the hash.
+    //
+    // v2.2.1 hashed it, and that made the gate useless on the incremental path.
+    // Measured in production 2026-09-11 19:26:
+    //     timestamp pre-filter — 329 candidates, 21150 unchanged
+    //     [DeltaGate] enforce — 329 changed, 0 unchanged skipped
+    // Zero skipped, every cycle. The pre-filter selects rows whose timestamp
+    // moved; hashing that same timestamp guarantees their hash moved too, so the
+    // gate could never reject anything the pre-filter had just passed. Two
+    // filters looking for one signal.
+    //
+    // The `|| now` fallback made it worse: a record GHL returns with no
+    // timestamp at all got a fresh `now` written into the hashed content on
+    // every single cycle, so its hash changed every cycle and it was rewritten
+    // forever regardless of content.
+    //
+    // Hashing substance only fixes both. The trade-off, stated plainly:
+    // date_updated now tracks "when the content last changed" rather than "when
+    // GHL last touched the row", because a row we skip keeps its stored value.
+    // For a cache whose purpose is the content, that is the more useful of the
+    // two — but it IS a semantic change, so it is written down here.
+    const hashableRows = toUpsert.map(opportunityHashableContent);
 
-    // date_updated stays INSIDE the hashed content above: a GHL timestamp bump
-    // with no other change is still a change we want reflected in the cache.
-    // synced_at/updated_at are added after the hash — they move every cycle.
-    const allRows = contentRows.map((content) => ({
+    const allRows = hashableRows.map((content, i) => ({
       ...content,
+      // Written, but not hashed — see above.
+      date_updated: toUpsert[i].dateUpdated || toUpsert[i].updatedAt || now,
       payload_hash: oppMode !== 'off' ? payloadHash(content) : null,
       synced_at: now,
       updated_at: now,
