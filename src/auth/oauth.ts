@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getSupabaseClient } from '../clients/supabase.js';
 
@@ -66,7 +66,19 @@ export function getOAuthMetadata(issuerUrl: string): Record<string, unknown> {
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['client_secret_post'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+    scopes_supported: ['claudeai'],
+  };
+}
+
+// ---- Protected Resource Metadata (RFC 9728) ----
+// ChatGPT's MCP connector (and the current MCP auth spec) discovers auth here:
+// 401 WWW-Authenticate → this document → authorization server metadata.
+export function getProtectedResourceMetadata(issuerUrl: string): Record<string, unknown> {
+  return {
+    resource: `${issuerUrl}/mcp`,
+    authorization_servers: [issuerUrl],
+    bearer_methods_supported: ['header'],
     scopes_supported: ['claudeai'],
   };
 }
@@ -138,11 +150,20 @@ async function handleAuthorizeGet(res: ServerResponse, url: URL): Promise<void> 
 
     console.log(`[OAuth] authorize GET: client=${clientId.slice(0, 8)}…, redirect=${redirectUri}, hasChallenge=${!!codeChallenge}`);
 
-    // Auto-approve — issue authorization code and redirect immediately
-    const code = await createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
-    const location = buildRedirectUrl(redirectUri, code, state);
-    res.writeHead(302, { Location: location });
-    res.end();
+    if (!(await isRegisteredRedirect(clientId, redirectUri))) {
+      console.error(`[OAuth] authorize GET: unregistered client/redirect (client: ${clientId.slice(0, 8)}…)`);
+      jsonResponse(res, 400, { error: 'invalid_request', error_description: 'Unknown client_id or unregistered redirect_uri' });
+      return;
+    }
+    if (!process.env.OAUTH_AUTHORIZE_SECRET) {
+      console.error('[OAuth] authorize GET: OAUTH_AUTHORIZE_SECRET not set — failing closed');
+      jsonResponse(res, 503, { error: 'server_error', error_description: 'Authorization is not configured' });
+      return;
+    }
+
+    // Passcode gate — no code is issued until the correct passcode is POSTed.
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(renderPasscodePage({ clientId, redirectUri, codeChallenge, codeChallengeMethod, state }, false));
   } catch (err) {
     console.error('[OAuth] authorize GET: error', err instanceof Error ? err.message : err);
     jsonResponse(res, 400, { error: 'server_error', error_description: 'Failed to process authorization request' });
@@ -168,6 +189,28 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse): P
 
     console.log(`[OAuth] authorize POST: client=${clientId.slice(0, 8)}…, redirect=${redirectUri}, hasChallenge=${!!codeChallenge}`);
 
+    if (!(await isRegisteredRedirect(clientId, redirectUri))) {
+      console.error(`[OAuth] authorize POST: unregistered client/redirect (client: ${clientId.slice(0, 8)}…)`);
+      jsonResponse(res, 400, { error: 'invalid_request', error_description: 'Unknown client_id or unregistered redirect_uri' });
+      return;
+    }
+    if (!process.env.OAUTH_AUTHORIZE_SECRET) {
+      console.error('[OAuth] authorize POST: OAUTH_AUTHORIZE_SECRET not set — failing closed');
+      jsonResponse(res, 503, { error: 'server_error', error_description: 'Authorization is not configured' });
+      return;
+    }
+    if (!codeChallenge) {
+      jsonResponse(res, 400, { error: 'invalid_request', error_description: 'PKCE code_challenge required' });
+      return;
+    }
+    if (!passcodeMatches(params.get('passcode') || '')) {
+      console.warn(`[OAuth] authorize POST: wrong passcode (client: ${clientId.slice(0, 8)}…)`);
+      await new Promise((r) => setTimeout(r, 1000)); // slow brute force
+      res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(renderPasscodePage({ clientId, redirectUri, codeChallenge, codeChallengeMethod, state }, true));
+      return;
+    }
+
     const code = await createAuthorizationCode(clientId, redirectUri, codeChallenge, codeChallengeMethod);
     const location = buildRedirectUrl(redirectUri, code, state);
     res.writeHead(302, { Location: location });
@@ -176,6 +219,48 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse): P
     console.error('[OAuth] authorize POST: error', err instanceof Error ? err.message : err);
     jsonResponse(res, 400, { error: 'server_error', error_description: 'Failed to process authorization request' });
   }
+}
+
+interface AuthorizeParams {
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  codeChallengeMethod: string;
+  state: string;
+}
+
+export function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+}
+
+export function passcodeMatches(input: string): boolean {
+  const secret = process.env.OAUTH_AUTHORIZE_SECRET || '';
+  if (!secret || !input) return false;
+  const a = createHash('sha256').update(input).digest();
+  const b = createHash('sha256').update(secret).digest();
+  return timingSafeEqual(a, b);
+}
+
+async function isRegisteredRedirect(clientId: string, redirectUri: string): Promise<boolean> {
+  if (!clientId || !redirectUri) return false;
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase
+    .from('mcp_oauth_clients')
+    .select('redirect_uris')
+    .eq('client_id', clientId)
+    .maybeSingle();
+  if (error || !data) return false;
+  const uris: string[] = Array.isArray(data.redirect_uris) ? data.redirect_uris : [];
+  return uris.includes(redirectUri);
+}
+
+function renderPasscodePage(p: AuthorizeParams, failed: boolean): string {
+  const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reece HL MCP — Connect</title>
+<style>body{font-family:'Nunito Sans',Arial,sans-serif;background:#0D2240;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}form{background:#fff;color:#0D2240;padding:32px;border-radius:12px;width:320px}input[type=password]{width:100%;padding:10px;margin:12px 0;border:1px solid #87898B;border-radius:6px;box-sizing:border-box}button{width:100%;padding:10px;background:#FF0012;color:#fff;border:0;border-radius:6px;font-weight:700;cursor:pointer}.err{color:#FF0012}</style></head><body>
+<form method="POST" action="/authorize"><h2>Reece HL MCP</h2><p>Enter the access passcode to connect.</p>${failed ? '<p class="err">Incorrect passcode.</p>' : ''}
+${hidden('client_id', p.clientId)}${hidden('redirect_uri', p.redirectUri)}${hidden('code_challenge', p.codeChallenge)}${hidden('code_challenge_method', p.codeChallengeMethod)}${hidden('state', p.state)}
+<input type="password" name="passcode" autocomplete="current-password" required autofocus><button type="submit">Connect</button></form></body></html>`;
 }
 
 async function createAuthorizationCode(
