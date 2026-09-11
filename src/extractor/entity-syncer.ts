@@ -44,6 +44,19 @@ async function logSyncStart(entityType: string): Promise<string | null> {
   return data?.id || null;
 }
 
+// v2.1: both terminal writes are guarded with .eq('status', 'running') so they
+// can only move a row OUT of 'running', never overwrite a terminal state that
+// something else already set.
+//
+// Without the guard, a run abandoned by the scheduler's Promise.race kept
+// executing in the background, and when it eventually finished — often 40+
+// minutes after sync-reaper had already marked the row 'failed' — it flipped
+// that row back to 'completed'. Production rows carried status='completed'
+// alongside the reaper's own error_message, and get_sync_health (failed/total)
+// therefore under-reported the true failure rate: opportunities showed 27
+// "completed" runs that had in fact all been abandoned mid-flight. The
+// scheduler released the mutex and moved on at the timeout, so 'failed' is the
+// honest record of what happened; a late completion is not a completion.
 async function logSyncComplete(syncLogId: string | null, recordsSynced: number): Promise<void> {
   if (!syncLogId) return;
   const supabase = getSupabaseClient();
@@ -51,7 +64,7 @@ async function logSyncComplete(syncLogId: string | null, recordsSynced: number):
     status: 'completed',
     records_synced: recordsSynced,
     completed_at: nowET(),
-  }).eq('id', syncLogId);
+  }).eq('id', syncLogId).eq('status', 'running');
 }
 
 async function logSyncFailed(syncLogId: string | null, errorMessage: string): Promise<void> {
@@ -61,7 +74,7 @@ async function logSyncFailed(syncLogId: string | null, errorMessage: string): Pr
     status: 'failed',
     error_message: errorMessage,
     completed_at: nowET(),
-  }).eq('id', syncLogId);
+  }).eq('id', syncLogId).eq('status', 'running');
 }
 
 // v1.4: Batch size for Supabase bulk upserts. 500 is well under PostgREST's
@@ -130,16 +143,56 @@ async function computeIncrementalFloor(entityName: string): Promise<string | nul
 // ---- Soft-Delete Helper ----
 
 /**
+ * Decide whether a soft-delete batch is plausible or looks like a bug.
+ *
+ * v2.1: a runaway delete is always caused by the *active list* being wrong
+ * (truncated fetch, ignored filter, partial API outage), never by GHL genuinely
+ * dropping a large share of a location at once. Normal churn on this tenant is
+ * 4-33 rows/day against ~21k opportunities (~0.15%), so a 2% ceiling leaves
+ * more than 10x headroom while still catching a clipped list.
+ *
+ * Refusing is the safe direction: a missed delete leaves a stale row that the
+ * next clean cycle removes, while an over-delete silently hides live records
+ * from every report that reads the cache.
+ */
+export function isSoftDeleteBatchPlausible(
+  deleteCount: number,
+  existingCount: number,
+): { ok: boolean; limit: number } {
+  const ratio = parseFloat(process.env.SOFT_DELETE_MAX_RATIO || '0.02');
+  const minAbs = parseInt(process.env.SOFT_DELETE_MIN_ABS || '50', 10);
+  const safeRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 0.02;
+  const safeMinAbs = Number.isFinite(minAbs) && minAbs > 0 ? minAbs : 50;
+  const limit = Math.max(safeMinAbs, Math.floor(existingCount * safeRatio));
+  return { ok: deleteCount <= limit, limit };
+}
+
+/**
  * Soft-delete records in Supabase that are no longer present in the GHL API response.
  * Sets deleted_at timestamp on records whose GHL ID is not in the provided set,
  * and clears deleted_at on records that reappear.
+ *
+ * v2.1 — two correctness fixes, both about not deleting things that exist:
+ *
+ *   1. The "currently active in Supabase" read was a bare .select() with no
+ *      .range() pagination, so PostgREST capped it at 1,000 rows. On tables far
+ *      past that (21k opportunities, 23k contacts) the reconcile only ever
+ *      examined the first 1,000 rows — it was almost entirely inert, which is
+ *      the only reason the truncated 20,000-record fetch documented in
+ *      GHLClient.getAllOpportunitiesChecked() never mass-deleted anything. Both
+ *      bugs had to be fixed together: fixing either one alone is unsafe.
+ *
+ *   2. `listIsComplete: false` now skips the delete pass entirely. Restores
+ *      still run — a record present in a short list definitely exists — but
+ *      absence from a clipped list proves nothing.
  */
 export async function softDeleteMissing(
   table: string,
   ghlIdColumn: string,
   activeGhlIds: string[],
   locationId: string,
-): Promise<{ deleted: number; restored: number }> {
+  options?: { listIsComplete?: boolean },
+): Promise<{ deleted: number; restored: number; skipped?: string }> {
   const supabase = getSupabaseClient();
   const now = nowET();
 
@@ -155,27 +208,61 @@ export async function softDeleteMissing(
     restored = restoredRows?.length || 0;
   }
 
-  // Get all active GHL IDs currently in Supabase for this location
-  let query = supabase
-    .from(table)
-    .select(ghlIdColumn)
-    .is('deleted_at', null);
-
-  // Only filter by location if the table has the column (most do)
-  if (locationId) {
-    query = query.eq('ghl_location_id', locationId);
+  if (options?.listIsComplete === false) {
+    const skipped = `active list for ${table} was truncated — delete pass skipped (restores still applied)`;
+    console.error(`[EntitySync] softDeleteMissing: ${skipped}`);
+    return { deleted: 0, restored, skipped };
   }
 
-  const { data: existingRows } = await query;
-  if (!existingRows?.length) return { deleted: 0, restored };
+  // Get all active GHL IDs currently in Supabase for this location.
+  // v2.1: paginated — see the 1,000-row PostgREST cap note above.
+  const existingIds: string[] = [];
+  for (let page = 0; ; page++) {
+    const from = page * PAGINATION_PAGE_SIZE;
+    const to = from + PAGINATION_PAGE_SIZE - 1;
+
+    let query = supabase
+      .from(table)
+      .select(ghlIdColumn)
+      .is('deleted_at', null);
+
+    // Only filter by location if the table has the column (most do)
+    if (locationId) {
+      query = query.eq('ghl_location_id', locationId);
+    }
+
+    const { data, error } = await query.range(from, to);
+    if (error) {
+      const skipped = `failed to page active ${table} ids (page ${page}): ${error.message} — delete pass skipped`;
+      console.error(`[EntitySync] softDeleteMissing: ${skipped}`);
+      return { deleted: 0, restored, skipped };
+    }
+    if (!data || data.length === 0) break;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const row of data as any[]) {
+      const id = row[ghlIdColumn] as string;
+      if (id) existingIds.push(id);
+    }
+    if (data.length < PAGINATION_PAGE_SIZE) break;
+  }
+
+  if (existingIds.length === 0) return { deleted: 0, restored };
 
   const activeSet = new Set(activeGhlIds);
-  const toDelete = existingRows
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .map((r: any) => r[ghlIdColumn] as string)
-    .filter((id: string) => !activeSet.has(id));
+  const toDelete = existingIds.filter((id) => !activeSet.has(id));
 
   if (toDelete.length === 0) return { deleted: 0, restored };
+
+  const plausible = isSoftDeleteBatchPlausible(toDelete.length, existingIds.length);
+  if (!plausible.ok) {
+    const skipped =
+      `refusing to soft-delete ${toDelete.length} of ${existingIds.length} ${table} rows — ` +
+      `over the ${plausible.limit}-row safety limit. This almost always means the GHL list was ` +
+      'incomplete, not that GHL dropped the records. Investigate before overriding via ' +
+      'SOFT_DELETE_MAX_RATIO / SOFT_DELETE_MIN_ABS.';
+    console.error(`[EntitySync] softDeleteMissing: ${skipped}`);
+    return { deleted: 0, restored, skipped };
+  }
 
   const { data: deletedRows } = await supabase
     .from(table)
@@ -242,6 +329,7 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     }
 
     let contacts: GHLContact[];
+    let contactListTruncated = false;
     if (effectiveMode === 'incremental' && sinceIso) {
       try {
         const result = await ghl.getContactsUpdatedSince(sinceIso);
@@ -252,7 +340,9 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
         // a full fetch this cycle rather than trusting bad data.
         if (typeof reported === 'number' && reported > 1000) {
           console.warn(`[EntitySync] syncContacts: incremental returned total=${reported} — filter likely ignored, falling back to full`);
-          contacts = await ghl.getAllContacts();
+          const full = await ghl.getAllContactsChecked();
+          contacts = full.contacts;
+          contactListTruncated = full.truncated;
           effectiveMode = 'full';
         } else {
           contacts = result.contacts;
@@ -267,8 +357,13 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
       }
     } else {
       console.log('[EntitySync] syncContacts: fetching all contacts from GHL...');
-      contacts = await ghl.getAllContacts();
-      console.log(`[EntitySync] syncContacts: fetched ${contacts.length} contacts`);
+      const full = await ghl.getAllContactsChecked();
+      contacts = full.contacts;
+      contactListTruncated = full.truncated;
+      console.log(
+        `[EntitySync] syncContacts: fetched ${contacts.length} contacts` +
+        (contactListTruncated ? ' (TRUNCATED — soft-delete will be skipped)' : ''),
+      );
     }
 
     if (contacts.length === 0) {
@@ -390,7 +485,14 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     // records that GHL has removed since there's nothing to diff against.
     if (effectiveMode === 'full') {
       const activeContactIds = contacts.map((c) => c.id);
-      await softDeleteMissing('contacts', 'ghl_contact_id', activeContactIds, ghl.getLocationId());
+      const result = await softDeleteMissing(
+        'contacts',
+        'ghl_contact_id',
+        activeContactIds,
+        ghl.getLocationId(),
+        { listIsComplete: !contactListTruncated },
+      );
+      if (result.skipped) errors.push(`Soft-delete skipped: ${result.skipped}`);
     }
 
     await updateLastSynced('contacts');
@@ -449,6 +551,7 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
     // In full mode we always need the full list for softDelete. In
     // incremental we only populate it on the fallback path.
     let fullList: GHLOpportunity[] | null = null;
+    let fullListTruncated = false;
     let incrementalPath: 'server-filter' | 'client-diff' | 'none' = 'none';
 
     if (mode === 'incremental') {
@@ -534,8 +637,13 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
     } else {
       // Full mode
       console.log('[EntitySync] syncOpportunities: full mode — fetching all opportunities from GHL...');
-      fullList = await ghl.getAllOpportunities();
-      console.log(`[EntitySync] syncOpportunities: fetched ${fullList.length} opportunities from GHL`);
+      const full = await ghl.getAllOpportunitiesChecked();
+      fullList = full.opportunities;
+      fullListTruncated = full.truncated;
+      console.log(
+        `[EntitySync] syncOpportunities: fetched ${fullList.length} opportunities from GHL` +
+        (fullListTruncated ? ' (TRUNCATED — soft-delete will be skipped)' : ''),
+      );
       toUpsert = fullList;
     }
 
@@ -585,7 +693,14 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
     // full mode always populates it above.
     if (mode === 'full' && fullList) {
       const activeOppIds = fullList.map((o) => o.id);
-      await softDeleteMissing('opportunities', 'ghl_opportunity_id', activeOppIds, ghl.getLocationId());
+      const result = await softDeleteMissing(
+        'opportunities',
+        'ghl_opportunity_id',
+        activeOppIds,
+        ghl.getLocationId(),
+        { listIsComplete: !fullListTruncated },
+      );
+      if (result.skipped) errors.push(`Soft-delete skipped: ${result.skipped}`);
     }
 
     await updateLastSynced('opportunities');
