@@ -50,7 +50,8 @@ import { tryHandleWpRoute } from './http/wp-routes.js';
 // beacon ingestion for the calculator on landing/link.reecewindows.com; rows
 // land in Supabase estimator_events. No overlap with /webhooks/highlevel/*.
 import { tryHandleEstimatorRoute } from './http/estimator-routes.js';
-import { startScheduledSync } from './extractor/scheduler.js';
+import { startScheduledSync, stopScheduledSync } from './extractor/scheduler.js';
+import { trackInflight, installGracefulShutdown, onShutdown } from './graceful-shutdown.js';
 import { handleWebhook } from './webhooks/handler.js';
 import {
   getOAuthMetadata,
@@ -141,6 +142,10 @@ async function startHttpServer(port: number) {
   console.log(`[Server] Instance ${instanceId} starting`);
 
   const httpServer = createServer(async (req, res) => {
+    // Graceful drain: count this request as in-flight before any routing or
+    // early return, so SIGTERM waits for its response to be delivered.
+    trackInflight(req, res);
+
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
 
     // CORS headers for OAuth and MCP endpoints
@@ -407,6 +412,11 @@ async function startHttpServer(port: number) {
     res.end();
   });
 
+  // Owns SIGTERM/SIGINT for the whole process: drains in-flight requests and
+  // tracked background work before exiting. Installed as soon as the server
+  // exists, so a SIGTERM during boot is handled too.
+  installGracefulShutdown(httpServer);
+
   httpServer.listen(port, () => {
     console.log(`HL Workflow Intelligence MCP server running on http://0.0.0.0:${port}`);
     console.log(`  Instance:      ${instanceId}`);
@@ -440,6 +450,12 @@ async function main() {
   // Start scheduled sync — enabled by default, set ENABLE_SCHEDULED_SYNC=false to disable
   if (process.env.ENABLE_SCHEDULED_SYNC !== 'false') {
     startScheduledSync();
+    // Stop the cron jobs the moment SIGTERM lands, BEFORE the drain wait, so
+    // no new sweep starts in a container that is on its way out. Running jobs
+    // are left alone: they are resumable through sync_log plus the reaper.
+    onShutdown(() => {
+      stopScheduledSync();
+    }, 'start');
   }
 }
 
