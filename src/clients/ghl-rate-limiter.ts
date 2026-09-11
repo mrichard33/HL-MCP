@@ -60,6 +60,11 @@ const MAX_PAUSE_MS = parseInt(process.env.RATE_LIMIT_MAX_PAUSE_MS || '180000', 1
 // Max pause = BASE_PAUSE_MS × MAX_429_CYCLES, capped by MAX_PAUSE_MS.
 const MAX_429_CYCLES = Math.max(1, Math.floor(MAX_PAUSE_MS / BASE_PAUSE_MS));
 
+// v2.1: How often a queued caller re-checks for a token. Capped at 1s so a
+// long 429 pause is still re-checked promptly, floored at 50ms so a very fast
+// configured refill rate cannot spin the event loop.
+const QUEUE_TICK_MS = Math.min(1000, Math.max(50, REFILL_INTERVAL_MS));
+
 let tokens = BUCKET_CAPACITY;
 let lastRefill = Date.now();
 let paused = false;
@@ -92,10 +97,18 @@ console.log(
 function refill(): void {
   const now = Date.now();
   const elapsed = now - lastRefill;
+  if (elapsed < REFILL_INTERVAL_MS) return;
   const newTokens = Math.floor(elapsed / REFILL_INTERVAL_MS);
-  if (newTokens > 0) {
-    tokens = Math.min(BUCKET_CAPACITY, tokens + newTokens);
+  tokens = Math.min(BUCKET_CAPACITY, tokens + newTokens);
+  if (tokens >= BUCKET_CAPACITY) {
+    // Bucket is full — nothing to bank, so start the next interval from now.
     lastRefill = now;
+  } else {
+    // v2.1: advance by whole intervals only. The old `lastRefill = now`
+    // discarded the sub-interval remainder on every call, so a caller that
+    // polled refill() slightly off the interval boundary (the queue tick
+    // does exactly that) permanently lost a slice of the refill rate.
+    lastRefill += newTokens * REFILL_INTERVAL_MS;
   }
 }
 
@@ -129,34 +142,40 @@ function processQueue(): void {
 export function acquireToken(): Promise<void> {
   refill();
 
-  if (isPaused()) {
-    return new Promise<void>((resolve) => {
-      waitQueue.push({ resolve, queuedAt: Date.now() });
-      const checkInterval = setInterval(() => {
-        if (!isPaused()) {
-          clearInterval(checkInterval);
-          refill();
-          processQueue();
-        }
-      }, 5000); // Check every 5s during long pauses
-    });
-  }
-
-  if (tokens > 0) {
+  if (!isPaused() && tokens > 0) {
     tokens--;
     stats.totalAcquired++;
     return Promise.resolve();
   }
 
   return new Promise<void>((resolve) => {
-    waitQueue.push({ resolve, queuedAt: Date.now() });
+    const entry: QueueEntry = { resolve, queuedAt: Date.now() };
+    waitQueue.push(entry);
+    // v2.1 — tick until THIS entry is actually dequeued, not until the bucket
+    // merely looks ready.
+    //
+    // Both pre-v2.1 queue paths cleared their own interval on a condition that
+    // did not imply the waiter had been served:
+    //   - the unpaused path cleared on `tokens > 0 || !isPaused()`, and
+    //     `!isPaused()` is true in the ordinary no-pause case, so the interval
+    //     was torn down on the very first tick even when refill() had just
+    //     granted 0 tokens (timer drift of a few ms either side of the 1s
+    //     boundary is enough).
+    //   - the paused path cleared the moment the pause lifted, but a resume
+    //     only mints 2 tokens, so every waiter past the second stayed queued.
+    // Either way the entry was left parked in waitQueue with nothing scheduled
+    // to retry it. It could then only be resolved by some *other* caller's
+    // processQueue() — and a sequential pager like getAllOpportunities() has no
+    // other caller in flight. That is why a ~211-page opportunity fetch that
+    // should cost ~4 minutes of bucket time was measured at 62-93 minutes,
+    // with wildly variable durations: each stall persisted until an unrelated
+    // cron job happened to make a GHL call and drained the queue as a side
+    // effect. Ticking until dequeued removes the dependency entirely.
     const checkInterval = setInterval(() => {
       refill();
-      if (tokens > 0 || !isPaused()) {
-        clearInterval(checkInterval);
-        processQueue();
-      }
-    }, REFILL_INTERVAL_MS);
+      processQueue();
+      if (!waitQueue.includes(entry)) clearInterval(checkInterval);
+    }, QUEUE_TICK_MS);
   });
 }
 

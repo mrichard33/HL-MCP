@@ -332,21 +332,46 @@ export class GHLClient {
     return this.request('/contacts/', { params: reqParams });
   }
 
-  async getAllContacts(): Promise<GHLContact[]> {
+  /**
+   * v2.1: same truncation fix as getAllOpportunitiesChecked() — see the long
+   * note there. Contacts had the identical hard-coded 200-page (20,000 record)
+   * ceiling against 22,567 live contacts, and syncContacts('full') feeds this
+   * list to softDeleteMissing() exactly the way opportunities does.
+   *
+   * Override with GHL_CONTACT_MAX_PAGES.
+   */
+  async getAllContactsChecked(): Promise<{ contacts: GHLContact[]; truncated: boolean }> {
     const allContacts: GHLContact[] = [];
     let startAfter: string | undefined;
     let startAfterId: string | undefined;
-    let pageCount = 0;
-    const MAX_PAGES = 200;
-    do {
+
+    const maxPages = (() => {
+      const parsed = parseInt(process.env.GHL_CONTACT_MAX_PAGES || '', 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 500;
+    })();
+
+    for (let page = 0; page < maxPages; page++) {
       const result = await this.getContacts({ limit: 100, startAfter, startAfterId });
-      allContacts.push(...(result.contacts || []));
-      pageCount++;
+      const batch = result.contacts || [];
+      allContacts.push(...batch);
       startAfter = result.meta?.startAfter;
       startAfterId = result.meta?.startAfterId;
-      if (!result.contacts?.length || (!startAfter && !startAfterId)) break;
-    } while (pageCount < MAX_PAGES);
-    return allContacts;
+      if (!batch.length || (!startAfter && !startAfterId)) {
+        return { contacts: allContacts, truncated: false };
+      }
+    }
+
+    console.error(
+      `[GHL] getAllContacts: hit the ${maxPages}-page ceiling with ${allContacts.length} contacts ` +
+      'and GHL still reporting more. The result is INCOMPLETE — soft-delete reconciliation will be ' +
+      'skipped this cycle. Raise GHL_CONTACT_MAX_PAGES.',
+    );
+    return { contacts: allContacts, truncated: true };
+  }
+
+  async getAllContacts(): Promise<GHLContact[]> {
+    const { contacts } = await this.getAllContactsChecked();
+    return contacts;
   }
 
   /**
@@ -567,21 +592,63 @@ export class GHLClient {
     return this.request('/opportunities/search', { method: 'GET', params: reqParams });
   }
 
-  async getAllOpportunities(): Promise<GHLOpportunity[]> {
+  /**
+   * v2.1: Page the whole opportunity book, reporting whether the page cap cut
+   * the walk short.
+   *
+   * WHY THIS RETURNS A FLAG. The previous version stopped silently at
+   * MAX_PAGES = 200 (20,000 records) and returned a short list that was
+   * indistinguishable from a complete one. The location crossed 20,000 around
+   * 2026-09-04 and every daily full reconcile since logged
+   * `records_synced` of exactly 20000 against 21,102 live opportunities — the
+   * last ~1,100 were invisible to the sync. That is dangerous well beyond a
+   * stale cache: syncOpportunities('full') feeds this list straight into
+   * softDeleteMissing(), which soft-deletes every row it does not see. Only a
+   * second bug (softDeleteMissing's own unpaginated 1,000-row read, fixed in
+   * the same change) kept that from mass-deleting real opportunities.
+   *
+   * So the cap is now both much higher AND loud: callers that act on absence —
+   * anything calling softDeleteMissing — must check `truncated` and refuse to
+   * treat a clipped list as authoritative.
+   *
+   * Override the ceiling with GHL_OPPORTUNITY_MAX_PAGES if the book grows past
+   * 50,000.
+   */
+  async getAllOpportunitiesChecked(): Promise<{ opportunities: GHLOpportunity[]; truncated: boolean }> {
     const all: GHLOpportunity[] = [];
     let startAfter: string | undefined;
     let startAfterId: string | undefined;
-    let pageCount = 0;
-    const MAX_PAGES = 200;
-    do {
+
+    const maxPages = (() => {
+      const parsed = parseInt(process.env.GHL_OPPORTUNITY_MAX_PAGES || '', 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 500;
+    })();
+
+    for (let page = 0; page < maxPages; page++) {
       const result = await this.getOpportunities({ limit: 100, startAfter, startAfterId });
-      all.push(...(result.opportunities || []));
-      pageCount++;
+      const batch = result.opportunities || [];
+      all.push(...batch);
       startAfter = result.meta?.startAfter;
       startAfterId = result.meta?.startAfterId;
-      if (!result.opportunities?.length || (!startAfter && !startAfterId)) break;
-    } while (pageCount < MAX_PAGES);
-    return all;
+      // Cursor exhausted (or an empty page) — the walk covered the whole book.
+      if (!batch.length || (!startAfter && !startAfterId)) {
+        return { opportunities: all, truncated: false };
+      }
+    }
+
+    // Fell out of the loop with a live cursor still in hand: there is more data
+    // in GHL than we fetched.
+    console.error(
+      `[GHL] getAllOpportunities: hit the ${maxPages}-page ceiling with ${all.length} opportunities ` +
+      'and GHL still reporting more. The result is INCOMPLETE — soft-delete reconciliation will be ' +
+      'skipped this cycle. Raise GHL_OPPORTUNITY_MAX_PAGES.',
+    );
+    return { opportunities: all, truncated: true };
+  }
+
+  async getAllOpportunities(): Promise<GHLOpportunity[]> {
+    const { opportunities } = await this.getAllOpportunitiesChecked();
+    return opportunities;
   }
 
   /**
