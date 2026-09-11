@@ -175,6 +175,13 @@ async function computeIncrementalFloor(entityName: string): Promise<string | nul
   return new Date(floorMs).toISOString();
 }
 
+/**
+ * The slice of the Supabase client softDeleteMissing actually uses. Keeping it
+ * structural lets a test supply a small stub without reproducing supabase-js.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SupabaseLike = { from: (table: string) => any };
+
 // ---- Soft-Delete Helper ----
 
 /**
@@ -226,21 +233,57 @@ export async function softDeleteMissing(
   ghlIdColumn: string,
   activeGhlIds: string[],
   locationId: string,
-  options?: { listIsComplete?: boolean },
+  options?: {
+    listIsComplete?: boolean;
+    /**
+     * Injectable client, for tests only. Production callers omit it and get the
+     * real singleton. Exists because the chunking and error handling below are
+     * exactly the properties that broke silently in production, so they need a
+     * test that can observe the calls actually made.
+     */
+    client?: SupabaseLike;
+  },
 ): Promise<{ deleted: number; restored: number; skipped?: string }> {
-  const supabase = getSupabaseClient();
+  const supabase = options?.client ?? getSupabaseClient();
   const now = nowET();
 
-  // Restore any previously soft-deleted records that are back in the API response
+  // Restore any previously soft-deleted records that are back in the API response.
+  //
+  // v2.2.3 — this path had NEVER worked at scale, and the damage was live:
+  // 330 opportunities sat marked deleted in Supabase while GHL kept returning
+  // them as active, so every report filtering `deleted_at IS NULL` was missing
+  // them. They were re-fetched and re-upserted every cycle and never restored.
+  //
+  // Two defects in four lines:
+  //   1. `.in()` was handed the WHOLE active id list — 21,494 ids — unchunked.
+  //      PostgREST serialises .in() into the URL query string, so the request
+  //      blew the server's URL length limit. This is the same failure the
+  //      delete path below and the appointments/gate prefetches already chunk
+  //      around; only this one was missed.
+  //   2. The result destructured `data` but not `error`, so the failure was
+  //      invisible and `restored` confidently reported 0.
+  //
+  // Most of the 330 are fallout from the page-truncation bug fixed in v2.1
+  // (getAllOpportunities silently capped at 20,000): rows past the cap looked
+  // absent from GHL and were soft-deleted. The truncation is fixed, but nothing
+  // could undo the damage while the restore was broken.
   let restored = 0;
   if (activeGhlIds.length > 0) {
-    const { data: restoredRows } = await supabase
-      .from(table)
-      .update({ deleted_at: null, updated_at: now })
-      .in(ghlIdColumn, activeGhlIds)
-      .not('deleted_at', 'is', null)
-      .select(ghlIdColumn);
-    restored = restoredRows?.length || 0;
+    for (const batch of chunk(activeGhlIds, UPSERT_BATCH_SIZE)) {
+      const { data, error } = await supabase
+        .from(table)
+        .update({ deleted_at: null, updated_at: now })
+        .in(ghlIdColumn, batch)
+        .not('deleted_at', 'is', null)
+        .select(ghlIdColumn);
+      if (error) {
+        // Never silently report 0 again. Stop and surface it: a restore that
+        // cannot run means records stay invisible to every downstream query.
+        console.error(`[EntitySync] softDeleteMissing: restore failed for ${table}: ${error.message}`);
+        break;
+      }
+      restored += data?.length || 0;
+    }
   }
 
   if (options?.listIsComplete === false) {
@@ -299,13 +342,23 @@ export async function softDeleteMissing(
     return { deleted: 0, restored, skipped };
   }
 
-  const { data: deletedRows } = await supabase
-    .from(table)
-    .update({ deleted_at: now, updated_at: now })
-    .in(ghlIdColumn, toDelete)
-    .select(ghlIdColumn);
-
-  const deleted = deletedRows?.length || 0;
+  // Chunked and error-checked for the same reasons as the restore above. The
+  // plausibility guard keeps toDelete small in practice, but it is overridable
+  // via SOFT_DELETE_MAX_RATIO, and an unchunked .in() would fail exactly when
+  // the list is largest — the worst possible time to fail silently.
+  let deleted = 0;
+  for (const batch of chunk(toDelete, UPSERT_BATCH_SIZE)) {
+    const { data, error } = await supabase
+      .from(table)
+      .update({ deleted_at: now, updated_at: now })
+      .in(ghlIdColumn, batch)
+      .select(ghlIdColumn);
+    if (error) {
+      console.error(`[EntitySync] softDeleteMissing: delete failed for ${table}: ${error.message}`);
+      break;
+    }
+    deleted += data?.length || 0;
+  }
   if (deleted > 0) {
     console.log(`[EntitySync] Soft-deleted ${deleted} records from ${table}`);
   }
