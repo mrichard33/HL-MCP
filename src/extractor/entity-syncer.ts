@@ -5,7 +5,11 @@ import { nowET, toET } from '../utils/timezone.js';
 import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventType } from '../utils/event-type.js';
 import { normalizeDirection } from '../utils/normalize.js';
 import type { GHLContact, GHLOpportunity, GHLConversation, GHLPaginationMeta, GHLMessage, GHLAppointment } from '../types/ghl.js';
-import { createHash } from 'node:crypto';
+import { chunk, UPSERT_BATCH_SIZE, PAGINATION_PAGE_SIZE } from '../utils/batching.js';
+import { payloadHash, deltaMode, gateByPayloadHash, type DeltaMode } from '../utils/delta-gate.js';
+
+// Re-exported so existing importers of these keep working after the move.
+export { chunk, UPSERT_BATCH_SIZE, PAGINATION_PAGE_SIZE };
 
 // ---- Sync State Helpers ----
 
@@ -77,14 +81,7 @@ async function logSyncFailed(syncLogId: string | null, errorMessage: string): Pr
   }).eq('id', syncLogId).eq('status', 'running');
 }
 
-// v1.4: Batch size for Supabase bulk upserts. 500 is well under PostgREST's
-// default 1000-row limit and keeps any single request under ~5MB JSON payload.
-const UPSERT_BATCH_SIZE = 500;
 
-// v1.5: PostgREST caps single-query result sets at 1000 rows by default.
-// For any `.select()` that can return more than that (contacts, conversations,
-// lead_events), we must paginate via .range() or the result silently truncates.
-const PAGINATION_PAGE_SIZE = 1000;
 
 // v1.6: Incremental sync overlap buffer — minutes subtracted from
 // last_synced_at when computing the dateUpdated floor for incremental
@@ -96,40 +93,25 @@ const INCREMENTAL_OVERLAP_MINUTES = parseInt(
   10,
 );
 
-// Appointment delta gate. The -14d/+30d window fetch is unavoidable (GHL
-// calendar events expose no reliable dateUpdated filter), but blindly
-// upserting the whole window wrote ~1,790 rows every 15 min (~170K/day)
-// into a ~10K-row table. Modes:
-//   off     — legacy: upsert everything
-//   shadow  — compute + store payload hashes, log would-skip, upsert everything
-//   enforce — upsert only rows whose payload hash changed
-const APPT_SYNC_DELTA_MODE = (process.env.APPT_SYNC_DELTA_MODE || 'shadow').toLowerCase();
-
-function apptPayloadHash(row: Record<string, unknown>): string {
-  const sortKeys = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(sortKeys);
-    if (v && typeof v === 'object') {
-      return Object.keys(v as Record<string, unknown>).sort().reduce((acc: Record<string, unknown>, k) => {
-        acc[k] = sortKeys((v as Record<string, unknown>)[k]);
-        return acc;
-      }, {});
-    }
-    return v;
-  };
-  return createHash('sha256').update(JSON.stringify(sortKeys(row))).digest('hex');
-}
-
-/**
- * Chunk an array into batches of a given size.
- */
-function chunk<T>(arr: T[], size: number): T[][] {
-  if (size <= 0) return [arr];
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
-}
+// v2.2: the appointment delta gate generalised. The hash function, the mode
+// resolution and the prefetch/compare logic now live in src/utils/delta-gate.ts
+// so every sync uses one implementation. APPT_SYNC_DELTA_MODE is still read (via
+// deltaMode) so the existing Railway setting keeps working unchanged.
+//
+// Per-entity defaults. The small config tables go straight to `enforce`: row
+// counts are tiny, raw_json already carries the whole payload, and there is no
+// blast radius. The big record tables default to `shadow` so a day of real
+// numbers is visible in the logs before anything is actually skipped.
+const DELTA_DEFAULTS = {
+  appointments: 'enforce',
+  custom_fields: 'enforce',
+  custom_values: 'enforce',
+  tags: 'enforce',
+  trigger_links: 'enforce',
+  opportunities: 'shadow',
+  contacts: 'shadow',
+  conversations: 'shadow',
+} as const;
 
 // v1.6: Compute the "since" floor for an incremental sync by subtracting
 // the overlap buffer from the entity's last_synced_at.
@@ -311,6 +293,7 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
   const supabase = getSupabaseClient();
   const errors: string[] = [];
   const syncLogId = await logSyncStart('contacts');
+  const contactMode: DeltaMode = deltaMode('contacts', DELTA_DEFAULTS.contacts);
 
   try {
     let effectiveMode: SyncMode = requestedMode;
@@ -382,25 +365,35 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     // 782k+ lead_events. EntitySync runs every 15 min, so workflow
     // enrollment analytics stay current at that resolution as long as
     // this sync runs. The tag-diff path is documented in handler.ts.
+    //
+    // v2.2: this same read now also collects payload_hash, so the delta gate
+    // below costs no extra round trip.
     const previousTagsByContact = new Map<string, string[]>();
+    const storedContactHashes = new Map<string, string | null>();
+    let hashPrefetchOk = true;
     {
       const ids = contacts.map((c) => c.id);
-      for (let i = 0; i < ids.length; i += UPSERT_BATCH_SIZE) {
-        const slice = ids.slice(i, i + UPSERT_BATCH_SIZE);
-        const { data: existing } = await supabase
+      for (const slice of chunk(ids, UPSERT_BATCH_SIZE)) {
+        const { data: existing, error } = await supabase
           .from('contacts')
-          .select('ghl_contact_id, tags')
+          .select('ghl_contact_id, tags, payload_hash')
           .in('ghl_contact_id', slice);
-        if (existing) {
-          for (const row of existing as { ghl_contact_id: string; tags: string[] | null }[]) {
-            previousTagsByContact.set(row.ghl_contact_id, row.tags || []);
-          }
+        if (error) {
+          // Fail open on the gate; the tag diff degrades to "no previous tags"
+          // exactly as it did before when this select returned nothing.
+          console.warn(`[EntitySync] syncContacts: tag/hash prefetch failed (${error.message}) — cycle runs ungated`);
+          hashPrefetchOk = false;
+          break;
+        }
+        for (const row of (existing || []) as { ghl_contact_id: string; tags: string[] | null; payload_hash: string | null }[]) {
+          previousTagsByContact.set(row.ghl_contact_id, row.tags || []);
+          storedContactHashes.set(row.ghl_contact_id, row.payload_hash ?? null);
         }
       }
     }
 
     const now = nowET();
-    const rows = contacts.map((c) => ({
+    const contentRows = contacts.map((c) => ({
       ghl_contact_id: c.id,
       ghl_location_id: c.locationId || null,
       first_name: c.firstName || null,
@@ -413,9 +406,25 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
       custom_fields: c.customFields || {},
       date_added: c.dateAdded || null,
       date_updated: c.dateUpdated || now,
+    }));
+
+    const allRows = contentRows.map((content) => ({
+      ...content,
+      payload_hash: contactMode !== 'off' ? payloadHash(content) : null,
       synced_at: now,
       updated_at: now,
     }));
+
+    const gate = await gateByPayloadHash({
+      supabase,
+      table: 'contacts',
+      idColumn: 'ghl_contact_id',
+      rows: allRows,
+      mode: contactMode,
+      label: 'syncContacts',
+      storedHashes: hashPrefetchOk ? storedContactHashes : undefined,
+    });
+    const rows = gate.rows;
 
     let upsertedCount = 0;
     for (const batch of chunk(rows, UPSERT_BATCH_SIZE)) {
@@ -496,9 +505,10 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     }
 
     await updateLastSynced('contacts');
-    await logSyncComplete(syncLogId, contacts.length);
-    console.log(`[EntitySync] Contacts synced (${effectiveMode}): ${contacts.length}`);
-    return { synced: contacts.length, skipped: 0, mode: effectiveMode, errors };
+    // Rows actually written, not rows fetched — see the note in syncOpportunities.
+    await logSyncComplete(syncLogId, rows.length);
+    console.log(`[EntitySync] Contacts synced (${effectiveMode}): ${rows.length} written, ${gate.skippedUnchanged} unchanged`);
+    return { synced: rows.length, skipped: gate.skippedUnchanged, mode: effectiveMode, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
@@ -544,6 +554,7 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
   const supabase = getSupabaseClient();
   const errors: string[] = [];
   const syncLogId = await logSyncStart('opportunities');
+  const oppMode: DeltaMode = deltaMode('opportunities', DELTA_DEFAULTS.opportunities);
 
   try {
     let toUpsert: GHLOpportunity[] = [];
@@ -592,45 +603,16 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
           fullList = await ghl.getAllOpportunities();
           console.log(`[EntitySync] syncOpportunities: fetched ${fullList.length} opportunities from GHL`);
 
-          // Build a map of existing opportunity id → date_updated from
-          // Supabase. Paginated past the 1000-row PostgREST cap.
-          const existingDates = new Map<string, string>();
-          for (let page = 0; ; page++) {
-            const from = page * PAGINATION_PAGE_SIZE;
-            const to = from + PAGINATION_PAGE_SIZE - 1;
-            const { data, error } = await supabase
-              .from('opportunities')
-              .select('ghl_opportunity_id, date_updated')
-              .is('deleted_at', null)
-              .range(from, to);
-            if (error) {
-              console.warn(`[EntitySync] syncOpportunities: failed to load date_updated map (page ${page}): ${error.message} — falling back to full upsert`);
-              existingDates.clear();
-              break;
-            }
-            if (!data || data.length === 0) break;
-            for (const row of data as { ghl_opportunity_id: string; date_updated: string | null }[]) {
-              if (row.ghl_opportunity_id && row.date_updated) {
-                existingDates.set(row.ghl_opportunity_id, row.date_updated);
-              }
-            }
-            if (data.length < PAGINATION_PAGE_SIZE) break;
-          }
-
-          if (existingDates.size > 0) {
-            toUpsert = fullList.filter((o) => {
-              const incomingTs = o.dateUpdated || o.updatedAt;
-              if (!incomingTs) return true; // Unknown freshness — upsert to be safe
-              const existing = existingDates.get(o.id);
-              if (!existing) return true; // New record never seen before
-              // Strictly greater — equal means identical row, skip.
-              return new Date(incomingTs).getTime() > new Date(existing).getTime();
-            });
-            skippedUnchanged = fullList.length - toUpsert.length;
-            console.log(`[EntitySync] syncOpportunities: diff — ${toUpsert.length} changed, ${skippedUnchanged} unchanged (skipped)`);
-          } else {
-            toUpsert = fullList;
-          }
+          // v2.2: the date_updated comparison that used to live here is gone.
+          // It cost a full paginated read of the table and was still wrong in
+          // both directions: GHL bumps dateUpdated without the content
+          // changing (329 opportunities were rewritten every 30 min against
+          // only 429 genuinely changed in 24h), and any record GHL returns
+          // with no timestamp at all was upserted unconditionally forever.
+          //
+          // The payload-hash gate below replaces it — same one read, but it
+          // compares what the row actually contains.
+          toUpsert = fullList;
           incrementalPath = 'client-diff';
         }
       }
@@ -655,7 +637,7 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
     }
 
     const now = nowET();
-    const rows = toUpsert.map((o) => ({
+    const contentRows = toUpsert.map((o) => ({
       ghl_opportunity_id: o.id,
       ghl_pipeline_id: o.pipelineId,
       ghl_stage_id: o.pipelineStageId || null,
@@ -670,9 +652,28 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
       custom_fields: o.customFields || {},
       date_added: o.dateAdded || o.createdAt || null,
       date_updated: o.dateUpdated || o.updatedAt || now,
+    }));
+
+    // date_updated stays INSIDE the hashed content above: a GHL timestamp bump
+    // with no other change is still a change we want reflected in the cache.
+    // synced_at/updated_at are added after the hash — they move every cycle.
+    const allRows = contentRows.map((content) => ({
+      ...content,
+      payload_hash: oppMode !== 'off' ? payloadHash(content) : null,
       synced_at: now,
       updated_at: now,
     }));
+
+    const gate = await gateByPayloadHash({
+      supabase,
+      table: 'opportunities',
+      idColumn: 'ghl_opportunity_id',
+      rows: allRows,
+      mode: oppMode,
+      label: 'syncOpportunities',
+    });
+    const rows = gate.rows;
+    skippedUnchanged += gate.skippedUnchanged;
 
     let upsertedCount = 0;
     for (const batch of chunk(rows, UPSERT_BATCH_SIZE)) {
@@ -704,10 +705,14 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
     }
 
     await updateLastSynced('opportunities');
-    await logSyncComplete(syncLogId, toUpsert.length);
+    // Report rows actually WRITTEN, not rows fetched. With the delta gate on,
+    // these diverge sharply, and sync_log claiming 21,407 "synced" on a cycle
+    // that wrote 400 would be exactly the kind of misleading metric the v2.1
+    // sync_log fix existed to remove.
+    await logSyncComplete(syncLogId, rows.length);
     const pathLabel = mode === 'full' ? 'full' : incrementalPath;
     console.log(`[EntitySync] Opportunities synced (${pathLabel}): ${toUpsert.length} (skipped ${skippedUnchanged})`);
-    return { synced: toUpsert.length, skipped: skippedUnchanged, mode, errors };
+    return { synced: rows.length, skipped: skippedUnchanged, mode, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`Fatal: ${msg}`);
@@ -727,6 +732,7 @@ export async function syncAppointments(options?: {
   const supabase = getSupabaseClient();
   const errors: string[] = [];
   const syncLogId = await logSyncStart('appointments');
+  const apptMode: DeltaMode = deltaMode('appointments', DELTA_DEFAULTS.appointments);
 
   try {
     // Fetch appointments across ALL calendars (calendarId is required by GHL API)
@@ -768,45 +774,25 @@ export async function syncAppointments(options?: {
       };
       return {
         ...content,
-        payload_hash: APPT_SYNC_DELTA_MODE !== 'off' ? apptPayloadHash(content) : null,
+        // Hash covers `content` only — synced_at/updated_at are added after and
+        // change every cycle by construction, so including them would defeat
+        // the gate entirely.
+        payload_hash: apptMode !== 'off' ? payloadHash(content) : null,
         synced_at: now,
         updated_at: now,
       };
     });
 
-    // Delta gate: load stored hashes (chunked — .in() serializes into the
-    // URL) and keep only changed rows. Fails open: prefetch error (e.g.
-    // payload_hash column missing) runs the cycle ungated.
-    let rows = allRows;
-    let skippedUnchanged = 0;
-    if (APPT_SYNC_DELTA_MODE !== 'off') {
-      const storedHash = new Map<string, string | null>();
-      let prefetchOk = true;
-      for (const batch of chunk(allRows.map((r) => r.ghl_appointment_id), UPSERT_BATCH_SIZE)) {
-        const { data, error } = await supabase
-          .from('appointments')
-          .select('ghl_appointment_id, payload_hash')
-          .in('ghl_appointment_id', batch);
-        if (error) {
-          console.warn(`[EntitySync] syncAppointments: hash prefetch failed (${error.message}) — cycle runs ungated`);
-          prefetchOk = false;
-          break;
-        }
-        for (const r of (data || []) as { ghl_appointment_id: string; payload_hash: string | null }[]) {
-          storedHash.set(r.ghl_appointment_id, r.payload_hash);
-        }
-      }
-      if (prefetchOk) {
-        const changed = allRows.filter((r) => storedHash.get(r.ghl_appointment_id) !== r.payload_hash);
-        skippedUnchanged = allRows.length - changed.length;
-        if (APPT_SYNC_DELTA_MODE === 'enforce') {
-          rows = changed;
-          console.log(`[EntitySync] syncAppointments: delta enforce — ${changed.length} changed, ${skippedUnchanged} unchanged skipped`);
-        } else {
-          console.log(`[EntitySync] syncAppointments: delta shadow — ${changed.length} changed, ${skippedUnchanged} would skip (writing all)`);
-        }
-      }
-    }
+    const gate = await gateByPayloadHash({
+      supabase,
+      table: 'appointments',
+      idColumn: 'ghl_appointment_id',
+      rows: allRows,
+      mode: apptMode,
+      label: 'syncAppointments',
+    });
+    const rows = gate.rows;
+    const skippedUnchanged = gate.skippedUnchanged;
 
     let upsertedCount = 0;
     for (const batch of chunk(rows, UPSERT_BATCH_SIZE)) {
@@ -832,7 +818,7 @@ export async function syncAppointments(options?: {
     const changedIds = new Set(rows.map((r) => r.ghl_appointment_id));
     const leadEventSpecs: LeadEventSpec[] = [];
     for (const apt of events) {
-      if (APPT_SYNC_DELTA_MODE === 'enforce' && !changedIds.has(apt.id)) continue;
+      if (apptMode === 'enforce' && !changedIds.has(apt.id)) continue;
       if (!apt.startTime || !apt.contactId) continue;
       try {
         leadEventSpecs.push({
@@ -934,7 +920,7 @@ export async function syncAppointments(options?: {
 
     await updateLastSynced('appointments');
     await logSyncComplete(syncLogId, rows.length);
-    console.log(`[EntitySync] Appointments synced: ${rows.length} written, ${skippedUnchanged} unchanged (mode=${APPT_SYNC_DELTA_MODE})`);
+    console.log(`[EntitySync] Appointments synced: ${rows.length} written, ${skippedUnchanged} unchanged (mode=${apptMode})`);
     return { synced: rows.length, errors };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1387,44 +1373,100 @@ export async function computeFunnelProgression(): Promise<{ computed: number; er
 
 // ---- Custom Fields Sync ----
 
-export async function syncCustomFields(): Promise<{ synced: number; errors: string[] }> {
-  const ghl = new GHLClient();
+// ---- Config Entity Sync (shared) ----
+
+/**
+ * Batched + hash-gated upsert for the small config tables (custom_fields,
+ * custom_values, tags, trigger_links).
+ *
+ * v2.2: all four previously ran a SINGLE-ROW upsert inside a for-loop with no
+ * change detection of any kind — roughly 1,600 individual PostgREST requests
+ * every 6-hour cycle to rewrite rows that almost never change. Now they batch
+ * through chunk() and skip rows whose content hash is unchanged.
+ *
+ * These default to `enforce` from day one: row counts are small, raw_json
+ * already carries the entire upstream payload so the hash is comprehensive, and
+ * the blast radius is a config table rather than the contact or opportunity
+ * record set.
+ */
+async function syncConfigEntity<T extends { id: string }>(opts: {
+  entity: string;
+  table: string;
+  idColumn: string;
+  locationId: string;
+  items: T[];
+  /** Content fields ONLY — never synced_at/updated_at. */
+  toContent: (item: T) => Record<string, unknown>;
+  errors: string[];
+}): Promise<number> {
+  const { entity, table, idColumn, locationId, items, toContent, errors } = opts;
   const supabase = getSupabaseClient();
   const now = nowET();
+  const mode = deltaMode(entity, 'enforce');
+
+  const allRows = items.map((item) => {
+    const content = toContent(item);
+    return {
+      ...content,
+      payload_hash: mode !== 'off' ? payloadHash(content) : null,
+      synced_at: now,
+      updated_at: now,
+    };
+  });
+
+  const gate = await gateByPayloadHash({
+    supabase, table, idColumn, rows: allRows, mode, label: `sync:${entity}`,
+  });
+
+  let synced = 0;
+  for (const batch of chunk(gate.rows, UPSERT_BATCH_SIZE)) {
+    const { error } = await supabase.from(table).upsert(batch, { onConflict: idColumn });
+    if (error) {
+      errors.push(`${entity} batch upsert: ${error.message}`);
+      console.error(`[EntitySync] ${entity} batch upsert failed: ${error.message}`);
+    } else {
+      synced += batch.length;
+    }
+  }
+
+  // Soft-delete always diffs against the FULL fetched list, never the gated
+  // subset — a row skipped as unchanged is still very much present in GHL.
+  const activeIds = items.map((i) => i.id);
+  const del = await softDeleteMissing(table, idColumn, activeIds, locationId);
+  if (del.skipped) errors.push(`Soft-delete skipped: ${del.skipped}`);
+
+  console.log(`[EntitySync] ${entity}: ${synced} written, ${gate.skippedUnchanged} unchanged (mode=${mode})`);
+  return synced;
+}
+
+export async function syncCustomFields(): Promise<{ synced: number; errors: string[] }> {
+  const ghl = new GHLClient();
   let synced = 0;
   const errors: string[] = [];
   const syncLogId = await logSyncStart('custom_fields');
 
   try {
-    const customFields = await ghl.getCustomFields();
+    const items = await ghl.getCustomFields();
 
-    for (const cf of customFields) {
-      try {
-        await supabase.from('custom_fields').upsert(
-          {
-            ghl_field_id: cf.id,
-            ghl_location_id: ghl.getLocationId(),
-            name: cf.name,
-            field_key: cf.fieldKey || null,
-            data_type: cf.dataType || null,
-            placeholder: cf.placeholder || null,
-            position: cf.position ?? null,
-            model: cf.model || null,
-            raw_json: cf,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_field_id' },
-        );
-        synced++;
-      } catch (err) {
-        errors.push(`CustomField ${cf.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Soft-delete custom fields no longer in GHL
-    const activeFieldIds = customFields.map((cf) => cf.id);
-    await softDeleteMissing('custom_fields', 'ghl_field_id', activeFieldIds, ghl.getLocationId());
+    synced = await syncConfigEntity({
+      entity: 'custom_fields',
+      table: 'custom_fields',
+      idColumn: 'ghl_field_id',
+      locationId: ghl.getLocationId(),
+      items,
+      toContent: (cf) => ({
+        ghl_field_id: cf.id,
+        ghl_location_id: ghl.getLocationId(),
+        name: cf.name,
+        field_key: cf.fieldKey || null,
+        data_type: cf.dataType || null,
+        placeholder: cf.placeholder || null,
+        position: cf.position ?? null,
+        model: cf.model || null,
+        raw_json: cf,
+      }),
+      errors,
+    });
 
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('custom_fields');
@@ -1443,39 +1485,29 @@ export async function syncCustomFields(): Promise<{ synced: number; errors: stri
 
 export async function syncCustomValues(): Promise<{ synced: number; errors: string[] }> {
   const ghl = new GHLClient();
-  const supabase = getSupabaseClient();
-  const now = nowET();
   let synced = 0;
   const errors: string[] = [];
   const syncLogId = await logSyncStart('custom_values');
 
   try {
-    const customValues = await ghl.getCustomValues();
+    const items = await ghl.getCustomValues();
 
-    for (const cv of customValues) {
-      try {
-        await supabase.from('custom_values').upsert(
-          {
-            ghl_value_id: cv.id,
-            ghl_location_id: ghl.getLocationId(),
-            name: cv.name,
-            field_key: cv.fieldKey || null,
-            value: cv.value || null,
-            raw_json: cv,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_value_id' },
-        );
-        synced++;
-      } catch (err) {
-        errors.push(`CustomValue ${cv.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Soft-delete custom values no longer in GHL
-    const activeValueIds = customValues.map((cv) => cv.id);
-    await softDeleteMissing('custom_values', 'ghl_value_id', activeValueIds, ghl.getLocationId());
+    synced = await syncConfigEntity({
+      entity: 'custom_values',
+      table: 'custom_values',
+      idColumn: 'ghl_value_id',
+      locationId: ghl.getLocationId(),
+      items,
+      toContent: (cv) => ({
+        ghl_value_id: cv.id,
+        ghl_location_id: ghl.getLocationId(),
+        name: cv.name,
+        field_key: cv.fieldKey || null,
+        value: cv.value || null,
+        raw_json: cv,
+      }),
+      errors,
+    });
 
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('custom_values');
@@ -1494,37 +1526,27 @@ export async function syncCustomValues(): Promise<{ synced: number; errors: stri
 
 export async function syncTags(): Promise<{ synced: number; errors: string[] }> {
   const ghl = new GHLClient();
-  const supabase = getSupabaseClient();
-  const now = nowET();
   let synced = 0;
   const errors: string[] = [];
   const syncLogId = await logSyncStart('tags');
 
   try {
-    const tags = await ghl.getTags();
+    const items = await ghl.getTags();
 
-    for (const tag of tags) {
-      try {
-        await supabase.from('tags').upsert(
-          {
-            ghl_tag_id: tag.id,
-            ghl_location_id: ghl.getLocationId(),
-            name: tag.name,
-            raw_json: tag,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_tag_id' },
-        );
-        synced++;
-      } catch (err) {
-        errors.push(`Tag ${tag.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Soft-delete tags no longer in GHL
-    const activeTagIds = tags.map((t) => t.id);
-    await softDeleteMissing('tags', 'ghl_tag_id', activeTagIds, ghl.getLocationId());
+    synced = await syncConfigEntity({
+      entity: 'tags',
+      table: 'tags',
+      idColumn: 'ghl_tag_id',
+      locationId: ghl.getLocationId(),
+      items,
+      toContent: (tag) => ({
+        ghl_tag_id: tag.id,
+        ghl_location_id: ghl.getLocationId(),
+        name: tag.name,
+        raw_json: tag,
+      }),
+      errors,
+    });
 
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('tags');
@@ -1543,23 +1565,26 @@ export async function syncTags(): Promise<{ synced: number; errors: string[] }> 
 
 export async function syncTriggerLinks(): Promise<{ synced: number; errors: string[] }> {
   const ghl = new GHLClient();
-  const supabase = getSupabaseClient();
-  const now = nowET();
   let synced = 0;
   const errors: string[] = [];
   const syncLogId = await logSyncStart('trigger_links');
 
   try {
-    const links = await ghl.getLinks();
+    const items = await ghl.getLinks();
 
     // Log first link's keys to help diagnose field mapping
-    if (links.length > 0) {
-      console.log(`[EntitySync] Trigger link sample keys: ${Object.keys(links[0]).join(', ')}`);
+    if (items.length > 0) {
+      console.log(`[EntitySync] Trigger link sample keys: ${Object.keys(items[0]).join(', ')}`);
     }
 
-    for (const link of links) {
-      try {
-        // GHL API may return the generated tracking URL under various field names
+    synced = await syncConfigEntity({
+      entity: 'trigger_links',
+      table: 'trigger_links',
+      idColumn: 'ghl_link_id',
+      locationId: ghl.getLocationId(),
+      items,
+      toContent: (link) => {
+        // GHL returns the tracking URL under various field names.
         const raw = link as Record<string, unknown>;
         const linkUrl = (
           raw.url || raw.linkUrl || raw.link || raw.shortUrl ||
@@ -1570,29 +1595,17 @@ export async function syncTriggerLinks(): Promise<{ synced: number; errors: stri
           raw.redirectTo || raw.redirect_to || raw.redirectUrl ||
           raw.destination || raw.targetUrl || null
         ) as string | null;
-
-        await supabase.from('trigger_links').upsert(
-          {
-            ghl_link_id: link.id,
-            ghl_location_id: link.locationId || ghl.getLocationId(),
-            name: link.name || null,
-            redirect_to: redirectTo,
-            url: linkUrl,
-            raw_json: link,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_link_id' },
-        );
-        synced++;
-      } catch (err) {
-        errors.push(`Link ${link.id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Soft-delete trigger links no longer in GHL
-    const activeLinkIds = links.map((l) => l.id);
-    await softDeleteMissing('trigger_links', 'ghl_link_id', activeLinkIds, ghl.getLocationId());
+        return {
+          ghl_link_id: link.id,
+          ghl_location_id: link.locationId || ghl.getLocationId(),
+          name: link.name || null,
+          redirect_to: redirectTo,
+          url: linkUrl,
+          raw_json: link,
+        };
+      },
+      errors,
+    });
 
     await logSyncComplete(syncLogId, synced);
     await updateLastSynced('trigger_links');
