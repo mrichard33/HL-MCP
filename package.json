@@ -16,7 +16,8 @@
     "test": "npm run build && node --test \"scripts/test-*.js\"",
     "test:oauth": "npm run build && node --test scripts/test-oauth-gate.js",
     "test:sync": "npm run build && node --test scripts/test-sync-reliability.js",
-    "populate": "tsx scripts/populate-supabase.ts"
+    "populate": "tsx scripts/populate-supabase.ts",
+    "test:delta": "npm run build && node --test scripts/test-delta-gate.js"
   },
   "keywords": [
     "mcp",

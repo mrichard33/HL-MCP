@@ -18,6 +18,8 @@
  */
 
 import { getSupabaseClient } from '../clients/supabase.js';
+import { payloadHash, deltaMode, gateByPayloadHash } from '../utils/delta-gate.js';
+import { chunk, UPSERT_BATCH_SIZE } from '../utils/batching.js';
 import { updateLastSynced } from './entity-syncer.js';
 import { nowET } from '../utils/timezone.js';
 import { softDeleteMissing } from './entity-syncer.js';
@@ -386,33 +388,62 @@ export async function syncTemplates(): Promise<{ synced: number; errors: string[
 
     console.log(`[TemplateSync] Combined unique items: ${allItems.length}`);
 
-    for (const t of allItems) {
-      try {
-        const raw = (t as Record<string, unknown>)._raw || t;
-        const templateType = (raw as Record<string, unknown>).templateType as string || undefined;
-        await supabase.from('templates').upsert(
-          {
-            ghl_template_id: t.id || (t as Record<string, unknown>)._id as string,
-            ghl_location_id: locationId,
-            name: t.name || 'Untitled',
-            type: templateType === 'folder' ? 'folder' : (t.type || 'email'),
-            subject: t.subject || null,
-            body: t.body || null,
-            attachments: t.attachments || [],
-            raw_json: raw,
-            date_added: t.dateAdded || null,
-            date_updated: t.dateUpdated || null,
-            synced_at: now,
-            updated_at: now,
-          },
-          { onConflict: 'ghl_template_id' },
-        );
-        synced++;
-      } catch (err) {
-        const id = t.id || (t as Record<string, unknown>)._id;
-        errors.push(`Template ${id}: ${err instanceof Error ? err.message : String(err)}`);
+    // v2.2: batched + hash-gated. This loop used to run one PostgREST request
+    // per template (~100+ every 6h) and compared nothing at all.
+    const mode = deltaMode('templates', 'enforce');
+
+    const allRows = allItems.map((t) => {
+      const raw = (t as Record<string, unknown>)._raw || t;
+      const templateType = (raw as Record<string, unknown>).templateType as string || undefined;
+      const isFolder = templateType === 'folder';
+      const content = {
+        ghl_template_id: t.id || (t as Record<string, unknown>)._id as string,
+        ghl_location_id: locationId,
+        name: t.name || 'Untitled',
+        type: isFolder ? 'folder' : (t.type || 'email'),
+        subject: t.subject || null,
+        body: t.body || null,
+        attachments: t.attachments || [],
+        raw_json: raw,
+        date_added: t.dateAdded || null,
+        date_updated: t.dateUpdated || null,
+      };
+
+      // `body` comes from a separate Firebase Storage HTML fetch that can fail,
+      // leaving it null on a template that genuinely has one. Hashing that would
+      // flip the stored hash back and forth between the enriched and unenriched
+      // shapes on alternating cycles, so a real edit could land in a cycle where
+      // the hash happened to match and be skipped. Emails with no body are
+      // therefore left ungated (null hash = always written) rather than risk it.
+      const enrichmentSuspect = !isFolder && content.type === 'email' && !content.body;
+
+      return {
+        ...content,
+        payload_hash: mode !== 'off' && !enrichmentSuspect ? payloadHash(content) : null,
+        synced_at: now,
+        updated_at: now,
+      };
+    });
+
+    const gate = await gateByPayloadHash({
+      supabase,
+      table: 'templates',
+      idColumn: 'ghl_template_id',
+      rows: allRows,
+      mode,
+      label: 'syncTemplates',
+    });
+
+    for (const batch of chunk(gate.rows, UPSERT_BATCH_SIZE)) {
+      const { error } = await supabase.from('templates').upsert(batch, { onConflict: 'ghl_template_id' });
+      if (error) {
+        errors.push(`Template batch upsert: ${error.message}`);
+        console.error(`[TemplateSync] batch upsert failed: ${error.message}`);
+      } else {
+        synced += batch.length;
       }
     }
+    console.log(`[TemplateSync] ${synced} written, ${gate.skippedUnchanged} unchanged (mode=${mode})`);
 
     if (allItems.length > 0) {
       const activeIds = allItems.map(t => t.id || (t as Record<string, unknown>)._id as string).filter(Boolean);

@@ -3,6 +3,7 @@ import { getSupabaseClient } from '../clients/supabase.js';
 import type { GHLWorkflow, GHLWorkflowStep, GHLWorkflowTrigger, GHLWorkflowAction } from '../types/ghl.js';
 import { parseNodeGraph } from './node-graph-parser.js';
 import { nowET } from '../utils/timezone.js';
+import { payloadHash, deltaMode } from '../utils/delta-gate.js';
 import { updateLastSynced, softDeleteMissing } from './entity-syncer.js';
 
 // v1.9: Fixes recurring 23505 duplicate-key errors on workflow_steps_pkey and
@@ -398,6 +399,26 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
     const workflows = await ghl.getWorkflows();
     result.workflows_total = workflows.length;
     let noNodesCount = 0;
+
+    // v2.2: preload every stored detail_hash in one query so the per-workflow
+    // skip decision below costs nothing. Fails open — if the column is missing
+    // or the read errors, the map stays empty, every hash compares as changed,
+    // and the cycle rebuilds exactly as it always has.
+    const detailMode = deltaMode('workflows', 'shadow');
+    const storedDetailHash = new Map<string, string | null>();
+    if (detailMode !== 'off') {
+      const { data: hashRows, error: hashErr } = await supabase
+        .from('workflows')
+        .select('ghl_workflow_id, detail_hash');
+      if (hashErr) {
+        console.warn(`[WorkflowSync] detail_hash preload failed (${hashErr.message}) — cycle runs ungated`);
+      } else {
+        for (const r of (hashRows || []) as { ghl_workflow_id: string; detail_hash: string | null }[]) {
+          storedDetailHash.set(r.ghl_workflow_id, r.detail_hash ?? null);
+        }
+      }
+    }
+    let detailSkipped = 0;
     let firebaseFailureLogged = false;
     // v1.8: Track whether we've logged the schema sample. Previously this used
     // `noNodesCount === 0` which only logged on the first workflow that had
@@ -621,16 +642,13 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
 
         const latestSnapshot = existingSnapshots?.[0];
 
-        // Deep-compare by sorting keys recursively to handle JSONB key reordering
-        const stableStringify = (obj: unknown): string => JSON.stringify(obj, (_key, value) =>
-          value && typeof value === 'object' && !Array.isArray(value)
-            ? Object.keys(value).sort().reduce((sorted: Record<string, unknown>, k) => { sorted[k] = value[k]; return sorted; }, {})
-            : value
-        );
-        const normalizedExisting = latestSnapshot ? stableStringify(latestSnapshot.json_structure) : null;
-        const normalizedNew = stableStringify(rawJson);
+        // v2.2: one shared hash replaces the local stableStringify deep-compare.
+        // Sorting object keys recursively handles JSONB key reordering; this is
+        // the same normalisation the entity syncs use.
+        const existingHash = latestSnapshot ? payloadHash(latestSnapshot.json_structure) : null;
+        const detailHash = payloadHash(rawJson);
 
-        if (!latestSnapshot || normalizedExisting !== normalizedNew) {
+        if (!latestSnapshot || existingHash !== detailHash) {
           const newVersion = latestSnapshot ? latestSnapshot.version + 1 : 1;
           await supabase.from('workflow_snapshots').insert({
             workflow_id: workflowDetail.id,
@@ -638,6 +656,29 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
             json_structure: rawJson,
           });
           result.snapshots_created++;
+        }
+
+        // v2.2 — skip the whole rebuild when this workflow's content is
+        // byte-identical to what produced the rows already in the database.
+        //
+        // Blocks 5-8 below DELETE and re-INSERT every step, connection, trigger
+        // and action for this workflow. Across 234 workflows that is ~26,000
+        // step rows destroyed and recreated EVERY HOUR, changed or not —
+        // ~624,000 row operations a day to arrive back at the same data.
+        //
+        // detail_hash is written only AFTER a successful rebuild (see below), so
+        // this is self-healing in the one case that matters: if a run dies
+        // part-way through the rebuild, the hash is never recorded, and the next
+        // run redoes the work. That also fixes a real pre-existing bug — today a
+        // mid-run failure leaves a workflow with NO steps at all until the next
+        // hourly cycle.
+        const detailUnchanged = storedDetailHash.get(workflowDetail.id) === detailHash;
+        if (detailMode === 'enforce' && detailUnchanged) {
+          detailSkipped++;
+          continue;
+        }
+        if (detailMode === 'shadow' && detailUnchanged) {
+          detailSkipped++;
         }
 
         // 5. Clear existing detail data for this workflow before re-inserting
@@ -837,6 +878,22 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
           }
         }
 
+        // v2.2: record the hash ONLY now, after the full rebuild succeeded.
+        // Writing it here rather than in the workflow upsert above is what makes
+        // the skip self-healing: any failure or throw between the delete and
+        // this line leaves the old hash (or none) in place, so the next cycle
+        // rebuilds instead of skipping a workflow whose steps are missing.
+        if (detailMode !== 'off') {
+          const { error: hashErr } = await supabase
+            .from('workflows')
+            .update({ detail_hash: detailHash })
+            .eq('ghl_workflow_id', workflowDetail.id);
+          if (hashErr) {
+            // Non-fatal: worst case the next cycle rebuilds this workflow again.
+            console.warn(`[WorkflowSync] detail_hash write failed for "${workflowDetail.name}": ${hashErr.message}`);
+          }
+        }
+
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const stack = err instanceof Error ? err.stack : undefined;
@@ -871,6 +928,13 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
         completed_at: nowET(),
       }).eq('id', syncLog.id);
     }
+    if (detailMode !== 'off') {
+      console.log(
+        `[WorkflowSync] detail rebuild ${detailMode} — ${detailSkipped} of ${result.workflows_total} workflows unchanged` +
+        (detailMode === 'shadow' ? ' (would skip; rebuilding all)' : ' (rebuild skipped)'),
+      );
+    }
+
     await updateLastSynced('workflows');
 
   } catch (err) {

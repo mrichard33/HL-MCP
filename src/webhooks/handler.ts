@@ -408,6 +408,14 @@ async function handleContactWebhook(payload: Record<string, unknown>): Promise<v
 
   const newTags = (payload.tags as string[]) || [];
 
+  // v2.2 — DELIBERATELY writes no payload_hash.
+  //
+  // A webhook payload is not always the complete record, so a hash computed
+  // from it could coincidentally match what the next scheduled sync computes
+  // from the full record and cause a real change to be skipped. Leaving the
+  // stored hash stale is the safe direction: it will not match the next
+  // cycle's freshly computed hash, so the row is treated as changed and
+  // rewritten. See src/utils/delta-gate.ts.
   await supabase.from('contacts').upsert(
     {
       ghl_contact_id: id,
@@ -535,6 +543,14 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
   const contactId = payload.contactId as string | undefined;
   const now = nowET();
 
+  // v2.2 — DELIBERATELY writes no payload_hash.
+  //
+  // A webhook payload is not always the complete record, so a hash computed
+  // from it could coincidentally match what the next scheduled sync computes
+  // from the full record and cause a real change to be skipped. Leaving the
+  // stored hash stale is the safe direction: it will not match the next
+  // cycle's freshly computed hash, so the row is treated as changed and
+  // rewritten. See src/utils/delta-gate.ts.
   await supabase.from('opportunities').upsert(
     {
       ghl_opportunity_id: id,
@@ -577,6 +593,14 @@ async function handleAppointmentWebhook(payload: Record<string, unknown>): Promi
   const contactId = payload.contactId as string | undefined;
   const now = nowET();
 
+  // v2.2 — DELIBERATELY writes no payload_hash.
+  //
+  // A webhook payload is not always the complete record, so a hash computed
+  // from it could coincidentally match what the next scheduled sync computes
+  // from the full record and cause a real change to be skipped. Leaving the
+  // stored hash stale is the safe direction: it will not match the next
+  // cycle's freshly computed hash, so the row is treated as changed and
+  // rewritten. See src/utils/delta-gate.ts.
   await supabase.from('appointments').upsert(
     {
       ghl_appointment_id: id,
@@ -645,6 +669,14 @@ async function handleWorkflowWebhook(payload: Record<string, unknown>): Promise<
   const contactId = payload.contactId as string | undefined;
   const now = nowET();
 
+  // v2.2 — DELIBERATELY writes no payload_hash.
+  //
+  // A webhook payload is not always the complete record, so a hash computed
+  // from it could coincidentally match what the next scheduled sync computes
+  // from the full record and cause a real change to be skipped. Leaving the
+  // stored hash stale is the safe direction: it will not match the next
+  // cycle's freshly computed hash, so the row is treated as changed and
+  // rewritten. See src/utils/delta-gate.ts.
   await supabase.from('workflows').upsert(
     {
       ghl_workflow_id: id,
