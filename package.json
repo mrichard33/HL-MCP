@@ -14,6 +14,7 @@
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test \"scripts/test-*.js\"",
+    "test:oauth": "npm run build && node --test scripts/test-oauth-gate.js",
     "populate": "tsx scripts/populate-supabase.ts"
   },
   "keywords": [

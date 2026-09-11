@@ -54,6 +54,7 @@ import { startScheduledSync } from './extractor/scheduler.js';
 import { handleWebhook } from './webhooks/handler.js';
 import {
   getOAuthMetadata,
+  getProtectedResourceMetadata,
   handleRegister,
   handleAuthorize,
   handleToken,
@@ -143,13 +144,13 @@ async function startHttpServer(port: number) {
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
 
     // CORS headers for OAuth and MCP endpoints
-    const oauthPaths = ['/.well-known/oauth-authorization-server', '/authorize', '/token', '/register'];
+    const oauthPaths = ['/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp', '/authorize', '/token', '/register'];
     if (oauthPaths.includes(url.pathname) || url.pathname === '/mcp') {
       const origin = req.headers.origin || '*';
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id');
-      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, WWW-Authenticate');
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
@@ -200,6 +201,14 @@ async function startHttpServer(port: number) {
       console.log(`[OAuth] Metadata requested, issuer: ${issuer}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(getOAuthMetadata(issuer)));
+      return;
+    }
+
+    // Protected resource metadata (RFC 9728) — ChatGPT discovery starts here
+    if ((url.pathname === '/.well-known/oauth-protected-resource' || url.pathname === '/.well-known/oauth-protected-resource/mcp') && req.method === 'GET') {
+      const issuer = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(getProtectedResourceMetadata(issuer)));
       return;
     }
 
@@ -308,6 +317,8 @@ async function startHttpServer(port: number) {
 
     // MCP endpoint
     if (url.pathname === '/mcp') {
+      const resourceMetadataUrl = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}/.well-known/oauth-protected-resource`;
+      const wwwAuth = `Bearer resource_metadata="${resourceMetadataUrl}"`;
       // Token-based authentication: accept OAuth-issued tokens or optional static MCP_AUTH_TOKEN
       const authHeader = req.headers['authorization'] || '';
       const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
@@ -317,13 +328,14 @@ async function startHttpServer(port: number) {
         const isStaticMatch = staticToken ? bearerToken === staticToken : false;
         if (!isOAuthValid && !isStaticMatch) {
           console.log(`[OAuth] /mcp: invalid bearer token (instance: ${instanceId})`);
-          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': `${wwwAuth}, error="invalid_token"` });
           res.end(JSON.stringify({ error: 'Unauthorized — invalid or expired Bearer token' }));
           return;
         }
-      } else if (staticToken) {
-        // Static token is configured but no bearer provided — require auth
-        res.writeHead(401, { 'Content-Type': 'application/json' });
+      } else {
+        // No bearer — always require auth. /mcp is never served anonymously,
+        // even if MCP_AUTH_TOKEN is unset.
+        res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': wwwAuth });
         res.end(JSON.stringify({ error: 'Unauthorized — Bearer token required' }));
         return;
       }
