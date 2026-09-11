@@ -219,3 +219,73 @@ test('chunk never loses or duplicates an element', () => {
   const flat = chunk(src, 500).flat();
   assert.deepStrictEqual(flat, src);
 });
+
+// ── the write-volume ceiling (v2.2.1 regression) ──────────────────────────
+//
+// v2.2 removed syncOpportunities' timestamp pre-filter on the reasoning that
+// the hash gate replaced it. That is true only while the gate is ENFORCING.
+// In shadow/off the gate writes everything, so the sync went from ~329 writes
+// per cycle to all ~21,000 — and the documented rollback (SYNC_DELTA_MODE=off)
+// was the most expensive setting available. These guard the ceiling.
+
+import { filterByNewerTimestamp } from '../dist/utils/delta-gate.js';
+
+const opps = [
+  { id: 'a', dateUpdated: '2026-09-11T10:00:00Z' }, // unchanged
+  { id: 'b', dateUpdated: '2026-09-11T12:00:00Z' }, // newer -> changed
+  { id: 'c', dateUpdated: '2026-09-11T10:00:00Z' }, // unchanged
+  { id: 'd', dateUpdated: '2026-09-11T09:00:00Z' }, // older -> unchanged
+  { id: 'new' },                                     // never seen, no timestamp
+];
+const stored = new Map([
+  ['a', '2026-09-11T10:00:00Z'],
+  ['b', '2026-09-11T11:00:00Z'],
+  ['c', '2026-09-11T10:00:00Z'],
+  ['d', '2026-09-11T10:00:00Z'],
+]);
+const pick = (list) => list.map((o) => o.id).sort();
+
+test('the timestamp pre-filter keeps only genuinely newer records', () => {
+  const out = filterByNewerTimestamp(opps, (o) => o.id, (o) => o.dateUpdated, stored);
+  assert.deepStrictEqual(pick(out), ['b', 'new']);
+});
+
+test('equal timestamps are NOT newer — the stored row is already current', () => {
+  const out = filterByNewerTimestamp(opps, (o) => o.id, (o) => o.dateUpdated, stored);
+  assert.ok(!out.some((o) => o.id === 'a'), 'equal timestamp must not be rewritten');
+});
+
+test('an older upstream timestamp does not trigger a write', () => {
+  const out = filterByNewerTimestamp(opps, (o) => o.id, (o) => o.dateUpdated, stored);
+  assert.ok(!out.some((o) => o.id === 'd'));
+});
+
+test('records with no timestamp and unseen records fail toward writing', () => {
+  const out = filterByNewerTimestamp(opps, (o) => o.id, (o) => o.dateUpdated, stored);
+  assert.ok(out.some((o) => o.id === 'new'), 'unseen record must be written');
+});
+
+test('an empty stored map writes everything rather than skipping blindly', () => {
+  // The prefetch failed. Never treat "I know nothing" as "nothing changed".
+  const out = filterByNewerTimestamp(opps, (o) => o.id, (o) => o.dateUpdated, new Map());
+  assert.strictEqual(out.length, opps.length);
+});
+
+test('THE CEILING: shadow and off can never write more than the pre-filter allows', async () => {
+  // The v2.2 regression in one assertion. Whatever the delta mode, the rows
+  // reaching the upsert must never exceed what the timestamp filter passed.
+  const candidates = filterByNewerTimestamp(opps, (o) => o.id, (o) => o.dateUpdated, stored);
+  const rows = candidates.map((o) => ({ id: o.id, payload_hash: `h-${o.id}` }));
+
+  for (const mode of ['off', 'shadow', 'enforce']) {
+    const r = await gateByPayloadHash({
+      supabase: stubSupabase({ stored: { b: 'h-b', new: 'h-new' } }),
+      table: 't', idColumn: 'id', rows, mode, label: 'ceiling',
+    });
+    assert.ok(
+      r.rows.length <= candidates.length,
+      `mode=${mode} wrote ${r.rows.length} rows, above the ${candidates.length}-row ceiling`,
+    );
+    assert.ok(r.rows.length < opps.length, `mode=${mode} escalated to a full-table write`);
+  }
+});
