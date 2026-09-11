@@ -87,6 +87,42 @@ export function deltaMode(entity: string, fallback: DeltaMode = 'shadow'): Delta
   return fallback;
 }
 
+/**
+ * Timestamp pre-filter — the write-volume CEILING that sits in front of the hash gate.
+ *
+ * Keeps only records whose upstream timestamp is strictly newer than the one
+ * stored locally. New records, and records with no usable timestamp, are kept
+ * (fail toward writing).
+ *
+ * WHY THIS EXISTS SEPARATELY FROM THE HASH GATE. The hash gate only narrows the
+ * write set when it is ENFORCING; in `shadow` and `off` it deliberately writes
+ * everything. A sync that fetches its whole table every cycle and relies solely
+ * on the gate therefore explodes to full-table writes the moment anyone turns
+ * the gate down — including via SYNC_DELTA_MODE=off, the documented rollback.
+ * syncOpportunities hit exactly that in production on 2026-09-11 (~21,000 rows
+ * per 30-minute cycle against a ~329 baseline, a ~64x amplification).
+ *
+ * Running this filter in EVERY mode means no delta-gate setting can ever push
+ * write volume above the pre-hashing baseline. The hash gate then refines
+ * further when enforcing, because timestamps are coarse — upstream systems bump
+ * them without the content changing.
+ */
+export function filterByNewerTimestamp<T>(
+  items: T[],
+  getId: (item: T) => string,
+  getTimestamp: (item: T) => string | undefined,
+  storedTimestamps: Map<string, string>,
+): T[] {
+  if (storedTimestamps.size === 0) return items;
+  return items.filter((item) => {
+    const incoming = getTimestamp(item);
+    if (!incoming) return true;            // Unknown freshness — write to be safe.
+    const stored = storedTimestamps.get(getId(item));
+    if (!stored) return true;              // Never seen before.
+    return new Date(incoming).getTime() > new Date(stored).getTime();
+  });
+}
+
 export interface GateResult<T> {
   /** Rows to write. In `shadow`/`off` this is every input row. */
   rows: T[];

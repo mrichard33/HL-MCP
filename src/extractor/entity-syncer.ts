@@ -6,7 +6,7 @@ import { deriveContactEventType, deriveAppointmentEventType, deriveMessageEventT
 import { normalizeDirection } from '../utils/normalize.js';
 import type { GHLContact, GHLOpportunity, GHLConversation, GHLPaginationMeta, GHLMessage, GHLAppointment } from '../types/ghl.js';
 import { chunk, UPSERT_BATCH_SIZE, PAGINATION_PAGE_SIZE } from '../utils/batching.js';
-import { payloadHash, deltaMode, gateByPayloadHash, type DeltaMode } from '../utils/delta-gate.js';
+import { payloadHash, deltaMode, gateByPayloadHash, filterByNewerTimestamp, type DeltaMode } from '../utils/delta-gate.js';
 
 // Re-exported so existing importers of these keep working after the move.
 export { chunk, UPSERT_BATCH_SIZE, PAGINATION_PAGE_SIZE };
@@ -563,6 +563,10 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
     // incremental we only populate it on the fallback path.
     let fullList: GHLOpportunity[] | null = null;
     let fullListTruncated = false;
+    // Populated by the client-diff prefetch below and handed to the delta gate
+    // so it does not re-read the table.
+    const oppStoredHashes = new Map<string, string | null>();
+    let oppHashesPrefetched = false;
     let incrementalPath: 'server-filter' | 'client-diff' | 'none' = 'none';
 
     if (mode === 'incremental') {
@@ -603,16 +607,65 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
           fullList = await ghl.getAllOpportunities();
           console.log(`[EntitySync] syncOpportunities: fetched ${fullList.length} opportunities from GHL`);
 
-          // v2.2: the date_updated comparison that used to live here is gone.
-          // It cost a full paginated read of the table and was still wrong in
-          // both directions: GHL bumps dateUpdated without the content
-          // changing (329 opportunities were rewritten every 30 min against
-          // only 429 genuinely changed in 24h), and any record GHL returns
-          // with no timestamp at all was upserted unconditionally forever.
+          // v2.2.1 — the date_updated pre-filter is BACK, and must stay.
           //
-          // The payload-hash gate below replaces it — same one read, but it
-          // compares what the row actually contains.
-          toUpsert = fullList;
+          // v2.2 removed it on the reasoning that the payload-hash gate below
+          // supersedes it. That holds only while the gate is enforcing. In
+          // `shadow` and `off` the gate writes everything by design, so with no
+          // pre-filter this path upserted all ~21,000 opportunities every 30
+          // minutes instead of ~329 — about 64x the pre-v2.2 write volume.
+          //
+          // That is not theoretical: it ran in production for ~25 minutes on
+          // 2026-09-11 (two cycles wrote 21,455 and 21,125 rows) before
+          // SYNC_DELTA_MODE_OPPORTUNITIES=enforce was set. Worse, it booby-
+          // trapped the documented rollback — SYNC_DELTA_MODE=off, the setting
+          // .env.example tells you to reach for when something looks wrong, was
+          // the single most expensive value you could pick.
+          //
+          // So: this timestamp filter runs in EVERY mode and establishes a
+          // write-volume ceiling no delta-gate setting can exceed. The hash gate
+          // then refines it further (~329 -> ~5) when enforcing. Timestamps are
+          // a coarse signal — GHL bumps dateUpdated without content changing —
+          // which is exactly why the hash gate still earns its place on top.
+          //
+          // One paginated read serves both: date_updated for this filter and
+          // payload_hash for the gate, handed over via its `storedHashes`
+          // option so the gate adds no second round trip.
+          const existingDates = new Map<string, string>();
+          let prefetchOk = true;
+          for (let page = 0; ; page++) {
+            const from = page * PAGINATION_PAGE_SIZE;
+            const to = from + PAGINATION_PAGE_SIZE - 1;
+            const { data, error } = await supabase
+              .from('opportunities')
+              .select('ghl_opportunity_id, date_updated, payload_hash')
+              .is('deleted_at', null)
+              .range(from, to);
+            if (error) {
+              console.warn(`[EntitySync] syncOpportunities: failed to load diff map (page ${page}): ${error.message} — falling back to full upsert`);
+              existingDates.clear();
+              oppStoredHashes.clear();
+              prefetchOk = false;
+              break;
+            }
+            if (!data || data.length === 0) break;
+            for (const row of data as { ghl_opportunity_id: string; date_updated: string | null; payload_hash: string | null }[]) {
+              if (!row.ghl_opportunity_id) continue;
+              if (row.date_updated) existingDates.set(row.ghl_opportunity_id, row.date_updated);
+              oppStoredHashes.set(row.ghl_opportunity_id, row.payload_hash ?? null);
+            }
+            if (data.length < PAGINATION_PAGE_SIZE) break;
+          }
+          oppHashesPrefetched = prefetchOk;
+
+          toUpsert = filterByNewerTimestamp(
+            fullList,
+            (o) => o.id,
+            (o) => o.dateUpdated || o.updatedAt,
+            existingDates,
+          );
+          skippedUnchanged = fullList.length - toUpsert.length;
+          console.log(`[EntitySync] syncOpportunities: timestamp pre-filter — ${toUpsert.length} candidates, ${skippedUnchanged} unchanged`);
           incrementalPath = 'client-diff';
         }
       }
@@ -671,6 +724,7 @@ export async function syncOpportunities(options?: { mode?: SyncMode }): Promise<
       rows: allRows,
       mode: oppMode,
       label: 'syncOpportunities',
+      storedHashes: oppHashesPrefetched ? oppStoredHashes : undefined,
     });
     const rows = gate.rows;
     skippedUnchanged += gate.skippedUnchanged;
