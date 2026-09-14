@@ -344,6 +344,397 @@ function extractFromTemplates(templates: Record<string, unknown>[]): {
   return { steps, actions, connections };
 }
 
+// ---- Single-workflow detail pipeline (shared by the full sync and refresh_workflow) ----
+
+type SupabaseLike = { from: (table: string) => any };
+
+export interface BuiltWorkflowDetail {
+  workflowDetail: GHLWorkflow;
+  parsedConnections: Array<{ fromStep: string; toStep: string; condition?: string }>;
+  /** True when the node-graph parser found nothing and a fallback had to run. */
+  noNodes: boolean;
+}
+
+export interface WorkflowDetailRowCounts {
+  steps: number;
+  triggers: number;
+  actions: number;
+  connections: number;
+  errors: string[];
+}
+
+/**
+ * Parses ONE workflow's internal-API JSON into the GHLWorkflow shape that
+ * syncWorkflowDetailToSupabase persists.
+ *
+ * v2.3 (2026-09-14): lifted verbatim out of the extractAndSyncWorkflows loop so
+ * refresh_workflow can reach it. refresh_workflow used to update only the
+ * `workflows` row, leaving workflow_steps/_triggers/_actions/_connections at
+ * whatever the last full sync captured — so after any workflow edit the step
+ * rows were stale with no staleness signal, and every reader of workflow_steps
+ * (get_workflow_steps without forceLive, src/analysis/detectors.ts,
+ * src/analysis/graph.ts) silently answered from pre-edit structure. Observed on
+ * cca1f069-9524-4e57-8ebd-d1184704aa39: 11 cached steps against 25 live, two
+ * structural revisions behind, and it produced two wrong diagnostic answers in
+ * one session. Extracting rather than duplicating keeps exactly one
+ * implementation of the parse.
+ *
+ * `workflowSummary` is Partial because refresh_workflow has no list entry to
+ * pass — it supplies only { id } and every field falls back to the internal
+ * JSON's own values, which the deep path already prefers anyway.
+ */
+export async function buildWorkflowDetailFromInternalJson(
+  internalJson: Record<string, unknown>,
+  workflowSummary: Partial<GHLWorkflow> & { id: string },
+  deps: { ghl?: GHLClient; logDiagnostics?: boolean } = {},
+): Promise<BuiltWorkflowDetail> {
+  const ghl = deps.ghl || new GHLClient();
+  const fullJson = internalJson;
+
+  const parsed = parseNodeGraph(fullJson);
+  let parsedConnections = parsed.connections;
+  let noNodes = false;
+
+  if (parsed.triggers.length === 0 && parsed.steps.length === 0 && parsed.actions.length === 0) {
+    noNodes = true;
+
+    // Primary fallback: extract from workflowData.templates (GHL internal format)
+    const wd = fullJson.workflowData as Record<string, unknown> | undefined;
+    if (wd && Array.isArray(wd.templates) && wd.templates.length > 0) {
+      const extracted = extractFromTemplates(wd.templates as Record<string, unknown>[]);
+      parsed.steps = extracted.steps;
+      parsed.actions = extracted.actions;
+      parsedConnections = extracted.connections;
+    }
+
+    // Secondary fallback: try public API if templates extraction also failed
+    if (parsed.steps.length === 0) {
+      try {
+        const publicDetail = await ghl.getWorkflow(workflowSummary.id);
+        if (publicDetail.steps && publicDetail.steps.length > 0) {
+          parsed.steps = publicDetail.steps as GHLWorkflowStep[];
+        }
+        if (publicDetail.triggers && publicDetail.triggers.length > 0) {
+          parsed.triggers = publicDetail.triggers as GHLWorkflowTrigger[];
+        }
+        if (publicDetail.actions && publicDetail.actions.length > 0) {
+          parsed.actions = publicDetail.actions as GHLWorkflow['actions'] & GHLWorkflowTrigger[];
+        }
+      } catch {
+        // Public API fallback is best-effort
+      }
+    }
+  }
+
+  // Fetch triggers from the dedicated backend trigger endpoint
+  const backendTriggers = await ghl.getWorkflowTriggers(workflowSummary.id);
+
+  // Merge trigger sources: prefer backend triggers, fall back to parsed/summary
+  let mergedTriggers: GHLWorkflow['triggers'];
+  if (backendTriggers.length > 0) {
+    mergedTriggers = backendTriggers.map(t => ({
+      ...t,  // Raw data as base (preserves all fields for raw_json)
+      id: (t.id || t._id) as string | undefined,
+      type: (t.type || t.triggerType || t.event) as string | undefined,
+      name: (t.name || t.triggerName || t.type) as string | undefined,
+      value: extractTriggerValue(t as Record<string, unknown>) || undefined,
+      filters: Array.isArray(t.filters) ? t.filters as Record<string, unknown>[] : undefined,
+    }));
+  } else {
+    mergedTriggers = parsed.triggers.length > 0
+      ? parsed.triggers
+      : (fullJson.triggers as GHLWorkflow['triggers']) || workflowSummary.triggers || [];
+  }
+
+  // Diagnostic: the caller decides when this prints (the full sync prints it
+  // for the first workflow of each cycle only — keep that log volume identical).
+  if (deps.logDiagnostics) {
+    console.log(`[WorkflowSync] Trigger diagnostics for "${workflowSummary.name || (fullJson.name as string)}": backendTriggers=${backendTriggers.length}, parsedTriggers=${parsed.triggers.length}, mergedTriggers=${mergedTriggers.length}, parsedActions=${parsed.actions.length}`);
+  }
+
+  // Build a GHLWorkflow from parsed data
+  const workflowDetail: GHLWorkflow = {
+    id: workflowSummary.id,
+    locationId: (fullJson.locationId as string) || workflowSummary.locationId,
+    name: (fullJson.name as string) || workflowSummary.name || 'Unknown',
+    status: (fullJson.status as string) || workflowSummary.status || 'unknown',
+    version: (fullJson.version as number) || workflowSummary.version,
+    steps: parsed.steps.length > 0 ? parsed.steps : (fullJson.steps as GHLWorkflowStep[]) || workflowSummary.steps || [],
+    triggers: mergedTriggers,
+    actions: parsed.actions.length > 0 ? parsed.actions : (fullJson.actions as GHLWorkflow['actions']) || workflowSummary.actions || [],
+  };
+
+  return { workflowDetail, parsedConnections, noNodes };
+}
+
+/**
+ * The `source` value refresh_workflow assigns when the Firebase-authenticated
+ * internal API answered. Only that payload carries step data.
+ */
+export const DEEP_WORKFLOW_SOURCE = 'highlevel_internal_api';
+
+/**
+ * Decides whether a single-workflow refresh may rebuild the detail rows.
+ *
+ * Pure on purpose: the rebuild is a DELETE-then-INSERT, so "should I run it"
+ * is the one decision worth testing without a live Supabase in the way.
+ *
+ * Two refusals, both of which would otherwise destroy good rows:
+ *
+ *   shallow_source_no_step_data — the public workflow LIST resolved this
+ *     workflow (Firebase auth missing or failing). That payload is metadata
+ *     only, so rebuilding from it deletes every cached step and inserts
+ *     nothing.
+ *
+ *   parsed_zero_steps — the deep payload arrived but parsed to no steps at
+ *     all. sync_workflows wipes in this case and that is fine there: it
+ *     re-reads every workflow hourly, so a bad parse self-corrects on the next
+ *     cycle. An on-demand refresh has no cycle behind it, and emptying a good
+ *     cache because the parser hiccuped is the very failure this tool exists
+ *     to fix.
+ *
+ * `parsedStepCount` is null when the source was shallow and nothing was parsed.
+ */
+export function shouldRebuildWorkflowDetail(
+  source: string,
+  parsedStepCount: number | null,
+): { rebuild: boolean; reason: string | null } {
+  if (source !== DEEP_WORKFLOW_SOURCE) {
+    return { rebuild: false, reason: 'shallow_source_no_step_data' };
+  }
+  if (!parsedStepCount) {
+    return { rebuild: false, reason: 'parsed_zero_steps' };
+  }
+  return { rebuild: true, reason: null };
+}
+
+/**
+ * Rebuilds ONE workflow's detail rows: workflow_steps, workflow_connections,
+ * workflow_triggers and workflow_actions, plus the workflows.trigger_* and
+ * workflows.actions backfills that read them back.
+ *
+ * v2.3 (2026-09-14): lifted verbatim out of the extractAndSyncWorkflows loop so
+ * refresh_workflow shares it (see buildWorkflowDetailFromInternalJson above for
+ * the incident). Delete-then-insert ordering is preserved exactly as it was —
+ * migration 011 widened workflow_steps' PK to (workflow_id, step_id) precisely
+ * so this shape works for cloned workflows sharing template step IDs; do not
+ * turn it into a blind upsert path.
+ *
+ * Counters increment ONLY on a successful write and failures come back as
+ * strings in `errors`, so a caller accumulating these into a SyncResult lands on
+ * exactly the numbers the loop used to produce inline.
+ *
+ * `deps.client` is the test seam (same shape as softDeleteMissing's), so the
+ * write sequence can be asserted without a live Supabase.
+ */
+export async function syncWorkflowDetailToSupabase(
+  workflowDetail: GHLWorkflow,
+  parsedConnections: Array<{ fromStep: string; toStep: string; condition?: string }> = [],
+  deps: { client?: SupabaseLike } = {},
+): Promise<WorkflowDetailRowCounts> {
+  const supabase = (deps.client || getSupabaseClient()) as SupabaseLike;
+  const counts: WorkflowDetailRowCounts = { steps: 0, triggers: 0, actions: 0, connections: 0, errors: [] };
+
+  // 5. Clear existing detail data for this workflow before re-inserting
+  await supabase.from('workflow_steps').delete().eq('workflow_id', workflowDetail.id);
+  await supabase.from('workflow_connections').delete().eq('workflow_id', workflowDetail.id);
+  await supabase.from('workflow_triggers').delete().eq('workflow_id', workflowDetail.id);
+  await supabase.from('workflow_actions').delete().eq('workflow_id', workflowDetail.id);
+
+  // v1.9: Accumulate detail rows into in-memory arrays and insert one
+  // batched call per table (was one PostgREST request per row). actionRows
+  // collects both step-level (here) and top-level (section 8) actions and
+  // is inserted once, in section 8, before the actions backfill reads it.
+  const steps = workflowDetail.steps || [];
+  const stepRows: Array<Record<string, unknown>> = [];
+  const actionRows: Array<Record<string, unknown>> = [];
+  const connectionRows: Array<Record<string, unknown>> = [];
+  const triggerRows: Array<Record<string, unknown>> = [];
+
+  // 6. Build step rows (and step-level action rows)
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] as GHLWorkflowStep;
+    const stepId = step.id || `${workflowDetail.id}_step_${i}`;
+    stepRows.push({
+      step_id: stepId,
+      workflow_id: workflowDetail.id,
+      step_order: i + 1,
+      step_type: step.type || 'unknown',
+      delay_minutes: toDelayMinutes(step.delay, step.delayUnit),
+      template_id: step.templateId || null,
+      branch_condition: step.condition || null,
+      raw_json: step,
+    });
+
+    // Extract actions from steps
+    if (step.actions) {
+      for (const action of step.actions) {
+        actionRows.push({
+          workflow_id: workflowDetail.id,
+          step_id: stepId,
+          action_type: action.type || 'unknown',
+          action_target: action.target || null,
+          raw_json: action,
+        });
+      }
+    }
+  }
+
+  // Dedupe steps in-memory on step_id (keep first occurrence) — defends
+  // against a parser emitting the same node twice within one workflow.
+  const seenStepIds = new Set<string>();
+  const dedupedStepRows = stepRows.filter((r) => {
+    const id = r.step_id as string;
+    if (seenStepIds.has(id)) return false;
+    seenStepIds.add(id);
+    return true;
+  });
+
+  // Insert steps: single upsert on the composite (workflow_id, step_id) PK.
+  // ignoreDuplicates is a defensive layer against a manual sync racing the
+  // scheduler mid-workflow. Counter increments only on success.
+  if (dedupedStepRows.length > 0) {
+    const { error: stepsError } = await supabase
+      .from('workflow_steps')
+      .upsert(dedupedStepRows, { onConflict: 'workflow_id,step_id', ignoreDuplicates: true });
+    if (stepsError) {
+      counts.errors.push(`Workflow ${workflowDetail.id} steps insert failed: ${stepsError.message}`);
+    } else {
+      counts.steps += dedupedStepRows.length;
+    }
+  }
+
+  // 6b. Build connections from parsed graph (or fallback to sequential)
+  if (parsedConnections.length > 0) {
+    for (const conn of parsedConnections) {
+      connectionRows.push({
+        workflow_id: workflowDetail.id,
+        from_step: conn.fromStep,
+        to_step: conn.toStep,
+        condition: conn.condition || null,
+      });
+    }
+  } else {
+    // Fallback: build connections between sequential steps
+    for (let j = 0; j < steps.length - 1; j++) {
+      const fromStep = steps[j] as GHLWorkflowStep;
+      const toStep = steps[j + 1] as GHLWorkflowStep;
+      connectionRows.push({
+        workflow_id: workflowDetail.id,
+        from_step: fromStep.id || `${workflowDetail.id}_step_${j}`,
+        to_step: toStep.id || `${workflowDetail.id}_step_${j + 1}`,
+        condition: fromStep.condition || null,
+      });
+    }
+  }
+
+  if (connectionRows.length > 0) {
+    const { error: connectionsError } = await supabase
+      .from('workflow_connections')
+      .insert(connectionRows);
+    if (connectionsError) {
+      counts.errors.push(`Workflow ${workflowDetail.id} connections insert failed: ${connectionsError.message}`);
+    } else {
+      counts.connections += connectionRows.length;
+    }
+  }
+
+  // 7. Build and insert triggers. Triggers must land before the
+  // workflows.trigger_type/trigger_config backfill reads them back below.
+  const triggers = workflowDetail.triggers || [];
+  for (const trigger of triggers) {
+    triggerRows.push({
+      workflow_id: workflowDetail.id,
+      trigger_event: trigger.type || trigger.name || (trigger as Record<string, unknown>).triggerName as string || (trigger as Record<string, unknown>).event as string || 'unknown',
+      trigger_value: extractTriggerValue(trigger as unknown as Record<string, unknown>),
+      raw_json: trigger,
+    });
+  }
+
+  if (triggerRows.length > 0) {
+    const { error: triggersError } = await supabase
+      .from('workflow_triggers')
+      .insert(triggerRows);
+    if (triggersError) {
+      counts.errors.push(`Workflow ${workflowDetail.id} triggers insert failed: ${triggersError.message}`);
+    } else {
+      counts.triggers += triggerRows.length;
+    }
+  }
+
+  // Backfill workflows.trigger_type and trigger_config from workflow_triggers data
+  if (triggers.length > 0) {
+    const { data: insertedTriggers } = await supabase
+      .from('workflow_triggers')
+      .select('trigger_event, raw_json')
+      .eq('workflow_id', workflowDetail.id);
+
+    if (insertedTriggers && insertedTriggers.length > 0) {
+      const { error: triggerUpdateError } = await supabase
+        .from('workflows')
+        .update({
+          trigger_type: insertedTriggers[0].trigger_event,
+          trigger_config: insertedTriggers.map((t: { raw_json: unknown }) => t.raw_json),
+        })
+        .eq('ghl_workflow_id', workflowDetail.id);
+
+      if (triggerUpdateError) {
+        console.error(`[WorkflowSync] Failed to backfill trigger data for "${workflowDetail.name}": ${triggerUpdateError.message}`);
+      }
+    }
+  }
+
+  // 8. Extract top-level actions (not step-level)
+  // In the GHL templates format, each template is both a step and an action (1:1),
+  // so we link actions to their corresponding steps by matching IDs.
+  const stepIds = new Set(steps.map(s => (s as GHLWorkflowStep).id));
+  const topActions = workflowDetail.actions || [];
+  for (const action of topActions) {
+    const actionStepId = action.id && stepIds.has(action.id) ? action.id : null;
+    actionRows.push({
+      workflow_id: workflowDetail.id,
+      step_id: actionStepId,
+      action_type: action.type || 'unknown',
+      action_target: action.target || null,
+      raw_json: action,
+    });
+  }
+
+  // Insert all actions (step-level from section 6 + top-level) in one
+  // batched call, before the actions backfill reads them back below.
+  if (actionRows.length > 0) {
+    const { error: actionsError } = await supabase
+      .from('workflow_actions')
+      .insert(actionRows);
+    if (actionsError) {
+      counts.errors.push(`Workflow ${workflowDetail.id} actions insert failed: ${actionsError.message}`);
+    } else {
+      counts.actions += actionRows.length;
+    }
+  }
+
+  // Backfill workflows.actions from workflow_actions data
+  if (topActions.length > 0) {
+    const { data: insertedActions } = await supabase
+      .from('workflow_actions')
+      .select('action_type, action_target, raw_json')
+      .eq('workflow_id', workflowDetail.id);
+
+    if (insertedActions && insertedActions.length > 0) {
+      const { error: actionsUpdateError } = await supabase
+        .from('workflows')
+        .update({ actions: insertedActions.map((a: { raw_json: unknown }) => a.raw_json) })
+        .eq('ghl_workflow_id', workflowDetail.id);
+
+      if (actionsUpdateError) {
+        console.error(`[WorkflowSync] Failed to backfill actions for "${workflowDetail.name}": ${actionsUpdateError.message}`);
+      }
+    }
+  }
+
+  return counts;
+}
+
 /**
  * Extracts and syncs all workflow data from GoHighLevel into Supabase.
  * Uses the internal backend API (via Firebase auth) for full workflow node graphs.
@@ -492,80 +883,16 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
             }
           }
 
-          const parsed = parseNodeGraph(fullJson);
-          parsedConnections = parsed.connections;
-          if (parsed.triggers.length === 0 && parsed.steps.length === 0 && parsed.actions.length === 0) {
-            noNodesCount++;
-
-            // Primary fallback: extract from workflowData.templates (GHL internal format)
-            const wd = fullJson.workflowData as Record<string, unknown> | undefined;
-            if (wd && Array.isArray(wd.templates) && wd.templates.length > 0) {
-              const extracted = extractFromTemplates(wd.templates as Record<string, unknown>[]);
-              parsed.steps = extracted.steps;
-              parsed.actions = extracted.actions;
-              parsedConnections = extracted.connections;
-            }
-
-            // Secondary fallback: try public API if templates extraction also failed
-            if (parsed.steps.length === 0) {
-              try {
-                const publicDetail = await ghl.getWorkflow(workflowSummary.id);
-                if (publicDetail.steps && publicDetail.steps.length > 0) {
-                  parsed.steps = publicDetail.steps as GHLWorkflowStep[];
-                }
-                if (publicDetail.triggers && publicDetail.triggers.length > 0) {
-                  parsed.triggers = publicDetail.triggers as GHLWorkflowTrigger[];
-                }
-                if (publicDetail.actions && publicDetail.actions.length > 0) {
-                  parsed.actions = publicDetail.actions as GHLWorkflow['actions'] & GHLWorkflowTrigger[];
-                }
-              } catch {
-                // Public API fallback is best-effort
-              }
-            }
-          }
-
-          // Fetch triggers from the dedicated backend trigger endpoint
-          const backendTriggers = await ghl.getWorkflowTriggers(workflowSummary.id);
-
-          // v1.8: Trigger API response logging — gated behind DEBUG_WORKFLOW_SYNC.
-          // This log line runs inside ghl.getWorkflowTriggers() in ghl.ts, not
-          // here — the gating applies at the source. We still log trigger
-          // diagnostics for the first workflow of each cycle below.
-
-          // Merge trigger sources: prefer backend triggers, fall back to parsed/summary
-          let mergedTriggers: GHLWorkflow['triggers'];
-          if (backendTriggers.length > 0) {
-            mergedTriggers = backendTriggers.map(t => ({
-              ...t,  // Raw data as base (preserves all fields for raw_json)
-              id: (t.id || t._id) as string | undefined,
-              type: (t.type || t.triggerType || t.event) as string | undefined,
-              name: (t.name || t.triggerName || t.type) as string | undefined,
-              value: extractTriggerValue(t as Record<string, unknown>) || undefined,
-              filters: Array.isArray(t.filters) ? t.filters as Record<string, unknown>[] : undefined,
-            }));
-          } else {
-            mergedTriggers = parsed.triggers.length > 0
-              ? parsed.triggers
-              : (fullJson.triggers as GHLWorkflow['triggers']) || workflowSummary.triggers || [];
-          }
-
-          // Diagnostic: log trigger/action counts for first workflow per sync cycle
-          if (result.workflows_synced === 0) {
-            console.log(`[WorkflowSync] Trigger diagnostics for "${workflowSummary.name}": backendTriggers=${backendTriggers.length}, parsedTriggers=${parsed.triggers.length}, mergedTriggers=${mergedTriggers.length}, parsedActions=${parsed.actions.length}`);
-          }
-
-          // Build a GHLWorkflow from parsed data
-          workflowDetail = {
-            id: workflowSummary.id,
-            locationId: (fullJson.locationId as string) || workflowSummary.locationId,
-            name: (fullJson.name as string) || workflowSummary.name,
-            status: (fullJson.status as string) || workflowSummary.status,
-            version: (fullJson.version as number) || workflowSummary.version,
-            steps: parsed.steps.length > 0 ? parsed.steps : (fullJson.steps as GHLWorkflowStep[]) || workflowSummary.steps || [],
-            triggers: mergedTriggers,
-            actions: parsed.actions.length > 0 ? parsed.actions : (fullJson.actions as GHLWorkflow['actions']) || workflowSummary.actions || [],
-          };
+          const built = await buildWorkflowDetailFromInternalJson(
+            fullJson,
+            workflowSummary,
+            // Diagnostics for the first workflow of each cycle only — same log
+            // volume this block printed inline before the extraction.
+            { ghl, logDiagnostics: result.workflows_synced === 0 },
+          );
+          if (built.noNodes) noNodesCount++;
+          parsedConnections = built.parsedConnections;
+          workflowDetail = built.workflowDetail;
         } else {
           // No internal API — call public API individual endpoint for more detail
           try {
@@ -681,202 +1008,19 @@ export async function extractAndSyncWorkflows(options: SyncOptions = {}): Promis
           detailSkipped++;
         }
 
-        // 5. Clear existing detail data for this workflow before re-inserting
-        await supabase.from('workflow_steps').delete().eq('workflow_id', workflowDetail.id);
-        await supabase.from('workflow_connections').delete().eq('workflow_id', workflowDetail.id);
-        await supabase.from('workflow_triggers').delete().eq('workflow_id', workflowDetail.id);
-        await supabase.from('workflow_actions').delete().eq('workflow_id', workflowDetail.id);
-
-        // v1.9: Accumulate detail rows into in-memory arrays and insert one
-        // batched call per table (was one PostgREST request per row). actionRows
-        // collects both step-level (here) and top-level (section 8) actions and
-        // is inserted once, in section 8, before the actions backfill reads it.
-        const steps = workflowDetail.steps || [];
-        const stepRows: Array<Record<string, unknown>> = [];
-        const actionRows: Array<Record<string, unknown>> = [];
-        const connectionRows: Array<Record<string, unknown>> = [];
-        const triggerRows: Array<Record<string, unknown>> = [];
-
-        // 6. Build step rows (and step-level action rows)
-        for (let i = 0; i < steps.length; i++) {
-          const step = steps[i] as GHLWorkflowStep;
-          const stepId = step.id || `${workflowDetail.id}_step_${i}`;
-          stepRows.push({
-            step_id: stepId,
-            workflow_id: workflowDetail.id,
-            step_order: i + 1,
-            step_type: step.type || 'unknown',
-            delay_minutes: toDelayMinutes(step.delay, step.delayUnit),
-            template_id: step.templateId || null,
-            branch_condition: step.condition || null,
-            raw_json: step,
-          });
-
-          // Extract actions from steps
-          if (step.actions) {
-            for (const action of step.actions) {
-              actionRows.push({
-                workflow_id: workflowDetail.id,
-                step_id: stepId,
-                action_type: action.type || 'unknown',
-                action_target: action.target || null,
-                raw_json: action,
-              });
-            }
-          }
-        }
-
-        // Dedupe steps in-memory on step_id (keep first occurrence) — defends
-        // against a parser emitting the same node twice within one workflow.
-        const seenStepIds = new Set<string>();
-        const dedupedStepRows = stepRows.filter((r) => {
-          const id = r.step_id as string;
-          if (seenStepIds.has(id)) return false;
-          seenStepIds.add(id);
-          return true;
-        });
-
-        // Insert steps: single upsert on the composite (workflow_id, step_id) PK.
-        // ignoreDuplicates is a defensive layer against a manual sync racing the
-        // scheduler mid-workflow. Counter increments only on success.
-        if (dedupedStepRows.length > 0) {
-          const { error: stepsError } = await supabase
-            .from('workflow_steps')
-            .upsert(dedupedStepRows, { onConflict: 'workflow_id,step_id', ignoreDuplicates: true });
-          if (stepsError) {
-            result.errors.push(`Workflow ${workflowDetail.id} steps insert failed: ${stepsError.message}`);
-          } else {
-            result.steps_synced += dedupedStepRows.length;
-          }
-        }
-
-        // 6b. Build connections from parsed graph (or fallback to sequential)
-        if (parsedConnections.length > 0) {
-          for (const conn of parsedConnections) {
-            connectionRows.push({
-              workflow_id: workflowDetail.id,
-              from_step: conn.fromStep,
-              to_step: conn.toStep,
-              condition: conn.condition || null,
-            });
-          }
-        } else {
-          // Fallback: build connections between sequential steps
-          for (let j = 0; j < steps.length - 1; j++) {
-            const fromStep = steps[j] as GHLWorkflowStep;
-            const toStep = steps[j + 1] as GHLWorkflowStep;
-            connectionRows.push({
-              workflow_id: workflowDetail.id,
-              from_step: fromStep.id || `${workflowDetail.id}_step_${j}`,
-              to_step: toStep.id || `${workflowDetail.id}_step_${j + 1}`,
-              condition: fromStep.condition || null,
-            });
-          }
-        }
-
-        if (connectionRows.length > 0) {
-          const { error: connectionsError } = await supabase
-            .from('workflow_connections')
-            .insert(connectionRows);
-          if (connectionsError) {
-            result.errors.push(`Workflow ${workflowDetail.id} connections insert failed: ${connectionsError.message}`);
-          } else {
-            result.connections_synced += connectionRows.length;
-          }
-        }
-
-        // 7. Build and insert triggers. Triggers must land before the
-        // workflows.trigger_type/trigger_config backfill reads them back below.
-        const triggers = workflowDetail.triggers || [];
-        for (const trigger of triggers) {
-          triggerRows.push({
-            workflow_id: workflowDetail.id,
-            trigger_event: trigger.type || trigger.name || (trigger as Record<string, unknown>).triggerName as string || (trigger as Record<string, unknown>).event as string || 'unknown',
-            trigger_value: extractTriggerValue(trigger as unknown as Record<string, unknown>),
-            raw_json: trigger,
-          });
-        }
-
-        if (triggerRows.length > 0) {
-          const { error: triggersError } = await supabase
-            .from('workflow_triggers')
-            .insert(triggerRows);
-          if (triggersError) {
-            result.errors.push(`Workflow ${workflowDetail.id} triggers insert failed: ${triggersError.message}`);
-          } else {
-            result.triggers_synced += triggerRows.length;
-          }
-        }
-
-        // Backfill workflows.trigger_type and trigger_config from workflow_triggers data
-        if (triggers.length > 0) {
-          const { data: insertedTriggers } = await supabase
-            .from('workflow_triggers')
-            .select('trigger_event, raw_json')
-            .eq('workflow_id', workflowDetail.id);
-
-          if (insertedTriggers && insertedTriggers.length > 0) {
-            const { error: triggerUpdateError } = await supabase
-              .from('workflows')
-              .update({
-                trigger_type: insertedTriggers[0].trigger_event,
-                trigger_config: insertedTriggers.map(t => t.raw_json),
-              })
-              .eq('ghl_workflow_id', workflowDetail.id);
-
-            if (triggerUpdateError) {
-              console.error(`[WorkflowSync] Failed to backfill trigger data for "${workflowDetail.name}": ${triggerUpdateError.message}`);
-            }
-          }
-        }
-
-        // 8. Extract top-level actions (not step-level)
-        // In the GHL templates format, each template is both a step and an action (1:1),
-        // so we link actions to their corresponding steps by matching IDs.
-        const stepIds = new Set(steps.map(s => (s as GHLWorkflowStep).id));
-        const topActions = workflowDetail.actions || [];
-        for (const action of topActions) {
-          const actionStepId = action.id && stepIds.has(action.id) ? action.id : null;
-          actionRows.push({
-            workflow_id: workflowDetail.id,
-            step_id: actionStepId,
-            action_type: action.type || 'unknown',
-            action_target: action.target || null,
-            raw_json: action,
-          });
-        }
-
-        // Insert all actions (step-level from section 6 + top-level) in one
-        // batched call, before the actions backfill reads them back below.
-        if (actionRows.length > 0) {
-          const { error: actionsError } = await supabase
-            .from('workflow_actions')
-            .insert(actionRows);
-          if (actionsError) {
-            result.errors.push(`Workflow ${workflowDetail.id} actions insert failed: ${actionsError.message}`);
-          } else {
-            result.actions_synced += actionRows.length;
-          }
-        }
-
-        // Backfill workflows.actions from workflow_actions data
-        if (topActions.length > 0) {
-          const { data: insertedActions } = await supabase
-            .from('workflow_actions')
-            .select('action_type, action_target, raw_json')
-            .eq('workflow_id', workflowDetail.id);
-
-          if (insertedActions && insertedActions.length > 0) {
-            const { error: actionsUpdateError } = await supabase
-              .from('workflows')
-              .update({ actions: insertedActions.map(a => a.raw_json) })
-              .eq('ghl_workflow_id', workflowDetail.id);
-
-            if (actionsUpdateError) {
-              console.error(`[WorkflowSync] Failed to backfill actions for "${workflowDetail.name}": ${actionsUpdateError.message}`);
-            }
-          }
-        }
+        // 5-8. Rebuild this workflow's detail rows. Shared verbatim with
+        // refresh_workflow so a single-workflow refresh and a full sync can
+        // never disagree about what the cached structure should look like.
+        const detailCounts = await syncWorkflowDetailToSupabase(
+          workflowDetail,
+          parsedConnections,
+          { client: supabase },
+        );
+        result.steps_synced += detailCounts.steps;
+        result.connections_synced += detailCounts.connections;
+        result.triggers_synced += detailCounts.triggers;
+        result.actions_synced += detailCounts.actions;
+        result.errors.push(...detailCounts.errors);
 
         // v2.2: record the hash ONLY now, after the full rebuild succeeded.
         // Writing it here rather than in the workflow upsert above is what makes

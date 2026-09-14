@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
-import { extractAndSyncWorkflows } from '../extractor/workflow-extractor.js';
+import {
+  extractAndSyncWorkflows,
+  buildWorkflowDetailFromInternalJson,
+  syncWorkflowDetailToSupabase,
+  shouldRebuildWorkflowDetail,
+  DEEP_WORKFLOW_SOURCE,
+} from '../extractor/workflow-extractor.js';
 import { nowET } from '../utils/timezone.js';
 import {
   syncContacts,
@@ -247,7 +253,7 @@ export const workflowTools = {
   },
 
   refresh_workflow: {
-    description: 'Refresh a single workflow from the GHL API and update the Supabase cache. Faster than a full sync.',
+    description: 'Refresh a single workflow from the GHL API and update the Supabase cache, rebuilding its workflow_steps/_triggers/_actions/_connections rows. Faster than a full sync. Step rows are rebuilt only when the deep internal API resolved the workflow — check steps_rebuilt.',
     inputSchema: z.object({
       workflowId: z.string().describe('GHL workflow ID to refresh'),
     }),
@@ -331,6 +337,44 @@ export const workflowTools = {
         throw new Error(`Failed to update cache: ${upsertError.message}`);
       }
 
+      // Rebuild the detail rows — workflow_steps, workflow_connections,
+      // workflow_triggers, workflow_actions.
+      //
+      // 2026-09-14: this used to write ONLY the workflows row. raw_json went
+      // current while the step rows kept whatever the last full sync captured,
+      // and every reader of workflow_steps (get_workflow_steps without
+      // forceLive, src/analysis/detectors.ts, src/analysis/graph.ts, any direct
+      // query) silently answered from pre-edit structure with no staleness
+      // signal. On cca1f069-9524-4e57-8ebd-d1184704aa39 the cache sat two
+      // structural revisions behind — 11 steps against 25 live — and produced
+      // two wrong diagnostic answers in one session.
+      //
+      // Only the internal-API path carries step data. The public list fallback
+      // is metadata only, so rebuilding from it would delete good rows and
+      // replace them with nothing. steps_rebuilt tells the caller which
+      // happened, so "rebuilt, zero steps" is distinguishable from
+      // "not rebuilt".
+
+      // Parse only on the deep path — the shallow payload has nothing to parse,
+      // and buildWorkflowDetailFromInternalJson costs a backend trigger call.
+      const built = source === DEEP_WORKFLOW_SOURCE
+        ? await buildWorkflowDetailFromInternalJson(rawJson, { id: args.workflowId }, { ghl })
+        : null;
+
+      const gate = shouldRebuildWorkflowDetail(
+        source,
+        built ? (built.workflowDetail.steps?.length || 0) : null,
+      );
+
+      let detailCounts: { steps: number; triggers: number; actions: number; connections: number; errors: string[] } | null = null;
+      if (gate.rebuild && built) {
+        detailCounts = await syncWorkflowDetailToSupabase(built.workflowDetail, built.parsedConnections);
+      }
+
+      // detail_hash is deliberately NOT written here. The next full sync then
+      // sees a hash mismatch and rebuilds this workflow — a redundant rebuild,
+      // never a skipped one. That is the safe direction to be wrong in.
+
       return {
         workflow_id: args.workflowId,
         name,
@@ -339,6 +383,13 @@ export const workflowTools = {
         source,
         cache_updated: true,
         preserved_existing_raw_json: preservedExistingRawJson,
+        steps_rebuilt: gate.rebuild,
+        steps_rebuilt_reason: gate.reason,
+        steps_synced: detailCounts ? detailCounts.steps : null,
+        triggers_synced: detailCounts ? detailCounts.triggers : null,
+        actions_synced: detailCounts ? detailCounts.actions : null,
+        connections_synced: detailCounts ? detailCounts.connections : null,
+        detail_errors: detailCounts ? detailCounts.errors : [],
         refreshed_at: nowET(),
         raw_json_top_level_keys: Object.keys(rawJson),
       };
