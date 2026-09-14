@@ -366,6 +366,7 @@ test('the gate actually skips timestamp-only churn end to end', async () => {
 import {
   opportunityHashableContent,
   contactHashableContent,
+  DELTA_DEFAULTS,
 } from '../dist/extractor/entity-syncer.js';
 
 test('OPPORTUNITY: a dateUpdated bump alone produces an identical hash', () => {
@@ -442,5 +443,55 @@ test('CONTACT: the hashed content contains no volatile keys', () => {
   const keys = Object.keys(contactHashableContent({ id: 'c1', dateUpdated: 'x' }));
   for (const banned of ['date_updated', 'synced_at', 'updated_at', 'payload_hash']) {
     assert.ok(!keys.includes(banned), `${banned} must never be hashed`);
+  }
+});
+
+// ── the per-entity defaults ───────────────────────────────────────────────
+//
+// These are configuration, not logic, which is exactly why they need a test:
+// a default drifting back to `shadow` breaks nothing, raises no error, and
+// costs ~23,000 needless writes a night until somebody happens to look.
+//
+// Opportunities spent three days enforcing only because a Railway variable
+// said so while this table still read `shadow`. Deleting that variable would
+// have silently restored full-table writes. The defaults now carry the intent
+// on their own.
+
+test('the big record tables enforce by default, not shadow', () => {
+  assert.strictEqual(DELTA_DEFAULTS.opportunities, 'enforce');
+  assert.strictEqual(DELTA_DEFAULTS.contacts, 'enforce');
+});
+
+test('the small config tables still enforce', () => {
+  for (const entity of ['appointments', 'custom_fields', 'custom_values', 'tags', 'trigger_links']) {
+    assert.strictEqual(DELTA_DEFAULTS[entity], 'enforce', `${entity} must stay enforcing`);
+  }
+});
+
+test('conversations stays on shadow until its hash is measured', () => {
+  // Not an oversight. Conversation payloads have not been checked for hash
+  // stability the way opportunities and contacts were, and an unstable hash
+  // under enforce writes everything anyway while a too-sticky one skips real
+  // changes. Measure first, then graduate it.
+  assert.strictEqual(DELTA_DEFAULTS.conversations, 'shadow');
+});
+
+test('an env var still overrides the default in both directions', () => {
+  // The rollback path has to keep working: SYNC_DELTA_MODE=off must be able to
+  // pull an enforcing entity back, without a redeploy.
+  const saved = { entity: process.env.SYNC_DELTA_MODE_CONTACTS, global: process.env.SYNC_DELTA_MODE };
+  try {
+    delete process.env.SYNC_DELTA_MODE_CONTACTS;
+    process.env.SYNC_DELTA_MODE = 'off';
+    assert.strictEqual(deltaMode('contacts', DELTA_DEFAULTS.contacts), 'off');
+
+    process.env.SYNC_DELTA_MODE_CONTACTS = 'shadow';
+    assert.strictEqual(deltaMode('contacts', DELTA_DEFAULTS.contacts), 'shadow',
+      'the per-entity variable must win over the global one');
+  } finally {
+    if (saved.entity === undefined) delete process.env.SYNC_DELTA_MODE_CONTACTS;
+    else process.env.SYNC_DELTA_MODE_CONTACTS = saved.entity;
+    if (saved.global === undefined) delete process.env.SYNC_DELTA_MODE;
+    else process.env.SYNC_DELTA_MODE = saved.global;
   }
 });
