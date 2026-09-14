@@ -130,9 +130,23 @@ const DELTA_DEFAULTS = {
   trigger_links: 'enforce',
   opportunities: 'enforce',
   contacts: 'enforce',
-  // Left on shadow deliberately: conversation payloads have not been measured
-  // for hash stability the way the two above have.
-  conversations: 'shadow',
+  // NO conversations ENTRY — deliberately. syncConversationsAndMessages does not
+  // use the gate at all and does not need it, so a mode here would be dead
+  // config that reads like an un-optimised sync awaiting graduation. It carried
+  // a 'shadow' entry until 2026-09-14, which is exactly how it was misread.
+  //
+  // That sync is watermark-driven: it asks GHL only for conversations updated
+  // since the last run (10-minute overlap buffer) and getAllMessages stops
+  // paging once a page predates the floor. It never fetches the unchanged
+  // records, so there is nothing for a hash gate to skip. Measured the same day
+  // contacts was graduated:
+  //
+  //   conversations  17,792 rows,  325 written/24h (1.8%),  6 per cycle
+  //   messages       38,272 rows,  455 written/24h,         5 per cycle
+  //
+  // Both runs finish in ~3 seconds. Compare contacts before its fix: 23,795 of
+  // 23,984 rewritten in 24h. Adding a payload_hash column and a gate here would
+  // cost a prefetch round trip per cycle to skip approximately nothing.
 } as const;
 
 // Exported so the defaults themselves are testable — the same reasoning as the

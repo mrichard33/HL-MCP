@@ -468,12 +468,21 @@ test('the small config tables still enforce', () => {
   }
 });
 
-test('conversations stays on shadow until its hash is measured', () => {
-  // Not an oversight. Conversation payloads have not been checked for hash
-  // stability the way opportunities and contacts were, and an unstable hash
-  // under enforce writes everything anyway while a too-sticky one skips real
-  // changes. Measure first, then graduate it.
-  assert.strictEqual(DELTA_DEFAULTS.conversations, 'shadow');
+test('conversations has no entry at all — it does not use the gate', () => {
+  // It carried a 'shadow' entry until 2026-09-14, which read as "un-optimised,
+  // awaiting graduation" and prompted exactly that question. It is neither.
+  //
+  // syncConversationsAndMessages never calls gateByPayloadHash, and the
+  // conversations table has no payload_hash column. The sync is watermark-
+  // driven: it asks GHL only for what changed since the last run, so the
+  // unchanged records are never fetched and there is nothing to skip. Measured
+  // the day contacts was graduated: 325 of 17,792 conversations written in 24h
+  // (1.8%), ~6 per cycle, ~3s per run.
+  //
+  // This asserts the ABSENCE so nobody re-adds a mode that nothing reads.
+  assert.ok(!('conversations' in DELTA_DEFAULTS),
+    'conversations must not carry a delta mode — no code reads one, and its ' +
+    'presence implies a pending optimisation that does not exist');
 });
 
 test('an env var still overrides the default in both directions', () => {
