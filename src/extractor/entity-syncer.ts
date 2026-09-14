@@ -100,18 +100,45 @@ const INCREMENTAL_OVERLAP_MINUTES = parseInt(
 //
 // Per-entity defaults. The small config tables go straight to `enforce`: row
 // counts are tiny, raw_json already carries the whole payload, and there is no
-// blast radius. The big record tables default to `shadow` so a day of real
-// numbers is visible in the logs before anything is actually skipped.
+// blast radius. The big record tables started at `shadow` so a day of real
+// numbers would be visible in the logs before anything was actually skipped.
+//
+// v2.3: opportunities and contacts graduate to `enforce`. The shadow day has
+// been served and measured on production:
+//
+//   opportunities  enforce since 2026-09-11: ~21,000 writes/cycle → 4 (avg
+//                  over 25 cycles), 16 on the nightly full reconcile, with no
+//                  missed change in 3 days.
+//   contacts       still shadow on 2026-09-14: the nightly full reconcile
+//                  rewrote 23,630 of 23,984 rows, essentially the whole table,
+//                  while incremental cycles touched 120-170.
+//
+// Opportunities was enforcing only because a Railway variable said so, which
+// left this table claiming `shadow` while production did the opposite. Defaults
+// now state the real intent, so losing the variable cannot silently revert a
+// sync to full-table writes.
+//
+// The gate narrows the contact row upsert and nothing else: the tag-diff loop,
+// the lead-event builder and softDeleteMissing all iterate the full fetched
+// list, not gate.rows. Keep it that way — feeding gate.rows to softDeleteMissing
+// would delete every record the gate skipped.
 const DELTA_DEFAULTS = {
   appointments: 'enforce',
   custom_fields: 'enforce',
   custom_values: 'enforce',
   tags: 'enforce',
   trigger_links: 'enforce',
-  opportunities: 'shadow',
-  contacts: 'shadow',
+  opportunities: 'enforce',
+  contacts: 'enforce',
+  // Left on shadow deliberately: conversation payloads have not been measured
+  // for hash stability the way the two above have.
   conversations: 'shadow',
 } as const;
+
+// Exported so the defaults themselves are testable — the same reasoning as the
+// hashable-content functions below. A default silently drifting back to `shadow`
+// costs ~23,000 needless writes a night and nothing would fail.
+export { DELTA_DEFAULTS };
 
 // ---- What gets HASHED (exported so the decision itself is testable) ----
 //
