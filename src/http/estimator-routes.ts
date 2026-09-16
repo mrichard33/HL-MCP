@@ -26,29 +26,64 @@ import { getSupabaseClient } from '../clients/supabase.js';
 
 const ESTIMATOR_PATH = '/webhook/estimator-event';
 
-// Funnel vocabulary — anything else is rejected with 400.
+// ⚠️ THIS ENDPOINT CURRENTLY HAS NO CALLERS (verified 2026-09-16).
 //
-//   event_type             step  fired when
-//   ---------------------  ----  ------------------------------------------
-//   page_view              1     page load
-//   step1_complete         1     Step 1 validation passes (GHL contact created)
-//   window_added           2     "Add Window to Estimate" clicked
+// The calculator posts straight to Supabase from its own server
+// (window-calculator/server.js), bypassing this route entirely. So the rate
+// limit, the payload cap, the CORS allowlist and this vocabulary protect
+// nothing today — which is why events outside the list below reached the table
+// without ever being rejected.
+//
+// Whether this should become the front door is an open decision. It is left in
+// place and corrected rather than deleted so that decision stays available;
+// deleting it would quietly settle it.
+//
+// Funnel vocabulary — anything else is rejected with 400. Corrected here
+// against what the calculator actually emits and what the table actually
+// contains, not against the original spec.
+//
+//   event_type             step  fired when                         rows 2026-09-16
+//   ---------------------  ----  --------------------------------   ---------------
+//   page_view              1     page load                          79
+//   step_view              1-4   any step shown (payload: step)     114
+//   step1_complete         1     Step 1 passes (GHL contact made)    11
+//   consent_checked        1     consent box ticked                 11
+//   window_added           2     "Add Window to Estimate" clicked    27
 //                                (payload: style, qty, isImpact, unitedInches)
-//   step3_reached          3     Step 3 (email/contact) shown
-//   step3_complete         3     email + consent validation passes
-//   estimate_completed     4     Step 4 rendered
+//   step3_complete         3     email + consent validation passes   9
+//   estimate_completed     4     Step 4 rendered                      8
 //                                (payload: estimate_total, window_count, low, high)
-//   verify_cta_clicked     4     "Secure My Exact Price" clicked
-//   keep_estimate_clicked  4     "Keep My Estimate for Now" clicked
+//   verify_sent            4     verification code sent               9
+//   verify_success         4     code entered correctly               9
+//   verify_failed          4     code rejected                        0
+//   contact_failed         1     GHL contact create failed            0
+//   left_unverified        4     left without verifying               0
+//   keep_estimate_shown    4     "Keep My Estimate for Now" shown     0
+//   verify_cta_clicked     4     "Secure My Exact Price" clicked      0
+//
+// Two corrections worth naming. `step3_reached` and `keep_estimate_clicked`
+// were in this list and are emitted by nothing — the emitter sends
+// `keep_estimate_shown`, which is a different claim (shown, not clicked), so
+// they are removed rather than kept as aspirations.
+//
+// `verify_cta_clicked` is emitted by the browser bundle but has never landed a
+// row, while `verify_sent` has nine. Verification is evidently being reached by
+// some path other than that button. Worth a look, but not from here.
 const EVENT_VOCABULARY = new Set([
   'page_view',
+  'step_view',
   'step1_complete',
+  'consent_checked',
   'window_added',
-  'step3_reached',
   'step3_complete',
   'estimate_completed',
   'verify_cta_clicked',
-  'keep_estimate_clicked',
+  'verify_sent',
+  'verify_success',
+  'verify_failed',
+  'contact_failed',
+  'left_unverified',
+  'keep_estimate_shown',
 ]);
 
 const ALLOWED_ORIGINS = new Set([
