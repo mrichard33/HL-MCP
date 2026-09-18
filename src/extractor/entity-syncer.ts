@@ -192,7 +192,59 @@ export function opportunityHashableContent(o: GHLOpportunity): Record<string, un
   };
 }
 
-export function contactHashableContent(c: GHLContact): Record<string, unknown> {
+/** What the contacts mirror stores for a contact's address, as the prefetch reads it. */
+export type StoredContactAddress = {
+  address1?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postal_code?: string | null;
+};
+
+/**
+ * The four address columns for one contact — or null when they must be left alone.
+ *
+ * 2026-09-18 (migration 017). Address is mirrored so market assignment,
+ * service-area checks, dedup and the LP↔GHL link repair stop needing a live GHL
+ * fetch for a postal code.
+ *
+ * NEVER NULL AN EXISTING VALUE. GHL can and does return a contact with the
+ * address absent, and `c.address1 || null` would then erase a good value — the
+ * exact defect that cost LP-MCP three separate rounds of repair on
+ * ghl_contact_id (sync-leads v10.1, then #784, then lp_notes/lp_call_logs).
+ * Here the fix cannot be "omit the key": `allRows` is bulk-upserted as an ARRAY
+ * and PostgREST rejects a batch whose objects do not all carry the same keys,
+ * so a per-row omission would fail the whole batch the moment one contact has
+ * an address and another does not. Instead the stored value is carried forward
+ * from the prefetch the cycle already performs, which keeps the key set uniform
+ * AND preserves the value.
+ *
+ * `stored === undefined` means the prefetch could not tell us what is on the
+ * row. The caller then passes null for EVERY contact in the cycle, the four
+ * keys are omitted from every row uniformly, and the upsert leaves the columns
+ * untouched. Writing nothing is always recoverable; writing a null over a good
+ * address is not.
+ */
+export function contactAddressFields(
+  c: GHLContact,
+  stored: StoredContactAddress | undefined,
+): Record<string, unknown> {
+  return {
+    address1: c.address1 ?? stored?.address1 ?? null,
+    city: c.city ?? stored?.city ?? null,
+    state: c.state ?? stored?.state ?? null,
+    postal_code: c.postalCode ?? stored?.postal_code ?? null,
+  };
+}
+
+/**
+ * @param stored  the contact's currently-stored address, from the cycle's
+ *   prefetch. `null` means the address columns are left out of the hash and out
+ *   of the write entirely (prefetch failed, or migration 017 is not applied).
+ */
+export function contactHashableContent(
+  c: GHLContact,
+  stored?: StoredContactAddress | null,
+): Record<string, unknown> {
   return {
     ghl_contact_id: c.id,
     ghl_location_id: c.locationId || null,
@@ -205,6 +257,17 @@ export function contactHashableContent(c: GHLContact): Record<string, unknown> {
     source: c.source || null,
     custom_fields: c.customFields || {},
     date_added: c.dateAdded || null,
+    // Inside the hash on purpose. That is what makes the existing 25,003 rows
+    // populate: the gate skips a contact whose hash is unchanged, so an address
+    // outside the hash would stay NULL forever on every row that never changes
+    // again. Including it changes every hash once, at deploy, and the next
+    // cycle backfills the whole table — then settles, because the value is
+    // stable from then on.
+    //
+    // `null` is the explicit "leave these columns alone" signal and omits all
+    // four. `undefined` means "no stored row to carry forward" — a contact the
+    // prefetch did not find, i.e. a new one — and writes the payload's address.
+    ...(stored === null ? {} : contactAddressFields(c, stored)),
   };
 }
 
@@ -516,26 +579,77 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     //
     // v2.2: this same read now also collects payload_hash, so the delta gate
     // below costs no extra round trip.
+    //
+    // 2026-09-18 (migration 017): the same read now also collects the four
+    // address columns, so a payload that omits an address can carry the stored
+    // value forward instead of nulling it. Still no extra round trip.
     const previousTagsByContact = new Map<string, string[]>();
     const storedContactHashes = new Map<string, string | null>();
+    const storedContactAddress = new Map<string, StoredContactAddress>();
     let hashPrefetchOk = true;
+    // Separate from hashPrefetchOk on purpose. The hash gate FAILS OPEN — a
+    // failed prefetch there costs one ungated cycle and nothing else. The
+    // address must fail CLOSED: without the stored value we cannot tell an
+    // absent address from a deleted one, and guessing writes a null over a good
+    // one. False here omits all four columns from every row this cycle.
+    let addressPrefetchOk = true;
     {
       const ids = contacts.map((c) => c.id);
+      // Selected by name, not '*': a column that does not exist yet (migration
+      // 017 unapplied) makes PostgREST reject the whole select, which would
+      // take the tag diff and the hash gate down with it. Probed separately so
+      // the address is the only thing that degrades.
+      const ADDRESS_COLS = 'address1, city, state, postal_code';
       for (const slice of chunk(ids, UPSERT_BATCH_SIZE)) {
+        // Typed `string`, not a template literal: supabase-js parses a literal
+        // select at the type level and rejects an interpolated one outright.
+        const selectCols: string =
+          `ghl_contact_id, tags, payload_hash${addressPrefetchOk ? `, ${ADDRESS_COLS}` : ''}`;
         const { data: existing, error } = await supabase
           .from('contacts')
-          .select('ghl_contact_id, tags, payload_hash')
+          .select(selectCols)
           .in('ghl_contact_id', slice);
         if (error) {
+          if (addressPrefetchOk) {
+            // Most likely migration 017 is not applied yet. Drop the address
+            // columns and retry this slice before giving up on the gate — the
+            // hash gate working is worth far more than the address is.
+            console.warn(`[EntitySync] syncContacts: prefetch failed with address columns (${error.message}) — retrying without them (migration 017 not applied?)`);
+            addressPrefetchOk = false;
+            const retry = await supabase
+              .from('contacts')
+              .select('ghl_contact_id, tags, payload_hash')
+              .in('ghl_contact_id', slice);
+            if (!retry.error) {
+              for (const row of (retry.data || []) as { ghl_contact_id: string; tags: string[] | null; payload_hash: string | null }[]) {
+                previousTagsByContact.set(row.ghl_contact_id, row.tags || []);
+                storedContactHashes.set(row.ghl_contact_id, row.payload_hash ?? null);
+              }
+              continue;
+            }
+          }
           // Fail open on the gate; the tag diff degrades to "no previous tags"
           // exactly as it did before when this select returned nothing.
           console.warn(`[EntitySync] syncContacts: tag/hash prefetch failed (${error.message}) — cycle runs ungated`);
           hashPrefetchOk = false;
+          addressPrefetchOk = false;
           break;
         }
-        for (const row of (existing || []) as { ghl_contact_id: string; tags: string[] | null; payload_hash: string | null }[]) {
+        // Through `unknown`: a non-literal select makes supabase-js infer
+        // GenericStringError[], which does not overlap the row shape.
+        const prefetched = (existing || []) as unknown as
+          ({ ghl_contact_id: string; tags: string[] | null; payload_hash: string | null } & StoredContactAddress)[];
+        for (const row of prefetched) {
           previousTagsByContact.set(row.ghl_contact_id, row.tags || []);
           storedContactHashes.set(row.ghl_contact_id, row.payload_hash ?? null);
+          if (addressPrefetchOk) {
+            storedContactAddress.set(row.ghl_contact_id, {
+              address1: row.address1 ?? null,
+              city: row.city ?? null,
+              state: row.state ?? null,
+              postal_code: row.postal_code ?? null,
+            });
+          }
         }
       }
     }
@@ -545,7 +659,15 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
     // carried the identical defect: date_updated inside the hashed content, with
     // a `|| now` fallback that rewrote every timestamp-less contact on every
     // cycle forever.
-    const hashableRows = contacts.map(contactHashableContent);
+    // `null` when the address prefetch is unavailable — every row in the cycle
+    // then omits the four columns uniformly (PostgREST needs one key set across
+    // the batch) and the upsert leaves whatever is stored alone. A contact the
+    // prefetch simply did not find passes `undefined`: there is no stored row,
+    // so the payload's address is what gets written.
+    const hashableRows = contacts.map((c) => contactHashableContent(
+      c,
+      addressPrefetchOk ? storedContactAddress.get(c.id) : null,
+    ));
 
     const allRows = hashableRows.map((content, i) => ({
       ...content,
