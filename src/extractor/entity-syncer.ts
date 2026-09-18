@@ -7,6 +7,7 @@ import { normalizeDirection } from '../utils/normalize.js';
 import type { GHLContact, GHLOpportunity, GHLConversation, GHLPaginationMeta, GHLMessage, GHLAppointment } from '../types/ghl.js';
 import { chunk, UPSERT_BATCH_SIZE, PAGINATION_PAGE_SIZE } from '../utils/batching.js';
 import { payloadHash, deltaMode, gateByPayloadHash, filterByNewerTimestamp, type DeltaMode } from '../utils/delta-gate.js';
+import { stampVerified, VERIFIED_FROM } from '../utils/freshness.js';
 
 // Re-exported so existing importers of these keep working after the move.
 export { chunk, UPSERT_BATCH_SIZE, PAGINATION_PAGE_SIZE };
@@ -577,6 +578,33 @@ export async function syncContacts(options?: { mode?: SyncMode }): Promise<SyncR
       }
     }
     console.log(`[EntitySync] syncContacts: upserted ${upsertedCount}/${rows.length} contacts`);
+
+    // ─── verified_at stamp (2026-09-18) ──────────────────────────────────
+    // A hash match IS a verification: this cycle compared the row against live
+    // GHL and found it identical. synced_at cannot say that, because it only
+    // moves on a write and the gate above means an unchanged contact is never
+    // written. So this covers every contact the cycle FETCHED, not gate.rows —
+    // stamping only what changed would rebuild the exact blind spot
+    // verified_at exists to remove.
+    //
+    // Why stampVerified() runs its own UPDATE rather than adding verified_at
+    // to the tag/hash prefetch above: that prefetch FAILS OPEN, so before
+    // migration 016 is applied a missing column there would not error out — it
+    // would run the whole cycle ungated and rewrite all ~25k contacts every 15
+    // minutes. See the module header in utils/freshness.ts.
+    const stamp = await stampVerified({
+      supabase,
+      table: 'contacts',
+      idColumn: 'ghl_contact_id',
+      ids: contacts.map((c) => c.id),
+      now,
+      source: VERIFIED_FROM.GHL,
+    });
+    if (stamp.error) {
+      console.warn(`[EntitySync] syncContacts: verified_at stamp failed (${stamp.error}) — freshness undercounts this cycle, the sync itself is unaffected`);
+    } else if (stamp.ran) {
+      console.log(`[EntitySync] syncContacts: verified_at stamped on ${stamp.stamped} contacts`);
+    }
 
     // v2.0 (workflow_executions repair): populate workflow_executions
     // from active-w* tag diffs. syncWorkflowExecutionsFromTagDiff inserts
