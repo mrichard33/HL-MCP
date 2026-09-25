@@ -26,6 +26,8 @@ import {
   nightlyRefreshMode,
   readStepCounts,
   getWorkflowFreshness,
+  startWorkflowRefreshNow,
+  isWorkflowRefreshRunning,
   NIGHTLY_REFRESH_SCHEDULE,
 } from '../dist/extractor/workflow-nightly-refresh.js';
 import { refreshSingleWorkflow } from '../dist/extractor/workflow-refresh.js';
@@ -467,6 +469,73 @@ test('get_workflow_freshness: counts stale against the live version and reads ba
   assert.equal(out.never_refreshed_count, 1);
   assert.equal(out.zero_step_count, 1);
   assert.deepEqual(out.last_run.summary, { failure_count: 1 });
+});
+
+// ---- run_workflow_refresh_now -----------------------------------------------
+
+test('manual run: mode off starts nothing', () => {
+  let called = false;
+  const start = startWorkflowRefreshNow(baseDeps({ mode: 'off', refresh: async () => { called = true; return okOutcome(); } }));
+  assert.equal(start.status, 'disabled');
+  assert.equal(start.done, undefined);
+  assert.equal(called, false);
+});
+
+test('manual run: starts in the background, blocks a second start, records sync_type manual', async () => {
+  const { client, ops } = stubSupabase(nightlyResponder({
+    cacheRows: [{ ghl_workflow_id: 'a', last_refreshed_version: 1 }],
+  }));
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const refreshed = [];
+  const deps = baseDeps({
+    supabase: client,
+    ghl: { getWorkflows: async () => [wf('a', 2)] },
+    refresh: async (id) => { await gate; refreshed.push(id); return okOutcome(); },
+  });
+
+  const first = startWorkflowRefreshNow(deps);
+  assert.equal(first.status, 'started');
+  assert.equal(isWorkflowRefreshRunning(), true, 'running is visible the moment the call returns');
+
+  const second = startWorkflowRefreshNow(deps);
+  assert.equal(second.status, 'already_running');
+  assert.equal(second.done, undefined);
+
+  release();
+  const result = await first.done;
+  assert.equal(result.ok, true);
+  assert.equal(result.trigger, 'manual');
+  assert.deepEqual(refreshed, ['a'], 'refreshed exactly once despite the second start');
+  assert.equal(isWorkflowRefreshRunning(), false);
+  assert.equal(ops.find((o) => o.table === 'sync_log' && o.kind === 'insert').payload.sync_type, 'manual');
+});
+
+test('the 2:30 AM pass skips while a manual pass is running — no duplicate work, no failed row', async () => {
+  const { client } = stubSupabase(nightlyResponder({
+    cacheRows: [{ ghl_workflow_id: 'a', last_refreshed_version: 1 }],
+  }));
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  const manual = startWorkflowRefreshNow(baseDeps({
+    supabase: client,
+    ghl: { getWorkflows: async () => [wf('a', 2)] },
+    refresh: async () => { calls++; await gate; return okOutcome(); },
+  }));
+
+  const { client: nightlyClient, ops: nightlyOps } = stubSupabase();
+  const nightly = await runNightlyWorkflowRefresh(baseDeps({
+    supabase: nightlyClient,
+    refresh: async () => { calls++; return okOutcome(); },
+  }));
+  assert.equal(nightly.ok, true);
+  assert.equal(nightly.export.status, 'skipped_already_running');
+  assert.equal(nightlyOps.length, 0);
+
+  release();
+  await manual.done;
+  assert.equal(calls, 1);
 });
 
 // ---- DST: 2:30 AM ET all year ----------------------------------------------
