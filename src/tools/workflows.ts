@@ -3,7 +3,7 @@ import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { extractAndSyncWorkflows } from '../extractor/workflow-extractor.js';
 import { refreshSingleWorkflow } from '../extractor/workflow-refresh.js';
-import { getWorkflowFreshness } from '../extractor/workflow-nightly-refresh.js';
+import { getWorkflowFreshness, startWorkflowRefreshNow } from '../extractor/workflow-nightly-refresh.js';
 import { nowET } from '../utils/timezone.js';
 import {
   syncContacts,
@@ -262,6 +262,16 @@ export const workflowTools = {
     description: 'How stale is the cached workflow structure? Returns stale_count (workflows whose live GHL version differs from the version the nightly refresh last rebuilt), zero_step_count, the nightly refresh mode, and the last nightly run with its failures.',
     inputSchema: z.object({}),
     handler: async () => getWorkflowFreshness(),
+  },
+
+  run_workflow_refresh_now: {
+    description: 'Run the nightly workflow freshness refresh now instead of waiting for 2:30 AM ET. Starts in the background and returns immediately; the pass refreshes every workflow whose GHL version changed, that was never refreshed, or that has no cached steps. Uses the configured WORKFLOW_NIGHTLY_REFRESH_MODE (shadow = cache only, no GitHub export). Check progress and results with get_workflow_freshness.',
+    inputSchema: z.object({}),
+    handler: async () => {
+      // `done` is the background promise — for tests only, never returned.
+      const { done: _done, ...start } = startWorkflowRefreshNow();
+      return start;
+    },
   },
 
   sync_all_entities: {

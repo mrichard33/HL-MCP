@@ -221,6 +221,7 @@ export interface RefreshFailure {
 export interface NightlyRefreshResult {
   ok: boolean;
   mode: NightlyRefreshMode;
+  trigger: RefreshTrigger;
   started_at: string;
   finished_at: string;
   checked: number;
@@ -259,6 +260,23 @@ export interface NightlyRefreshDeps {
   /** How long to wait for a running bulk workflow sync to release the lock. */
   lockWaitMs?: number;
   lockPollMs?: number;
+  /** Who started the pass: the 2:30 AM cron or run_workflow_refresh_now. Recorded in sync_log.sync_type. */
+  trigger?: RefreshTrigger;
+}
+
+export type RefreshTrigger = 'nightly' | 'manual';
+
+/**
+ * 2026-09-25: true while a refresh pass (nightly or manual) is running in this
+ * process. run_workflow_refresh_now returns immediately and does the work in
+ * the background, so without this a second call — or the 2:30 AM cron firing
+ * during a manual pass — would start a duplicate pass that re-refreshes every
+ * workflow the first one is already working through.
+ */
+let refreshPassInProgress = false;
+
+export function isWorkflowRefreshRunning(): boolean {
+  return refreshPassInProgress;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -273,10 +291,39 @@ function refreshFailureReason(r: RefreshOutcome): string | null {
 
 export async function runNightlyWorkflowRefresh(deps: NightlyRefreshDeps = {}): Promise<NightlyRefreshResult> {
   const mode = deps.mode ?? nightlyRefreshMode();
+  const trigger = deps.trigger ?? 'nightly';
+  if (mode !== 'off' && refreshPassInProgress) {
+    // Another pass is already doing this work. Not a failure, and no sync_log
+    // row: the running pass writes its own.
+    console.log(`[NightlyRefresh] ${trigger} pass skipped — a refresh pass is already running`);
+    const now = nowET();
+    return {
+      ok: true, mode, trigger, started_at: now, finished_at: now,
+      checked: 0, unchanged: 0, attempted: 0, refreshed: 0, failures: [],
+      refreshed_ids: [], changed_codes: [], unregistered_ids: [],
+      export: { status: 'skipped_already_running' },
+    };
+  }
+  // Set before the first await, so a caller that checks
+  // isWorkflowRefreshRunning() right after starting a pass sees it running.
+  if (mode !== 'off') refreshPassInProgress = true;
+  try {
+    return await runRefreshPass(deps, mode, trigger);
+  } finally {
+    if (mode !== 'off') refreshPassInProgress = false;
+  }
+}
+
+async function runRefreshPass(
+  deps: NightlyRefreshDeps,
+  mode: NightlyRefreshMode,
+  trigger: RefreshTrigger,
+): Promise<NightlyRefreshResult> {
   const started_at = nowET();
   const result: NightlyRefreshResult = {
     ok: false,
     mode,
+    trigger,
     started_at,
     finished_at: started_at,
     checked: 0,
@@ -318,7 +365,7 @@ export async function runNightlyWorkflowRefresh(deps: NightlyRefreshDeps = {}): 
   try {
     const { data } = await supabase.from('sync_log').insert({
       entity_type: NIGHTLY_REFRESH_JOB,
-      sync_type: 'nightly',
+      sync_type: trigger,
       status: 'running',
     }).select().single();
     syncLogId = (data?.id as string) ?? null;
@@ -487,6 +534,7 @@ async function runExport(
 function summarizeForLog(r: NightlyRefreshResult): string {
   return JSON.stringify({
     mode: r.mode,
+    trigger: r.trigger,
     checked: r.checked,
     unchanged: r.unchanged,
     attempted: r.attempted,
@@ -498,6 +546,73 @@ function summarizeForLog(r: NightlyRefreshResult): string {
     export_status: r.export.status,
     error: r.error ?? null,
   });
+}
+
+// ---- run_workflow_refresh_now ----
+
+export interface RefreshNowStart {
+  status: 'started' | 'already_running' | 'disabled';
+  mode: NightlyRefreshMode;
+  message: string;
+  /** The background pass, for tests. Never serialized to the tool caller. */
+  done?: Promise<NightlyRefreshResult>;
+}
+
+/**
+ * Start the same pass the 2:30 AM cron runs, now, in the background.
+ *
+ * 2026-09-25: added so the refresh can be run on request instead of only on
+ * the nightly schedule. It returns at once because a full pass can take 30+
+ * minutes (the first one refreshes all ~266 workflows), far longer than an MCP
+ * call can wait — the same reason sync_all_entities runs in the background.
+ * Progress and the result are read back with get_workflow_freshness, whose
+ * last_run is this pass's sync_log row (sync_type 'manual').
+ *
+ * It uses the configured mode and nothing else: a caller cannot ask for
+ * `live`, so a manual run can never export to GitHub unless Mark has already
+ * set WORKFLOW_NIGHTLY_REFRESH_MODE=live. It takes the same lock as the
+ * nightly pass, so it waits for a running hourly bulk sync, and the hourly sync
+ * skips while it runs.
+ */
+export function startWorkflowRefreshNow(deps: NightlyRefreshDeps = {}): RefreshNowStart {
+  const mode = deps.mode ?? nightlyRefreshMode();
+  if (mode === 'off') {
+    return {
+      status: 'disabled',
+      mode,
+      message: 'WORKFLOW_NIGHTLY_REFRESH_MODE is off, so the refresh is disabled. Nothing was started.',
+    };
+  }
+  if (refreshPassInProgress) {
+    return {
+      status: 'already_running',
+      mode,
+      message: 'A workflow refresh is already running. Check progress with get_workflow_freshness.',
+    };
+  }
+  const done = runNightlyWorkflowRefresh({ ...deps, mode, trigger: 'manual' }).catch((err) => {
+    // runNightlyWorkflowRefresh reports failure in its result rather than
+    // throwing; this only catches the unexpected, so the background promise
+    // can never become an unhandled rejection.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[NightlyRefresh] manual pass threw: ${msg}`);
+    const now = nowET();
+    return {
+      ok: false, mode, trigger: 'manual' as const, started_at: now, finished_at: now,
+      checked: 0, unchanged: 0, attempted: 0, refreshed: 0, failures: [],
+      refreshed_ids: [], changed_codes: [], unregistered_ids: [],
+      export: { status: 'not_run' }, error: msg,
+    };
+  });
+  return {
+    status: 'started',
+    mode,
+    message:
+      `Workflow refresh started in the background (mode=${mode}). Only workflows whose GHL version changed, ` +
+      `that were never refreshed, or that have no cached steps are refreshed, about 2 seconds apart. ` +
+      `Call get_workflow_freshness to see progress and the result.`,
+    done,
+  };
 }
 
 // ---- get_workflow_freshness ----
@@ -517,7 +632,11 @@ export async function getWorkflowFreshness(deps: FreshnessDeps = {}): Promise<Re
   const supabase = deps.supabase ?? getSupabaseClient();
   const ghl = deps.ghl ?? new GHLClient();
   const readCounts = deps.readStepCounts ?? readStepCounts;
-  const out: Record<string, unknown> = { mode: nightlyRefreshMode(), checked_at: nowET() };
+  const out: Record<string, unknown> = {
+    mode: nightlyRefreshMode(),
+    refresh_running: isWorkflowRefreshRunning(),
+    checked_at: nowET(),
+  };
 
   // Cache rows.
   let cacheRows: Array<{ ghl_workflow_id: string; name: string | null; version: number | null; last_refreshed_version: number | null }> = [];
@@ -581,7 +700,7 @@ export async function getWorkflowFreshness(deps: FreshnessDeps = {}): Promise<Re
   try {
     const { data, error } = await supabase
       .from('sync_log')
-      .select('status, started_at, completed_at, records_synced, error_message')
+      .select('status, sync_type, started_at, completed_at, records_synced, error_message')
       .eq('entity_type', NIGHTLY_REFRESH_JOB)
       .order('started_at', { ascending: false })
       .limit(1);
@@ -594,6 +713,7 @@ export async function getWorkflowFreshness(deps: FreshnessDeps = {}): Promise<Re
       try { summary = row.error_message ? JSON.parse(row.error_message) : null; } catch { /* keep raw text */ }
       out.last_run = {
         status: row.status,
+        trigger: row.sync_type,
         started_at: row.started_at,
         completed_at: row.completed_at,
         refreshed: row.records_synced,
