@@ -19,6 +19,12 @@ import { reapStaleSyncRuns, reapOnBoot } from './sync-reaper.js';
 import { withBoundedRetry } from '../utils/retry.js';
 import { getSupabaseClient } from '../clients/supabase.js';
 import { checkWebhookFailures } from './webhook-failure-alert.js';
+import {
+  runNightlyWorkflowRefresh,
+  nightlyRefreshMode,
+  NIGHTLY_REFRESH_JOB,
+  NIGHTLY_REFRESH_SCHEDULE,
+} from './workflow-nightly-refresh.js';
 
 /** Track running state per job to prevent concurrent runs. */
 const runningJobs = new Map<string, boolean>();
@@ -111,6 +117,11 @@ const JOB_TIMEOUTS_MS: Record<string, number> = {
   trigger_links: 5 * 60 * 1000,
   templates: 5 * 60 * 1000,
   sync_reaper: 2 * 60 * 1000,
+  // 2026-09-25: the first night refreshes every workflow (none has a
+  // last_refreshed_version yet): ~266 × (2s gap + detail calls). Later nights
+  // touch only what changed. The job may also wait up to 30 min for a running
+  // bulk workflow sync to release the shared lock.
+  [NIGHTLY_REFRESH_JOB]: 90 * 60 * 1000,
 };
 const DEFAULT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -582,6 +593,23 @@ export function startScheduledSync(): void {
     });
   }, { timezone: 'America/New_York' });
 
+  // Nightly workflow freshness refresh (2026-09-25). 2:30 AM ET, DST-aware via
+  // the timezone option — see NIGHTLY_REFRESH_SCHEDULE for what DST does to it.
+  // Rebuilds step rows for every workflow whose GHL version moved since the
+  // last rebuild, because the hourly bulk sync rebuilt 0 steps on 2026-09-24.
+  // Its own job name, but it shares the in-process workflow sync lock with the
+  // hourly bulk sync so the two can never delete-then-insert the same rows at
+  // once. 2:30 sits clear of the 3:05/3:10 daily fulls.
+  schedule(NIGHTLY_REFRESH_SCHEDULE.expression, () => {
+    const mode = nightlyRefreshMode();
+    if (mode === 'off') {
+      console.log('[Scheduler] Nightly workflow refresh skipped — WORKFLOW_NIGHTLY_REFRESH_MODE=off');
+      return;
+    }
+    console.log(`[Scheduler] Nightly 2:30 AM ET workflow freshness refresh (mode=${mode})`);
+    runJob(NIGHTLY_REFRESH_JOB, () => runNightlyWorkflowRefresh({ mode }));
+  }, { timezone: NIGHTLY_REFRESH_SCHEDULE.timezone });
+
   // v1.6: Low-volume config entities moved from every 30 min to every
   // 6 hours (00:00, 06:00, 12:00, 18:00 UTC). These rarely change;
   // 30-min cadence was overkill and contributed to Supabase write churn.
@@ -614,6 +642,7 @@ export function startScheduledSync(): void {
   console.log('  7,37 * * * *       — sync reaper (stale running-run cleanup)');
   console.log('  */15 * * * *       — contacts (incremental), appointments, conversations/messages');
   console.log('  20,50 * * * *      — opportunities (incremental, bounded-retry) [v2.0: off the 15-min boundary, 30-min cadence]');
+  console.log('  30 2 * * * ET      — workflow freshness refresh (WORKFLOW_NIGHTLY_REFRESH_MODE, default shadow)');
   console.log('  5 3 * * * ET       — contacts daily full reconcile (America/New_York)');
   console.log('  15 3 * * * ET      — webhook_failures growth check (GroupMe alert above threshold)');
   console.log('  10 3 * * * ET      — opportunities daily full reconcile (America/New_York, bounded-retry)');

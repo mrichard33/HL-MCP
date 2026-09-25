@@ -34,6 +34,24 @@ const DEBUG_WORKFLOW_SYNC = process.env.DEBUG_WORKFLOW_SYNC === 'true';
 // Mirrors the hlSyncInProgress pattern in src/tools/workflows.ts.
 let workflowSyncInProgress = false;
 
+/**
+ * 2026-09-25: the nightly freshness refresh (workflow-nightly-refresh.ts) takes
+ * this same guard. Both it and the bulk sync rebuild step rows by
+ * delete-then-insert, so letting them interleave on one workflow could leave its
+ * workflow_steps empty or half one pass and half the other. While the nightly
+ * pass holds the guard, the hourly sync returns 'already_running' — missing one
+ * hourly pass is harmless; a mixed cache is not.
+ */
+export function tryAcquireWorkflowSyncLock(): boolean {
+  if (workflowSyncInProgress) return false;
+  workflowSyncInProgress = true;
+  return true;
+}
+
+export function releaseWorkflowSyncLock(): void {
+  workflowSyncInProgress = false;
+}
+
 export interface SyncResult {
   workflows_synced: number;
   workflows_total: number;

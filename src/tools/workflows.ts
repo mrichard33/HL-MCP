@@ -1,13 +1,9 @@
 import { z } from 'zod';
 import { GHLClient } from '../clients/ghl.js';
 import { getSupabaseClient } from '../clients/supabase.js';
-import {
-  extractAndSyncWorkflows,
-  buildWorkflowDetailFromInternalJson,
-  syncWorkflowDetailToSupabase,
-  shouldRebuildWorkflowDetail,
-  DEEP_WORKFLOW_SOURCE,
-} from '../extractor/workflow-extractor.js';
+import { extractAndSyncWorkflows } from '../extractor/workflow-extractor.js';
+import { refreshSingleWorkflow } from '../extractor/workflow-refresh.js';
+import { getWorkflowFreshness } from '../extractor/workflow-nightly-refresh.js';
 import { nowET } from '../utils/timezone.js';
 import {
   syncContacts,
@@ -257,143 +253,15 @@ export const workflowTools = {
     inputSchema: z.object({
       workflowId: z.string().describe('GHL workflow ID to refresh'),
     }),
-    handler: async (args: { workflowId: string }) => {
-      const ghl = new GHLClient();
-      const supabase = getSupabaseClient();
+    // 2026-09-25: body moved to src/extractor/workflow-refresh.ts so the
+    // nightly freshness job runs the same code. See that file for the history.
+    handler: async (args: { workflowId: string }) => refreshSingleWorkflow(args.workflowId),
+  },
 
-      // Deep workflow detail comes from the Firebase-authenticated internal
-      // API (backend.leadconnectorhq.com). Returns null when Firebase auth
-      // isn't configured or the internal call fails.
-      const detail = await ghl.getWorkflowDetail(args.workflowId);
-
-      let rawJson: Record<string, unknown>;
-      let source: string;
-
-      if (detail) {
-        rawJson = detail;
-        source = 'highlevel_internal_api';
-      } else {
-        // FIX: GHL's public API v2 has NO `GET /workflows/{id}` endpoint —
-        // only the location list endpoint `GET /workflows/?locationId=...`.
-        // The previous fallback called ghl.getWorkflow(id), which hit
-        // /workflows/{id} and always 404'd. Resolve via the list instead.
-        const all = await ghl.getWorkflows();
-        const match = all.find((w) => w.id === args.workflowId);
-        if (!match) {
-          throw new Error(
-            `Workflow ${args.workflowId} not found in GHL location ${ghl.getLocationId()}. ` +
-            `It may have been deleted or the ID may be wrong. ` +
-            `(GHL's public API has no single-workflow endpoint, so the location workflow ` +
-            `list was searched. To capture deep detail — steps, triggers, actions — set ` +
-            `GHL_FIREBASE_API_KEY and GHL_FIREBASE_REFRESH_TOKEN to enable the internal API.)`
-          );
-        }
-        rawJson = JSON.parse(JSON.stringify(match)) as Record<string, unknown>;
-        source = 'highlevel_public_api_list';
-      }
-
-      const name = (rawJson.name as string) || 'Unknown';
-      const status = (rawJson.status as string) || 'unknown';
-      const version = (rawJson.version as number) || 1;
-      const locationId = (rawJson.locationId as string) || ghl.getLocationId();
-
-      // Columns that are always safe to write from whichever source resolved.
-      const row: Record<string, unknown> = {
-        ghl_workflow_id: args.workflowId,
-        ghl_location_id: locationId,
-        name,
-        status,
-        version,
-        synced_at: nowET(),
-        deleted_at: null,
-      };
-
-      // raw_json handling: a shallow list-based refresh must never DOWNGRADE a
-      // richer raw_json already cached (e.g. one captured by a prior internal-API
-      // sync with steps/triggers/actions). The deep-detail path always writes;
-      // the shallow path only writes raw_json when the cache has nothing richer.
-      let preservedExistingRawJson = false;
-      if (source === 'highlevel_internal_api') {
-        row.raw_json = rawJson;
-      } else {
-        const { data: existing } = await supabase
-          .from('workflows')
-          .select('raw_json')
-          .eq('ghl_workflow_id', args.workflowId)
-          .maybeSingle();
-        const existingRaw = (existing?.raw_json || {}) as Record<string, unknown>;
-        if (Object.keys(existingRaw).length > Object.keys(rawJson).length) {
-          preservedExistingRawJson = true;
-        } else {
-          row.raw_json = rawJson;
-        }
-      }
-
-      const { error: upsertError } = await supabase
-        .from('workflows')
-        .upsert(row, { onConflict: 'ghl_workflow_id' });
-
-      if (upsertError) {
-        throw new Error(`Failed to update cache: ${upsertError.message}`);
-      }
-
-      // Rebuild the detail rows — workflow_steps, workflow_connections,
-      // workflow_triggers, workflow_actions.
-      //
-      // 2026-09-14: this used to write ONLY the workflows row. raw_json went
-      // current while the step rows kept whatever the last full sync captured,
-      // and every reader of workflow_steps (get_workflow_steps without
-      // forceLive, src/analysis/detectors.ts, src/analysis/graph.ts, any direct
-      // query) silently answered from pre-edit structure with no staleness
-      // signal. On cca1f069-9524-4e57-8ebd-d1184704aa39 the cache sat two
-      // structural revisions behind — 11 steps against 25 live — and produced
-      // two wrong diagnostic answers in one session.
-      //
-      // Only the internal-API path carries step data. The public list fallback
-      // is metadata only, so rebuilding from it would delete good rows and
-      // replace them with nothing. steps_rebuilt tells the caller which
-      // happened, so "rebuilt, zero steps" is distinguishable from
-      // "not rebuilt".
-
-      // Parse only on the deep path — the shallow payload has nothing to parse,
-      // and buildWorkflowDetailFromInternalJson costs a backend trigger call.
-      const built = source === DEEP_WORKFLOW_SOURCE
-        ? await buildWorkflowDetailFromInternalJson(rawJson, { id: args.workflowId }, { ghl })
-        : null;
-
-      const gate = shouldRebuildWorkflowDetail(
-        source,
-        built ? (built.workflowDetail.steps?.length || 0) : null,
-      );
-
-      let detailCounts: { steps: number; triggers: number; actions: number; connections: number; errors: string[] } | null = null;
-      if (gate.rebuild && built) {
-        detailCounts = await syncWorkflowDetailToSupabase(built.workflowDetail, built.parsedConnections);
-      }
-
-      // detail_hash is deliberately NOT written here. The next full sync then
-      // sees a hash mismatch and rebuilds this workflow — a redundant rebuild,
-      // never a skipped one. That is the safe direction to be wrong in.
-
-      return {
-        workflow_id: args.workflowId,
-        name,
-        status,
-        version,
-        source,
-        cache_updated: true,
-        preserved_existing_raw_json: preservedExistingRawJson,
-        steps_rebuilt: gate.rebuild,
-        steps_rebuilt_reason: gate.reason,
-        steps_synced: detailCounts ? detailCounts.steps : null,
-        triggers_synced: detailCounts ? detailCounts.triggers : null,
-        actions_synced: detailCounts ? detailCounts.actions : null,
-        connections_synced: detailCounts ? detailCounts.connections : null,
-        detail_errors: detailCounts ? detailCounts.errors : [],
-        refreshed_at: nowET(),
-        raw_json_top_level_keys: Object.keys(rawJson),
-      };
-    },
+  get_workflow_freshness: {
+    description: 'How stale is the cached workflow structure? Returns stale_count (workflows whose live GHL version differs from the version the nightly refresh last rebuilt), zero_step_count, the nightly refresh mode, and the last nightly run with its failures.',
+    inputSchema: z.object({}),
+    handler: async () => getWorkflowFreshness(),
   },
 
   sync_all_entities: {
