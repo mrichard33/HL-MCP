@@ -12,6 +12,7 @@ import {
   appointmentToSystemEvent,
   messageToSystemEvent,
 } from './event-bus.js';
+import { readAppointmentWebhook, toSyncTimestamp } from './appointment-payload.js';
 
 /**
  * Creates a deterministic event hash for deduplication.
@@ -600,9 +601,16 @@ async function handleOpportunityWebhook(payload: Record<string, unknown>): Promi
 
 async function handleAppointmentWebhook(payload: Record<string, unknown>): Promise<void> {
   const supabase = getSupabaseClient();
-  const id = (payload.id || payload.appointmentId) as string;
-  const contactId = payload.contactId as string | undefined;
   const now = nowET();
+
+  // v2.3 — 2026-09-28. GHL nests the record under `appointment`; this used to
+  // read the top level, get no id, and fail the upsert silently (see
+  // appointment-payload.ts). A payload we cannot read is now a FAILURE, so it
+  // lands in webhook_failures instead of logging "Processed successfully".
+  const appt = readAppointmentWebhook(payload);
+  if (!appt) {
+    throw new Error(`appointment webhook has no appointment id (type=${String(payload.type ?? 'none')})`);
+  }
 
   // v2.2 — DELIBERATELY writes no payload_hash.
   //
@@ -612,29 +620,49 @@ async function handleAppointmentWebhook(payload: Record<string, unknown>): Promi
   // stored hash stale is the safe direction: it will not match the next
   // cycle's freshly computed hash, so the row is treated as changed and
   // rewritten. See src/utils/delta-gate.ts.
-  await supabase.from('appointments').upsert(
+  const { error } = await supabase.from('appointments').upsert(
     {
-      ghl_appointment_id: id,
-      ghl_contact_id: contactId || null,
-      ghl_calendar_id: (payload.calendarId as string) || null,
-      ghl_location_id: (payload.locationId as string) || null,
-      title: (payload.title as string) || null,
-      status: (payload.status as string) || 'confirmed',
-      start_time: (payload.startTime as string) || null,
-      end_time: (payload.endTime as string) || null,
-      assigned_to: (payload.assignedUserId as string) || null,
-      raw_json: payload,
+      ghl_appointment_id: appt.id,
+      ghl_contact_id: appt.contactId,
+      ghl_calendar_id: appt.calendarId,
+      ghl_location_id: appt.locationId,
+      title: appt.title,
+      status: appt.status,
+      start_time: appt.startTime,
+      end_time: appt.endTime,
+      assigned_to: appt.assignedUserId,
+      raw_json: appt.raw,
+      // Delete tombstones; create/update is proof the record is live, the
+      // same rule as the restore step in syncAppointments.
+      deleted_at: appt.deleted ? now : null,
       synced_at: now,
       updated_at: now,
     },
     { onConflict: 'ghl_appointment_id' },
   );
+  // v2.3: this error was never read. It is the reason the bug above hid.
+  if (error) throw new Error(`appointments upsert ${appt.id}: ${error.message}`);
 
-  const eventType = deriveAppointmentEventType((payload.status as string) || '');
-  const stableTs = (payload.startTime || now) as string;
-  await createLeadEvent(contactId, eventType, id, stableTs, payload);
+  // Lead event hashed exactly as syncAppointments hashes it (same id, same
+  // derived type, same timestamp STRING) so the two paths dedupe on event_hash.
+  // A delete has no truthful funnel event, so none is written.
+  if (!appt.deleted && appt.startTime) {
+    await createLeadEvent(
+      appt.contactId || undefined,
+      deriveAppointmentEventType(appt.status),
+      appt.id,
+      toSyncTimestamp(appt.startTime) as string,
+      appt.raw,
+    );
+  }
 
   // ── Forward to agentic event bus (non-blocking) ──
+  //
+  // UNCHANGED ON PURPOSE. appointmentToSystemEvent still reads the top-level
+  // shape, so it returns null for every GHL app webhook and has never forwarded
+  // an appointment event to LP system_events. Feeding it `appt` would switch on
+  // ~200 high/critical events a day into the Decision Engine's intake. That is
+  // a separate ruling (Mark), not a side effect of a cache fix.
   const systemEvent = appointmentToSystemEvent(payload);
   if (systemEvent) {
     trackBackground(emitSystemEvent(systemEvent).catch(() => {}));
