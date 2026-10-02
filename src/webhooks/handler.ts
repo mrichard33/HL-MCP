@@ -13,6 +13,7 @@ import {
   messageToSystemEvent,
 } from './event-bus.js';
 import { readAppointmentWebhook, toSyncTimestamp } from './appointment-payload.js';
+import { handleEmailStatsWebhook } from './email-stats.js';
 
 /**
  * Creates a deterministic event hash for deduplication.
@@ -774,7 +775,27 @@ const WEBHOOK_HANDLERS: Record<string, (payload: Record<string, unknown>) => Pro
   '/webhooks/highlevel/appointment': handleAppointmentWebhook,
   '/webhooks/highlevel/message': handleMessageWebhook,
   '/webhooks/highlevel/workflow': handleWorkflowWebhook,
+  '/webhooks/highlevel/email-stats': handleEmailStatsWebhook,
 };
+
+type WebhookHandler = (payload: Record<string, unknown>) => Promise<void>;
+
+/**
+ * Pick the handler for a webhook. Pure, so routing is testable without Supabase.
+ *
+ * LCEmailStats can arrive on whichever URL the GHL Marketplace app posts to,
+ * so it is routed by payload type rather than by path. Its failures are logged
+ * under event type 'LCEmailStats', not the path tail (which could read
+ * 'contact'), so they are easy to find in webhook_failures.
+ */
+export function pickWebhookHandler(
+  pathname: string,
+  body: Record<string, unknown> | null | undefined,
+): { handler: WebhookHandler; eventType: string } | null {
+  if (body?.type === 'LCEmailStats') return { handler: handleEmailStatsWebhook, eventType: 'LCEmailStats' };
+  const handler = WEBHOOK_HANDLERS[pathname] as WebhookHandler | undefined;
+  return handler ? { handler, eventType: pathname.split('/').pop() || '' } : null;
+}
 
 /**
  * Handles an incoming GoHighLevel webhook.
@@ -784,16 +805,16 @@ export async function handleWebhook(
   pathname: string,
   body: Record<string, unknown>,
 ): Promise<boolean> {
-  const handler = WEBHOOK_HANDLERS[pathname];
-  if (!handler) return false;
+  const picked = pickWebhookHandler(pathname, body);
+  if (!picked) return false;
 
   try {
-    await handler(body);
+    await picked.handler(body);
     console.log(`[Webhook] Processed ${pathname} successfully`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[Webhook] Error processing ${pathname}: ${msg}`);
-    await logWebhookFailure(pathname, pathname.split('/').pop() || '', msg, body);
+    await logWebhookFailure(pathname, picked.eventType, msg, body);
   }
 
   return true;
