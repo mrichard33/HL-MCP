@@ -1648,13 +1648,16 @@ function deriveFunnelStage(events: { event_type: string; event_time: string }[])
     return earliest;
   };
 
-  const contactedAt = earliestAmong('sms_sent', 'email_sent');
+  // chat_* and call_* (2026-10-02): before the channel fix these were all
+  // logged as sms_*, so they already moved contacts through these stages.
+  // Listing them keeps that, instead of silently dropping chat/call contacts.
+  const contactedAt = earliestAmong('sms_sent', 'email_sent', 'chat_sent', 'call_outbound');
   if (contactedAt) {
     currentStage = 'contacted';
     history.push({ stage: 'contacted', entered_at: contactedAt });
   }
 
-  const engagedAt = earliestAmong('sms_received', 'email_received', 'email_replied', 'sms_replied');
+  const engagedAt = earliestAmong('sms_received', 'email_received', 'email_replied', 'sms_replied', 'chat_received', 'call_inbound');
   if (engagedAt) {
     currentStage = 'engaged';
     history.push({ stage: 'engaged', entered_at: engagedAt });
