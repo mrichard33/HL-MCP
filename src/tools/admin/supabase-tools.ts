@@ -1,6 +1,34 @@
 import { z } from 'zod';
 import { runSQL, listTables, getTableSchema } from '../../admin/supabase-admin.js';
 import { getSupabaseClient } from '../../clients/supabase.js';
+import { toET } from '../../utils/timezone.js';
+
+/**
+ * The start of an ET calendar day as an ISO timestamp with the right offset
+ * (-04:00 or -05:00). Noon UTC on that date always falls on the same ET date,
+ * so its offset is the day's offset (DST switches at 2 AM, never at midnight).
+ */
+export function etDayStart(day: string): string {
+  const offset = toET(new Date(`${day}T12:00:00Z`)).slice(-6);
+  return `${day}T00:00:00${offset}`;
+}
+
+/** The day after a YYYY-MM-DD date, as YYYY-MM-DD. */
+export function nextDay(day: string): string {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** True when a Supabase error means email_events / its views do not exist yet. */
+export function isMissingRelation(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false;
+  if (err.code === '42P01' || err.code === 'PGRST205') return true;
+  const m = (err.message || '').toLowerCase();
+  return m.includes('does not exist') || m.includes('could not find the table');
+}
+
+const MIGRATION_019_MISSING = 'Migration 019 not applied. Apply supabase/migrations/019_email_events.sql in the HL MCP Supabase SQL editor.';
 
 export const supabaseAdminTools = {
   supabase_run_query: {
@@ -147,6 +175,76 @@ export const supabaseAdminTools = {
       }
 
       return results;
+    },
+  },
+
+  get_email_performance: {
+    description:
+      'Email engagement from GHL LCEmailStats (Mailgun) events: delivered, opens, clicks, bounces, complaints and unsubscribes. ' +
+      'group_by "subject" (default) = one row per subject line; "link" = clicks per trigger link / URL; "day" = activity per ET day. ' +
+      'contact_id = that contact\'s raw email events, newest first. Dates are YYYY-MM-DD in Eastern Time. ' +
+      'human_open_rate excludes Apple Mail Privacy Protection machine opens (a heuristic: user agent "Mozilla/5.0"), so opens are approximate; ' +
+      'clicks are the trusted engagement signal. Read-only.',
+    inputSchema: z.object({
+      start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('First day to include, YYYY-MM-DD (ET)'),
+      end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Last day to include, YYYY-MM-DD (ET)'),
+      group_by: z.enum(['subject', 'link', 'day']).optional().default('subject').describe('How to group results (ignored when contact_id is set)'),
+      contact_id: z.string().optional().describe('GHL contact id — returns that contact\'s email events instead of a rollup'),
+      limit: z.number().int().min(1).max(500).optional().default(50).describe('Max rows (default 50)'),
+    }),
+    handler: async (args: {
+      start_date?: string; end_date?: string; group_by?: 'subject' | 'link' | 'day'; contact_id?: string; limit?: number;
+    }) => {
+      const supabase = getSupabaseClient();
+      const limit = args.limit ?? 50;
+      const groupBy = args.group_by ?? 'subject';
+      const from = args.start_date ? etDayStart(args.start_date) : null;
+      // Exclusive upper bound: the start of the day AFTER end_date.
+      const to = args.end_date ? etDayStart(nextDay(args.end_date)) : null;
+      const window = { start_date: args.start_date ?? null, end_date: args.end_date ?? null };
+
+      if (args.contact_id) {
+        let q = supabase
+          .from('email_events')
+          .select('event, subject, occurred_at, trigger_link_name, clicked_url, is_machine_open')
+          .eq('ghl_contact_id', args.contact_id);
+        if (from) q = q.gte('occurred_at', from);
+        if (to) q = q.lt('occurred_at', to);
+        const { data, error } = await q.order('occurred_at', { ascending: false }).limit(limit);
+        if (isMissingRelation(error)) return { message: MIGRATION_019_MISSING };
+        if (error) throw new Error(error.message);
+        return { contact_id: args.contact_id, window, rows: data };
+      }
+
+      if (groupBy === 'day') {
+        let q = supabase.from('v_email_performance_daily').select('*');
+        if (args.start_date) q = q.gte('day_et', args.start_date);
+        if (args.end_date) q = q.lte('day_et', args.end_date);
+        const { data, error } = await q.order('day_et', { ascending: false }).limit(limit);
+        if (isMissingRelation(error)) return { message: MIGRATION_019_MISSING };
+        if (error) throw new Error(error.message);
+        return { group_by: 'day', window, rows: data };
+      }
+
+      if (groupBy === 'link') {
+        // A link is in the window when its clicks overlap it. Counts are all-time.
+        let q = supabase.from('v_email_clicks_by_link').select('*');
+        if (from) q = q.gte('last_click_at', from);
+        if (to) q = q.lt('first_click_at', to);
+        const { data, error } = await q.order('clicks', { ascending: false }).limit(limit);
+        if (isMissingRelation(error)) return { message: MIGRATION_019_MISSING };
+        if (error) throw new Error(error.message);
+        return { group_by: 'link', window, note: 'Counts are all-time for each link that had clicks in the window.', rows: data };
+      }
+
+      // A subject is in the window when its sends overlap it. Counts are all-time.
+      let q = supabase.from('v_email_performance_by_subject').select('*');
+      if (from) q = q.gte('last_sent_at', from);
+      if (to) q = q.lt('first_sent_at', to);
+      const { data, error } = await q.order('delivered', { ascending: false }).limit(limit);
+      if (isMissingRelation(error)) return { message: MIGRATION_019_MISSING };
+      if (error) throw new Error(error.message);
+      return { group_by: 'subject', window, note: 'Counts are all-time for each subject sent in the window.', rows: data };
     },
   },
 };
