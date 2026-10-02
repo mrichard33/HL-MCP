@@ -674,7 +674,10 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
   const id = (payload.id || payload.messageId) as string;
   const contactId = payload.contactId as string | undefined;
   const direction = normalizeDirection(payload.direction as string | number | undefined);
-  const msgType = (payload.type as string) || 'sms';
+  // GHL marketplace webhooks put the event name in `type` ('InboundMessage' /
+  // 'OutboundMessage') and the channel in `messageType` ('SMS', 'Email',
+  // 'Live_Chat'). Reading `type` stored the event name as the channel.
+  const msgType = (payload.messageType as string) || (payload.type as string) || 'sms';
   const now = nowET();
 
   await supabase.from('messages').upsert(
@@ -685,7 +688,8 @@ async function handleMessageWebhook(payload: Record<string, unknown>): Promise<v
       direction,
       type: msgType,
       body: extractMessageBody(payload),
-      status: (payload.status as string) || 'delivered',
+      // No status from GHL means unknown — never assume 'delivered'.
+      status: (payload.status as string) || null,
       sent_at: (payload.dateAdded as string) || now,
     },
     { onConflict: 'ghl_message_id' },
