@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { parseEmailStatsPayload, isMachineOpen, matchTriggerLink, handleEmailStatsWebhook } =
+const { parseEmailStatsPayload, isMachineOpen, matchTriggerLink, handleEmailStatsWebhook, attributeMessage } =
   await import('../dist/webhooks/email-stats.js');
 const { pickWebhookHandler } = await import('../dist/webhooks/handler.js');
 const { etDayStart, nextDay, isMissingRelation } = await import('../dist/tools/admin/supabase-tools.js');
@@ -186,4 +186,59 @@ test('isMissingRelation recognises a missing table, not other errors', () => {
   assert.equal(isMissingRelation({ code: 'PGRST205', message: "Could not find the table 'public.email_events'" }), true);
   assert.equal(isMissingRelation({ code: '57014', message: 'canceling statement due to statement timeout' }), false);
   assert.equal(isMissingRelation(null), false);
+});
+
+// ── attribution by GHL's own email id (2026-10-02) ──
+
+// A real LCEmailStats event from the first live test (trimmed). The "last
+// email to this contact" fallback attributed this AND the test email sent a
+// minute earlier to the same conversation message.
+const liveDelivered = {
+  type: 'LCEmailStats',
+  locationId: 'SsBG7j5KQAIP1SFP2Sca',
+  webhookPayload: {
+    id: 'T_d2e820QFmBmQgC8GznBg',
+    event: 'delivered',
+    recipient: 'mfollen@icloud.com',
+    timestamp: 1790977856.8811038,
+    message: {
+      headers: {
+        to: 'mfollen@icloud.com',
+        subject: 'Test',
+        'message-id': '20261002215054.5e7c9eee8ff1ab54@send.getreecewindows.com',
+      },
+    },
+    'lc-operations': {
+      domain: 'send.getreecewindows.com',
+      email_type: 'one_to_one',
+      location_id: 'SsBG7j5KQAIP1SFP2Sca',
+      email_message_id: 'RWeiqpbRDHCGCxsbUeXs',
+    },
+  },
+};
+
+test('reads GHL\'s email id from lc-operations', () => {
+  assert.equal(parseEmailStatsPayload(liveDelivered).ghlEmailMessageId, 'RWeiqpbRDHCGCxsbUeXs');
+  assert.equal(parseEmailStatsPayload(mailgun('delivered')).ghlEmailMessageId, null, 'absent block → null');
+});
+
+test('attribution uses GHL\'s email id before any guess (no database read)', async () => {
+  // Returns before the Supabase fallback, so this runs without credentials.
+  const a = await attributeMessage(parseEmailStatsPayload(liveDelivered), 'hZOcPk6XmMvWVvjZJ7mz');
+  assert.deepEqual(a, { id: 'RWeiqpbRDHCGCxsbUeXs', method: 'lc_operations' });
+});
+
+test('two emails to the same contact get two different ids', async () => {
+  const earlier = structuredClone(liveDelivered);
+  earlier.webhookPayload['lc-operations'].email_message_id = 'gEXs7FRV39zBZDhc4QuX';
+  const a = await attributeMessage(parseEmailStatsPayload(earlier), 'hZOcPk6XmMvWVvjZJ7mz');
+  const b = await attributeMessage(parseEmailStatsPayload(liveDelivered), 'hZOcPk6XmMvWVvjZJ7mz');
+  assert.notEqual(a.id, b.id);
+});
+
+test('an explicit user-variables id still wins', async () => {
+  const withVar = structuredClone(liveDelivered);
+  withVar.webhookPayload['user-variables'] = { messageId: 'explicit-1' };
+  const a = await attributeMessage(parseEmailStatsPayload(withVar), 'c');
+  assert.deepEqual(a, { id: 'explicit-1', method: 'user_variables' });
 });

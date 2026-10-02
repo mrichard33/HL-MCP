@@ -13,7 +13,7 @@ import { trackBackground } from '../graceful-shutdown.js';
  * Parsed defensively — also accepts `event-data` or a bare Mailgun event.
  * Mailgun event-data fields used: event, id, timestamp (epoch seconds),
  * recipient, severity, url (clicks), message.headers {message-id, subject, from, to},
- * user-variables, delivery-status, client-info.
+ * user-variables, delivery-status, client-info, and GHL's own lc-operations block.
  *
  * Self-contained on purpose (no import from handler.ts) — handler.ts imports
  * this module, so importing back would be circular.
@@ -80,6 +80,7 @@ export interface ParsedEmailEvent {
   fromAddress: string | null;
   contactIdHint: string | null;
   ghlMessageIdHint: string | null;
+  ghlEmailMessageId: string | null;
   clickedUrl: string | null;
   utmCampaign: string | null;
   utmContent: string | null;
@@ -98,6 +99,10 @@ export function parseEmailStatsPayload(payload: Json): ParsedEmailEvent | null {
   const headers = asObj(message.headers);
   const userVars = asObj(data['user-variables'] ?? data.userVariables);
   const deliveryStatus = asObj(data['delivery-status']);
+  // GHL adds its own block to every Mailgun event. email_message_id is GHL's id
+  // for the sent email — the same value as `emailMessageId` on the
+  // OutboundMessage webhook. Seen on every live event, 2026-10-02.
+  const lcOps = asObj(data['lc-operations']);
   const clickedUrl = (data.url as string) || null;
   const providerMessageId = (headers['message-id'] as string) || null;
   const providerEventId = (data.id as string) || null;
@@ -114,6 +119,7 @@ export function parseEmailStatsPayload(payload: Json): ParsedEmailEvent | null {
     fromAddress: (headers.from as string) || null,
     contactIdHint: ((userVars.contactId ?? userVars.contact_id ?? payload.contactId ?? null) as string | null),
     ghlMessageIdHint: ((userVars.messageId ?? userVars.message_id ?? userVars.email_message_id ?? null) as string | null),
+    ghlEmailMessageId: (lcOps.email_message_id as string) || null,
     clickedUrl,
     utmCampaign: urlParam(clickedUrl, 'utm_campaign'),
     utmContent: urlParam(clickedUrl, 'utm_content'),
@@ -185,10 +191,23 @@ async function resolveContactId(p: ParsedEmailEvent): Promise<string | null> {
   return (data?.[0]?.ghl_contact_id as string) ?? null;
 }
 
-async function attributeMessage(
+/**
+ * Which sent email this event belongs to.
+ *
+ * GHL's own email id (lc-operations) comes first. The "last email to this
+ * contact" guess is only a fallback: on 2026-10-02 two test emails sent a
+ * minute apart were both attributed to the same message by it.
+ *
+ * NOTE: attributed_message_id holds GHL's EMAIL message id when the method is
+ * 'lc_operations' (join on the OutboundMessage webhook's `emailMessageId`),
+ * and a conversation message id (messages.ghl_message_id) when the method is
+ * 'last_email_to_contact'. The messages table does not store the email id.
+ */
+export async function attributeMessage(
   p: ParsedEmailEvent, contactId: string | null,
 ): Promise<{ id: string | null; method: string }> {
   if (p.ghlMessageIdHint) return { id: p.ghlMessageIdHint, method: 'user_variables' };
+  if (p.ghlEmailMessageId) return { id: p.ghlEmailMessageId, method: 'lc_operations' };
   if (!contactId) return { id: null, method: 'none' };
   const since = new Date(Date.parse(p.occurredAt) - 30 * 86400_000).toISOString();
   const { data } = await getSupabaseClient()
