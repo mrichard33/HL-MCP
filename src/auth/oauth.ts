@@ -233,6 +233,19 @@ export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
 
+/**
+ * Constant-time compare for static bearer tokens (2026-10-03, security review).
+ * `===` stops at the first differing character, which leaks through timing how
+ * much of a guess was right. Hashing first makes both sides the same length.
+ * An empty expected value never matches.
+ */
+export function tokenMatches(input: string, expected: string | undefined | null): boolean {
+  if (!expected || !input) return false;
+  const a = createHash('sha256').update(input).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
 export function passcodeMatches(input: string): boolean {
   const secret = process.env.OAUTH_AUTHORIZE_SECRET || '';
   if (!secret || !input) return false;

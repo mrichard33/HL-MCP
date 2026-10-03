@@ -60,6 +60,7 @@ import {
   handleAuthorize,
   handleToken,
   validateAccessToken,
+  tokenMatches,
 } from './auth/oauth.js';
 import { runDiagnostics } from './diagnostics.js';
 import {
@@ -275,15 +276,17 @@ async function startHttpServer(port: number) {
 
     // Diagnostics endpoint
     if (url.pathname === '/diagnostics' && req.method === 'GET') {
+      // 2026-10-03 (security review): this used to be OPEN when MCP_AUTH_TOKEN
+      // was unset, and it reports which secrets exist, table row counts
+      // (including ghl_oauth_tokens) and raw error text. Now it always needs
+      // the token, and an unset token refuses everyone — like /internal/*.
       const authToken = process.env.MCP_AUTH_TOKEN;
-      if (authToken) {
-        const authHeader = req.headers['authorization'] || '';
-        const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-        if (bearerToken !== authToken) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized — provide Bearer token' }));
-          return;
-        }
+      const authHeader = req.headers['authorization'] || '';
+      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      if (!tokenMatches(bearerToken, authToken)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized — provide Bearer token' }));
+        return;
       }
       try {
         const report = await runDiagnostics();
@@ -330,7 +333,7 @@ async function startHttpServer(port: number) {
 
       if (bearerToken) {
         const isOAuthValid = await validateAccessToken(bearerToken);
-        const isStaticMatch = staticToken ? bearerToken === staticToken : false;
+        const isStaticMatch = tokenMatches(bearerToken, staticToken);
         if (!isOAuthValid && !isStaticMatch) {
           console.log(`[OAuth] /mcp: invalid bearer token (instance: ${instanceId})`);
           res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': `${wwwAuth}, error="invalid_token"` });
