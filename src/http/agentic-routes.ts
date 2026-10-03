@@ -21,6 +21,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { agenticIntegrityTools } from '../tools/agentic-integrity.js';
 import { contaminationCheckTools } from '../tools/contamination-check.js';
+import { tokenMatches } from '../auth/oauth.js';
 
 type AgenticHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
@@ -75,7 +76,7 @@ export async function tryHandleAgenticRoute(
   const bearer = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
     ? authHeader.slice(7)
     : '';
-  if (bearer !== expected) {
+  if (!tokenMatches(bearer, expected)) {
     writeJson(res, 401, { error: 'Unauthorized — invalid bearer token' });
     return true;
   }
